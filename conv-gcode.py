@@ -2,24 +2,25 @@
 """
 For this model we have;
 
-t = time
-e = extruded fillament length
-l = extruded line length
-z = extruded height/layer height
-w = line width
-h = line height/layer thickness
-T = temperature of extruded material
-Te = temperature of extruder
+t = time (seconds)
+e = extruded fillament length (mm of fillament)
+l = extruded line length (mm of layer-line)
+z = extruded height/layer height (Z mm)
+w = line width (mm)
+h = line height/layer thickness (mm)
+T = temperature of extruded material (degC)
+Te = temperature of extruder (degC)
 H = heat of extruded material
-A = area of the layer
-V = volume of extruded material
+A = area of the layer (mm^2)
+V = volume of extruded material (mm^3)
 
-Temp is roughly heat divided by volume;
+Heat is energy and Temp is roughly heat divided by volume;
 
 T = H/V
 
-heat/temp decays at a rate proportional to temp and area, multiplied by a `hc`
-convection constant that depends on air velocity;
+heat/temp cooling through convection decays at a rate proportional to temp and
+surface area, multiplied by a `hc` convection constant that depends on air
+velocity;
 
 dHc = hc * A * T * dt
     = hc * A * H/V * dt
@@ -44,12 +45,13 @@ hT   = (V/A) / hc
     = z / hc
 
 Note this suggests the heat decay rate decreases linearly as you go up the
-layers. This would be true if the material was a perfect conductor with the
-heat evenly distributed through the whole model and only loosing heat through
-the top. However, most of the heat will be concentrated near the top layer,
-with the lower layers mostly "cooled to equilibrium" with a constant
+layers. This would be true if the material was a perfect heat conductor with
+the heat evenly distributed through the whole model and only loosing heat
+through the top. However, most of the heat will be concentrated near the top
+layer, with the lower layers mostly "cooled to equilibrium" with a constant
 temperature and no heat transfer. This probably means only the top couple of
-layers count, so z is effectively constant, making hT only proportional to 1/hc.
+layers count, so z is effectively constant, making hT only proportional to
+1/hc.
 
 To calculate hT, a rough formula for hc for air velocities v in the range 2m/s
 to 20m/s is;
@@ -57,6 +59,7 @@ to 20m/s is;
 # From https://www.engineeringtoolbox.com/convective-heat-transfer-d_430.html
 hc(v) = 10.45 - v + 10*sqrt(v)
 hc(0) = 10.45
+hc(1) = 19.45
 hc(5) = 27.81
 hc(10) = 32.07
 hc(20) = 35.17
@@ -66,15 +69,17 @@ translates to about 19m/s through a 1cmx1cm nozzle. I'd assume it can only
 squeeze about half of that through the blower nozzle, so about 10m/s would be
 max blower speed?
 
-So hc with fan on should be about 3x as hc with fan off, so fan on h1T should
-be 1/3 of fan off h0T.
+So hc with fan on should be about 3x as hc with fan off, or fan on h1T should
+be 1/3 of fan off h0T. But note the fan at only 10% with v=1m/s has hc 2x h0T,
+so a fan at only 10% will double the rate of cooling.
 
-We extrude at constant temp Te, so heat extruded is proportional to volume. So
-heat output ~= volume ~= length of extruded fillament.
+We extrude at constant temp Te, so heat extruded is proportional to extruded
+volume. So heat output is proportional to extruded volume which is
+proportional to length of extruded fillament.
 
 dHe = Te*de
 
-So combining heat added by extruded fillament
+So combining heat added by extruded fillament with heat lost through convection we have;
 
 dH = dHe - dHc
    = Te*de - H*dt/(hT+dt)
@@ -105,10 +110,26 @@ A = V/h
 where lT is the "number of layers that count" decay rate. Note V is measured
 in "mm of fillament" and A is in "mm of filament per mm of layer height".
 
-Note Flashforge Adv3 automatically adjusts the extruder fan speed. I've seen
-comments online claiming it "adjusts the speed based on the temperature", but I
-assume it just adjusts it based on extrusion rate. Lets assume it varies the
-speed so hc linearly matches extrusion rate.
+The Flashforge Adventurer3 reputedly automatically adjusts the extruder fan
+speed. I've seen comments online claiming it "adjusts the speed based on the
+temperature", but I don't think it has extra sensors for that, so maybe it
+just adjusts it based on extrusion rate? Observing it in action it doesn't
+seem that straight-forward; it does blow hard when first turned on after lots
+of hot extrusion, but it doesn't seem to vary much in response to extrusion
+speed.
+
+Note for electric fans, rotational speed is linearly proportional to PWM duty
+cycle, and airflow is linearly proportional to rotational speed. This means
+airflow velocity v should vary linearly with "percent on".
+
+The worst thing is the Adv3 executs fan-on and fan-off commands at gcode parse
+time, not at execution time. This means fan toggling on/off in gcode happens
+before the gcode before it is completely executed. The FlashPrint "fan on
+after first layer" feature puts a fan-on command after the first layer in the
+gcode, but you will notice the fan comes on before the first layer is
+completely printed. This makes it impossible to implement reduced fan output
+by toggling the fan on and off in the gcode.
+
 """
 
 import re
@@ -139,25 +160,40 @@ def fbool(b):
   """ Format a boolean as 'Y', 'N', or '?' for True, False, None (unknown). """
   return '?' if b is None else 'Y' if b else 'N'
 
+def hc(v):
+  """ Get hc as a function of air velocity v in m/s."""
+  return 10.45 - v + 10*(v**0.5)
+
+
 class Printer(object):
   fT = 5.0    # fan speed timeconstant.
   pT = 1.0    # fan pwm cycle time.
+  # The h0T heat decay rate is the seconds it takes to cool 63%, or
+  # about 2x the time to cool from 245degC to 160degC in a 30degC enclosure.
   h0T = 15.0  # decay rate of heat extruded with 0% fan.
-  h1T = 5.0   # decay rate of heat extruded with 100% fan.
+  # The hT decay rate varies with fan output fo as;
+  # hT = Kht/hc(vf1*fo)
+  vf1 = 10.0  # airflow velocity for max fan in m/s.
+  KhT = h0T*hc(0)
+  # For printers with automatic fan speed control we assume fan speed is a
+  # linear function of extrusion rate. The fan output fo in the range 0->1 is;
+  # fo = fd*(Kf*de/dt + Cf)
   ve1 = 1.0   # extrusion rate for max fan in mm/s.
-  # the dynamic fan control giving fan output fo in the range 0->1 is;
-  # fo = Kf*de/dt + Cf
-  Cf = 0.2  # min fan while on is 20%.
+  Cf = 0.1  # min fan speed while fan is on is 10%.
   Kf = (1-Cf)/ve1
-  # The hT decay rate is assumed to vary linearly with fan output.
-  # hT = Kht*fo + ChT
-  KhT = (h1T - h0T)
-  ChT = h0T
 
-  def __init__(self, heatext=0.0, fanspeed=1.0, layerpause=0.0):
+  def _hT(self, fo):
+    return self.KhT / hc(self.vf1 * fo)
+
+  def _fo(self, de_dt):
+    return min(1.0, self.Kf*de_dt + self.Cf) if self.autofan else 1.0
+
+  def __init__(self, heatext=0.0, fanspeed=1.0, layerpause=0.0, pwmfan=False, autofan=True):
     self.hs = heatext  # heat extruded setting.
     self.fanspeed=fanspeed  # fan speed scale setting.
     self.layerpause=layerpause
+    self.pwmfan=pwmfan
+    self.autofan=autofan
     self.gcode=[]
     self.fan_on = None
     self.t = 0.0
@@ -204,10 +240,16 @@ class Printer(object):
     de, dt = self.de, self.dt
     if self.dt > self.pT and fs > 0.0:
       self.dt = self.de = 0.0
-    fd = 1.0 if self.dt < fs*self.pT else 0.0
+    if self.pwmfan:
+      fd = 1.0 if self.dt < fs*self.pT else 0.0
+    else:
+      fd = fs
     if fd != self.fd or fs != self.fs:
       self.fanstats(de, dt, fs, fd)
     if fd != self.fd:
+      if 0.0 < fd < 1.0:
+        self._addline(f'M106 S{int(fd*255)}')
+      else:
         self._addline('M106' if fd else 'M107')
     self.fs, self.fd = fs,fd
 
@@ -216,9 +258,11 @@ class Printer(object):
     self.de += de
     if dt:
       self.de_dt = de/dt
-    fo = min(1.0, self.fd*(self.Kf*self.de_dt + self.Cf))
+    # Get and filter dyamic fan output fo.
+    fo = self.fd * self._fo(self.de_dt)
     self.fo = (dt*fo + self.fT*self.fo)/(self.fT + dt)
-    hT = self.KhT*fo + self.ChT
+    # Get hT and calculate extruded heat ho.
+    hT = self._hT(fo)
     self.ho = (de + self.ho)*hT/(hT + dt)
     # Turn on if there is excess heat extruded.
     on = self.fan_on and self.ho > self.hs
@@ -242,8 +286,6 @@ class Printer(object):
       self._addline(f';layer_pause: {self.layerpause}')
       self._addline(line)
     elif line.startswith(';layer:'):
-      #if self.layer_n > 0 and self.layerpause > 0.0:
-      #  self.runline(f'G4 P{int(self.layerpause*1000)}')
       self.layerstats()
       self._addline(line)
     elif line.startswith(';end gcode'):
@@ -299,19 +341,7 @@ class Printer(object):
 
   def G4(self, line):
     """ wait. """
-    # Turn fan full on during waits if fan_on.
-    if self.fan_on:
-      fs, self.fanspeed = self.fanspeed, 1.0
-      self.setfan(1.0)
-      # move around to blow the fan around for layerpause seconds.
-      dx = self.layerpause / 1.01
-      self.runline(f'G1 X{self.x+dx:.2f} Y{self.y:.2f} F300')
-      self.runline(f'G1 X{self.x-2*dx:.2f} Y{self.y:.2f} F300')
-      self.runline(f'G1 X{self.x+2*dx:.2f} Y{self.y:.2f} F300')
-      self.fanspeed = fs
-      self.runline(f'G1 X{self.x-dx:.2f} Y{self.y:.2f} F6000')
-      dt = 0.0
-    elif self.layerpause:
+    if self.layerpause:
       # Change all layer waits to wait for layerpause duration.
       dt = self.layerpause
       self._addline(f'G4 P{int(dt*1000)}')
@@ -338,12 +368,14 @@ if __name__ == '__main__':
   cmdline.add_argument('-e', type=FloatRangeType(0.0), default=0.0, help='Heat extruded length target.' )
   cmdline.add_argument('-f', type=FloatRangeType(0.0,1.0), default=1.0, help='Fan speed between 0.0 -> 1.0.' )
   cmdline.add_argument('-p', type=FloatRangeType(0.0), default=0.0, help='Seconds to pause between each layer.')
+  cmdline.add_argument('-P', action='store_true', help='Control fan speed by pulsing it on/off.')
+  cmdline.add_argument('-A', action='store_true', help='Printer automatically adjusts fan speed when on.')
   cmdline.add_argument('infile', nargs='?', type=argparse.FileType('rb'), default=sys.stdin.buffer,
                     help='Input gcode file to postprocess.')
   args=cmdline.parse_args()
 
   data = args.infile.read()
-  p=Printer(heatext=args.e, fanspeed=args.f, layerpause=args.p)
+  p=Printer(heatext=args.e, fanspeed=args.f, layerpause=args.p, pwmfan=args.P, autofan=args.A)
   p.runCode(data)
   data=p.getCode()
   sys.stdout.buffer.write(data)
