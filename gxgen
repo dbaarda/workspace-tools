@@ -1,0 +1,20 @@
+#!/bin/bash
+# Usage: gentest [args] <input>.gx
+#
+# Where:
+#   [args] are arguments for conv-gcode.py
+#   <input>.gx is the FlashPrint generated gx file to process
+#   <input>_<args>.gx will be the generated output file.
+#
+# This will generate a test output gx file from the FlashPrint gx file and
+# show stats. The output file will have the <args> encoded onto the end of
+# the filename.
+
+infile="${@:$#}"
+argstr=$(echo "${@:1:$#-1}" | sed -e 's:[- =]::g')
+outfile="${infile%.gx}_${argstr}.gx"
+
+echo "Processing ${infile} into ${outfile}."
+./conv-gcode.py "$@" > $outfile
+
+./gxsum $outfile
