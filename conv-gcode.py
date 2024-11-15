@@ -185,31 +185,34 @@ class Printer(object):
   def _hT(self, fo):
     return self.KhT / hc(self.vf1 * fo)
 
-  def _fo(self, de_dt):
-    return min(1.0, self.Kf*de_dt + self.Cf) if self.autofan else 1.0
+  def _fo(self, fd, de_dt):
+    return fd*min(1.0, self.Kf*de_dt + self.Cf) if self.autofan else fd
 
   def __init__(self, heatext=0.0, fanspeed=1.0, layerpause=0.0, pwmfan=False, autofan=True):
     self.hs = heatext  # heat extruded setting.
     self.fanspeed=fanspeed  # fan speed scale setting.
-    self.layerpause=layerpause
-    self.pwmfan=pwmfan
-    self.autofan=autofan
+    self.layerpause=layerpause # duration to pause after each layer.
+    self.pwmfan=pwmfan  # whether to control fanspeed with gcode pwm.
+    self.autofan=autofan  # whether the printer autocontrols fan speed.
     self.gcode=[]
     self.fan_on = None
     self.t = 0.0
     self.x = self.y = self.z = self.e = self.f = 0.0
-    self.ho = 0.0  # heat extruded output.
-    self.fs = 0.0  # dynamicly adjusted fanspeed.
-    self.fo = 0.0  # fan speed output.
-    self.fd = 0.0  # fan speed drive.
+    self.ho = 0.0  # accumulated heat extruded out.
+    self.fs = 0.0  # current dynamicly adjusted fanspeed.
+    self.fo = 0.0  # filtered fan speed output.
+    self.fd = 0.0  # current fan speed drive.
     self.de = 0.0  # heat extruded since last fan cycle.
     self.dt = 0.0  # time since last fan cycle.
     self.de_dt = 0.0 # extrusion rate of last move command.
-    self.layer_n = -1
-    self._init_layer()
+    self._init_layer('P')
 
-  def _init_layer(self):
-    self.layer_n += 1
+  def _init_layer(self, n=None):
+    try:
+      self.layer_n = n if n else self.layer_n + 1
+    except TypeError:
+      # The previous layer was a pre-emission layer, start at layer 1.
+      self.layer_n = 1
     self.layer_t = self.layer_l = self.layer_e = 0.0
 
   def getCode(self):
@@ -258,8 +261,8 @@ class Printer(object):
     self.de += de
     if dt:
       self.de_dt = de/dt
-    # Get and filter dyamic fan output fo.
-    fo = self.fd * self._fo(self.de_dt)
+    # Get and filter fan output fo.
+    fo = self._fo(self.fd, self.de_dt)
     self.fo = (dt*fo + self.fT*self.fo)/(self.fT + dt)
     # Get hT and calculate extruded heat ho.
     hT = self._hT(fo)
