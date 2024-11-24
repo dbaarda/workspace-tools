@@ -143,7 +143,7 @@ M18
 
   def endFile(self):
     # Restore any remaining retraction minus 2.5mm for the next print.
-    self.restore(de=self.re-2.5,r=0)
+    self.restore(de=-self.re-2.5, r=0)
     self.add(fstr(self.endcode, locals=locals()))
 
   def startLayer(self, n=None, Vp=None, h=None, w=None, r=1.0, **dnargs):
@@ -427,6 +427,7 @@ M18
     w = kwargs.get('w', self.l_w)
     #print(f't={t!r} {x0=} {y0=} {x1=} {y1=} {fsize=} {angle=} {w=}')
     v = vtext.ptext(t,x0,y0,x1,y1,fsize,angle,w)
+    self.log(f'text {t!r}')
     for l in v:
       self.line(l,**kwargs)
 
@@ -461,7 +462,6 @@ class ExtrudeTest(GCodeGen):
   stopping.
 
   """
-  rdy = 5  # ruler height
   vx0 = 5  # test min speed
   vx1 = 100  # test max speed
   le0 = 0  # test min retraction length
@@ -473,49 +473,53 @@ class ExtrudeTest(GCodeGen):
   dle = 0.2  # test extraction length step
   dve = 1  # test extraction speed step
   t0x = 5  # test line warmup distance
-  tlx = 20  # test line phase distance.
+  t1x = 20  # test line phase distance.
+  rdx = 2*t0x + 4*t1x # test ruler length.
+  rdy = 4  # ruler height including space
+  sdy = 30 # test text settings box width.
+  tdx = rdx + sdy  # test box total width.
+  tdy = rdy + tn + 5 # test box total height.
 
-  def rdx(self,tlx):
-    return 4*tlx + 2*self.t0x
-
-  def dotests(self, tn=tn, tlx=tlx):
-    tlx = self.rdx(tlx)
-    tdy = self.rdy + tn + 5
-    tly = 3*tdy - 5
-    x0 = -tlx/2
-    y0 = tly/2
-    x1 = x0+tlx
-    y1 = y0-tly
-    dvx = (self.vx1 - self.vx0)/tn
-    dle = (self.le1 - self.le0)/tn
-    dve = (self.ve1 - self.ve0)/tn
-    self.preExt(x0,y0,x1,y1)
+  def dotests(self):
+    t3x, t3y = self.tdx, 3*self.tdy - 5
+    x0 = -self.rdx/2
+    y0 = t3y/2
+    x1 = x0+t3x
+    y1 = y0-t3y
+    self.preextrude()
     self.startLayer(Vp=10)
-    self.brim(x0,y0,x1,y1)
-    self.testrun(x0,y0,dvx=dvx,le0=self.Re,ve0=self.Ve)
-    self.testrun(x0,y0-tdy,dle=dle,ve0=self.Ve,vx0=self.Vp)
-    self.testrun(x0,y0-2*tdy,dve=dve,le0=self.Re,vx0=self.Vp)
+    self.brim(x0,y0,x0+self.rdx, y1)
+    self.testrun(x0,y0,vxr=(self.vx0, self.vx1),ler=self.Re,ver=self.Ve)
+    self.testrun(x0,y0-self.tdy,vxr=self.Vp,ler=(self.le0,self.le1),ver=self.Ve)
+    self.testrun(x0,y0-2*self.tdy,vxr=self.Vp,ler=self.Re, ver=(self.ve0,self.ve1))
     self.endLayer()
 
-  def testrun(self, x0=None, y0=None, tlx=tlx, dvx=0, dle=0, dve=0,
-      vx0=vx0, vx1=vx1, le0=le0, le1=le1, ve0=ve0, ve1=ve1, vex=None):
-    assert dvx+dle+dve > 0
-    if dvx:
-      self.log(f'extrude-test speed={vx0}-{vx1} step={dvx}, ext-len={le0}, ext-vel={ve0}')
-    if dle:
-      self.log(f'extrude-test ext-len={le0}-{le1} step={dle} speed={vx0} ext-vel={ve0}')
-    if dve:
-      self.log(f'extrude-test ext-vel={ve0}-{ve1} step={dve} speed={vx0} ext-len={le0}')
-    self.ruler(x0,y0,tlx)
-    y,vx,le,ve = y0 - self.rdy, vx0, le0, ve0
+  def _getstep(self,tn,vr):
+    """ Convert a value-range into start, stop, delta. """
+    if not isinstance(vr, tuple):
+      return vr, vr, 0
+    v0, v1 = vr
+    dv = (v1-v0)/tn
+    return v0, v1, dv
+
+  def testrun(self, x0=None, y0=None,
+      vxr=vx0, ler=le0, ver=ve0, vex=None):
+    vx, vx1, dvx = self._getstep(self.tn,vxr)
+    le, le1, dle = self._getstep(self.tn,ler)
+    ve, ve1, dve = self._getstep(self.tn,ver)
+    logset = self._fset(sep=' ', vx=vxr, le=ler, ve=ver)
+    self.log(f'extrude-test {logset}')
+    self.ruler(x0, y0)
+    y = y0 - self.rdy
     self.cmt(f'structure:infill-solid')
     while vx <= vx1 and le <= le1 and ve <= ve1:
-      self.testline(x0,y,tlx,vx,le,ve,vex)
+      self.testline(x0, y, vx, le, ve, vex)
       vx+=dvx
       le+=dle
       ve+=dve
       y-=1
-    self.settings(x0 + self.rdx(tlx)+1, y0-5, dvx, dle, dve, vx0, vx1, le0, le1, ve0, ve1, vex)
+    if vex is None: vex='2*ve'
+    self.settings(x0 + self.rdx+1, y0, Kf=self.Kf, vx=vxr, le=ler, ve=ver, vex=vex)
 
   def brim(self, x0, y0, x1, y1):
     w = self.l_w
@@ -531,37 +535,37 @@ class ExtrudeTest(GCodeGen):
     self.draw(y=y0+5)
     self.up()
 
-  def ruler(self, x0, y0, tlx=tlx):
-    t0x, rl = self.t0x, self.rdx(tlx)
+  def ruler(self, x0, y0):
+    """ Draw a ruler dx=2*t0x+4*t1x long and dy=3mm high."""
     ml,tl=3,1.5  # tick marker lengths
     self.cmt('structure:shell-outer')
     # draw ruler
-    self.dn(x0, y0)
-    self.draw(dx=rl)
-    self.up()
-    for d in (t0x,tlx,tlx,tlx,tlx):
-      self.dn(dx=-d,y=y0)
-      self.draw(dy=-ml)
-      self.up()
-    self.move(x=x0+self.t0x + tlx, y=y0)
-    for d in range(2,2*tlx,2):
+    self.line([(x0, y0),(x0+self.rdx,y0)])
+    self.move(x=x0+self.t0x-2, y=y0)
+    for d in range(0,4*self.t1x+1,2):
       l = tl if d % 10 else ml
       self.dn(dx=2,y=y0)
       self.draw(dy=-l)
       self.up()
 
-  def settings(self, x0, y0, dvx=0, dle=0, dve=0,
-        vx0=vx0, vx1=vx1, le0=le0, le1=le1, ve0=ve0, ve1=ve1, vex=None):
-    self.cmt("structure:brim")
-    Kf=f'Kf={self.Kf:.3f}'
-    vx=f'vx={vx0}-{vx1}' if dvx else f'vx={vx0}'
-    le=f'le={le0}-{le1}' if dle else f'le={le0}'
-    ve=f've={ve0}-{ve1}' if dve else f've={ve0}'
-    vex=f'vex={vex}' if vex is not None else f'vex=2*ve'
-    t= '\n'.join([Kf,vx,le,ve,vex])
-    self.text(t, x0, y0, fsize=5)
+  def preextrude(self,n=1):
+    self.cmt('structure:pre-extrude')
+    self.dn(-60 - 2*(n-1), 60)
+    self.draw(dy=-120,v=20,r=4)
 
-  def testline(self, x0, y0, tlx, vx, le=0, ve=35, vex=None):
+  def _fval(self,k,v):
+    v=f'{v[0]}-{v[1]}' if isinstance(v, tuple) else f'{v}'
+    return f'{k}={v}'
+
+  def _fset(self, sep='\n', **kwargs):
+    return sep.join(self._fval(k,v) for k,v in kwargs.items())
+
+  def settings(self, x0, y0, **kwargs):
+    self.cmt("structure:brim")
+    self.text(self._fset(**kwargs), x0, y0, fsize=5)
+
+  def testline(self, x0, y0, vx, le=0, ve=35, vex=None):
+    """ Test starting and stopping extrusion for different settings. """
     # A printer with a=500mm/s^2 can go from 0 to 100mm/s in 0.2s over 10mm.
     # Retracting de=10mm at ve=20mm/s will take 0.5s, which is 50mm at 100mm/s
     # So retracting over a distance of 25mm is max le=5mm@20mm/s or le=10mm@40mm/s.
@@ -573,24 +577,60 @@ class ExtrudeTest(GCodeGen):
     self.cmt(f'testline v={vx} le={le} ve={ve} vex={vex}')
     dt = le/ve  # time to do retraction
     ex = vex*dt # distance travelled while retracting.
-    assert ex <= tlx
+    assert ex <= self.t1x
     self.dn(x0, y0)
     self.draw(dx=self.t0x,v=self.vx0)
-    self.draw(dx=tlx,v=vx)
+    self.draw(dx=self.t1x,v=vx)
     if not le:
-      self.move(dx=2*tlx,v=vx)    # move without retract/restore.
+      self.move(dx=2*self.t1x,v=vx)    # move without retract/restore.
     elif vex == 0.0:
       self.retract(de=-le, v=ve)  # retract while stopped.
-      self.move(dx=2*tlx,v=vx)    # move gap between moving retract/restore.
+      self.move(dx=2*self.t1x,v=vx)    # move gap between moving retract/restore.
       self.restore(de=le, v=ve)   # restore while stopped.
     else:
       self.move(dx=ex,v=vex,de=-le)  # retract while moving at v=vex.
-      self.move(dx=2*(tlx-ex),v=vex) # move gap between moving retract/restore.
+      self.move(dx=2*(self.t1x-ex),v=vex) # move gap between moving retract/restore.
       self.move(dx=ex,v=vex,de=le)   # restore while moving at v=vx
-    self.draw(dx=tlx,v=vx)
+    self.draw(dx=self.t1x,v=vx)
     self.draw(dx=self.t0x,v=self.vx0)
     self.up()
 
+
+  def doKftest(self, n=1, Kf=0.0):
+    n -= 1 # test number for offset indexes starts at 0.
+    x0,y0 = -self.rdx/2, 60 - n*self.tdy
+    self.preextrude(n)
+    self.startLayer(Vp=10)
+    # Only draw the brim on the first test.
+    if n == 0:
+      x1,y1 = x0+self.rdx, y0-4*self.tdy+5
+      self.brim(x0,y0,x1,y1)
+    self.testKf(x0,y0,Kf)
+    self.endLayer()
+
+  def testKf(self, x0, y0, Kf=0.0, vxr=(vx0,vx1)):
+    vx, vx1, dvx = self._getstep(self.tn, vxr)
+    logset = self._fset(sep=' ', Kf=Kf, vx=vxr)
+    self.log(f'testKf({logset})')
+    self.ruler(x0, y0)
+    y = y0 - self.rdy
+    self.cmt(f'structure:infill-solid')
+    while vx <= vx1:
+      self.testKfline(x0, y, vx0=20, vx1=vx)
+      vx+=dvx
+      y-=1
+    self.settings(x0 + self.rdx+1, y0, Kf=self.Kf, vx0=20, vx=vxr)
+
+  def testKfline(self, x0, y0, vx0, vx1):
+    """ Test linear advance changing speed different speeds. """
+    self.cmt(f'testKfline(vx0={vx0},vx1={vx1})')
+    self.dn(x0, y0)
+    self.draw(dx=self.t0x,v=self.vx0)
+    self.draw(dx=self.t1x,v=vx0)
+    self.draw(dx=2*self.t1x,v=vx1)
+    self.draw(dx=self.t1x,v=vx0)
+    self.draw(dx=self.t0x,v=self.vx0)
+    self.up()
 
 class TextTest(GCodeGen):
 
@@ -638,13 +678,15 @@ if __name__ == '__main__':
       help='Line width in mm.')
   cmdline.add_argument('-Lr', type=RangeType(0.0,10.0), default=1.0,
       help='Line extrusion ratio between 0.0 to 10.0.')
+  cmdline.add_argument('-n', type=RangeType(1,5), default=1,
+      help='Test number for linear advance tests.')
   args=cmdline.parse_args()
 
   gen=ExtrudeTest(Te=args.Te, Tp=args.Tp, Fe=args.Fe, Fc=args.Fc,
       Kf=args.Kf, Re=args.Re,
       Vp=args.Vp, Vt=args.Vt, Vz=args.Vz, Ve=args.Ve,
       h=args.Lh, w=args.Lw, r=args.Lr)
-  gen.dotests()
+  gen.doKftest(args.n, args.Kf)
   gen.endFile()
   data=gen.getCode()
   sys.stdout.write(data)

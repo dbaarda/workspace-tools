@@ -1,3 +1,114 @@
+# Printer calibration and Control
+
+## Linear Advance
+
+Note that nozzle vs fillament diameters and/or track areas mean that de=1mm
+translates to nearly 20mm of nozzle thread, or possibly even more of track.
+This means 5mm of uncompensated pressure advance translates to more 100mm of
+track smear or stringing.
+
+Linear Advance or Pressure Advance is mm of extrusion advance per mm/s of
+filament extrusion speed, and has typical values in the range 0.0-2.0. Note
+that 100mm/s print speed for a h=0.3 layer with w=0.4 width using 1.75mm
+diameter filament is 12mm^3/s or 5mm/s fillament rate. This suggests the
+advance could get as high as 10mm, or 200mm of track!
+
+Linear advance assumes flow rate out the nozzle is linear with pressure, and
+pressure is linear with 'R' extrusion advance of filament (filament
+compression). This is based on assuming the fillament and boden tube behaves
+like a spring with force linear with compression distance as per [Hooke's
+law](https://en.wikipedia.org/wiki/Hooke%27s_law), and nozzle flow rate is
+linear with pressure as per [Poiseuille's
+law)[https://en.wikipedia.org/wiki/Poiseuille_law]. The fillament force
+divided by fillament cross-section area (nozzle input area) is the pressure in
+the nozzle, so nozzle flow is linear with fillament compression distance, or
+the extruder advance distance (how far ahead of the nozzle output the extruder
+is, in mm of fillament). See this for some thoughts on these assumptions;
+
+https://klipper.discourse.group/t/modification-of-pressure-advance-for-high-speed-bowden-printers/13053/18?u=dbaarda
+
+Note the linear advance factor for compensating for this is the mm of advance
+needed per mm/sec of extruder velocity for the nozzle output flow rate to
+match the extruder velocity.
+
+  r = Kf * de/dt
+
+Where
+
+  de/dt is the extruder velocity in mm of fillament/sec.
+  Kf is the linear advance factor in mm per mm/sec of extruder velocity.
+  r is the mm of linear advance.
+
+Note that at the steady state, the fillament rate into the nozzle (de/dt)
+equals the fillament rate out of the nozzle (dz/dt). This means you can
+replace de/dt with dz/dt in the above equation and get the flow rate out of
+the nozzle as a function of r;
+
+  dz/dt = 1/Kf*r
+
+
+The rate of change in r is dr/dt and is equal to the flow rate in minus the
+flow rate out;
+
+dr/dt = de/dt - dz/dt
+      = de/dt - 1/Kf*r
+
+Which gives us the change in r over time dt;
+
+dr = de - dt/Kf * r
+
+Note that this is an exponential decay equation, with r exponentially
+approaching the steady state value for a fixed de/dt rate with a timeconstant
+of Kf. This exponential decay means extrusion effectively lags by Kf seconds!
+So for Kf=2.0 it will take about 2 seconds of extruding before the extrusion
+rate "catches up" and is extruding at about the right rate. At 100mm/s, 2
+seconds is 200mm worth of line. Note that this matches the 200mm of track ooze
+you will get when stopping.
+
+This means that pressure can take some time to build up enough for the right
+extrusion rate when extruding lines at constant velocity. It also can take
+some time to decay back enough when you change to a lower extrusion velocity.
+
+## Retract and Restore
+
+Retraction withdraws the extruder when you stop extruding, and restore
+advances it again before you start extruding. This helps avoid stringing when
+moving between extrusions. The idea is that retraction sucks the fillament
+back into the nozzle to prevent "drool", and restore pushes it back to the tip
+of the nozzle again. There are lots of calibration tests to help you figure
+out the right amount of retraction to minimize stringing.
+
+However, when you look at Linear Advance works and how the nozzle output rate
+varies with pressure, it becomes pretty clear that what retraction actually
+does is relieve the accumulated advance pressure, and even more importantly,
+restore restores that pressure! This means when you print at constant speed,
+the advance pressure starts low giving under-extruded lines, but builds up
+over the Kt timeconstant duration to give the right extrusion rate. When the
+printer stops and retracts, it relieves that pressure so it can move without
+extruding, and when it restores, it restores that pressure so the printer is
+ready to print at the previous speed without under-extruding at the start.
+
+What this means is the ideal retraction distance is the accumulated pressure
+advance distance. If the printer implements linear advance, and it is
+implemented and tuned perfectly, this means you shouldn't need any retraction
+or restore at all, but perhaps a tiny token amount to compensate for tiny
+errors would be wise. However, if the printer doesn't implement linear
+advance, then the ideal retraction distance depends on the previous extrusion
+speed, and the ideal restore distance depends on the next extrusion speed.
+
+If the printer always printed at constant extrusion rates, using a constant
+sufficiently large retraction would be fine, since the pressure to relive and
+restore would be the same. However, slicers don't use constant extrusion
+rates, they slow down for outer edges and corners. Also printers cannot
+instantaneously reach the requested line-speed, and have to accelerate and
+decelerate, adjusting extrusion rates along the way.
+
+It should be possible to implement linear advance in gcode for printers that
+don't implement it in firmware. It would involve dynamically adjusting
+retraction/restore distances and explicitly inserting
+acceleration/deceleration line-segments with extrusion rates adjusted to
+build/decay the linear advance amount.
+
 # 3D Printing Settings
 
 File: Peglock Board Attachment v2.2.2 6-0.5-25-5-0.5-10-3.stl
@@ -846,7 +957,7 @@ pwm, for the fan  with these settings;
  # hT = Kht*fo + ChT
  KhT = (h1T - h0T)
  ChT = h0T
- 
+
 and ran it with this cmdline;
 
 $ ./conv-gcode.py -f=0.5 -e 5 Clip_v1.0.0_T3.gx > Clip_v1.0.0_T3d.gx
@@ -904,7 +1015,7 @@ lines are so clean it looks like there was nearly no layer adhesion at all.
 Using T4 and postprocessing it to fix start-of-layer moves and turn off the
 fan with;
 
-$ ./conv-gcode.py -f=0 -e 0 Clip_v1.0.0_T4.gx > Clip_v1.0.0_T4a.gx 
+$ ./conv-gcode.py -f=0 -e 0 Clip_v1.0.0_T4.gx > Clip_v1.0.0_T4a.gx
 
 Note I also fixed some things in conv-gcode.py including fixing the first
 layer start-of-layer moves that also include an M106 "fan on" command.
@@ -943,11 +1054,11 @@ $ ./conv-gcode.py -f=0 -e 0 -p 5 Clip_v1.0.0_T4.gx > Clip_v1.0.0_T4b.gx
 
 The fan didn't blow during the wait! it seems Adv3's G4 "dwell" command either
 always has the fan off during the wait, or its autospeed somehow doesn't see
-it's been turned on somehow. 
+it's been turned on somehow.
 
 ## Test5a
 
-start point closes to point -> random 
+start point closes to point -> random
 retraction 6.7->6.9
 
 post-process same as T4b but using slow idling movements instead of dwell to
@@ -972,4 +1083,3 @@ increased retraction and happened mostly after the waits. I think this is
 over-retraction, and material is dribbling down the inside of the nozzle
 leaving behind bubbles that pop out during extrusion. I need to tune
 retraction.
-
