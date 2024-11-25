@@ -1,6 +1,41 @@
 #!/bin/python3
 """
-For this model we have;
+Post-process gcode files to fix various problems.
+
+This was primarily written to fix FlashPrint files to improve the printed
+results. It was created because it doesn't seem possible to configure
+FlashPrint to give good results with high temperature ASA filament. It has the
+following features;
+
+* Fixes some minor FlashPrint bugs.
+* Implements a better heat model for dynamically adjusting cooling in response
+  to extruded heat.
+* Can vary fan output for printers with fixed or automatic fan speed by
+  inserting PWM fan on/off instructions into the gcode.
+* Can adjust or extend wait times between layers beyond the slicer's limits.
+* Can dynamically optimize retract/restore distances based on Linear Advance
+  for printers that don't implement that feature, using nozzle pressures to
+  relieve/restore the right amount of pressure for the extrusion rates
+  before/after.
+
+# FlashPrint Bugs
+
+The main bug this fixes is flashprint moves the extruder between layers at the
+extrusion height of the previous layer, and doesn't z-hop or raise it to the
+new layer height until just before it starts extruding. This means it creates
+drag-marks on top of the layers, causes drag-stringing artifacts when crossing
+outlines, and can even cause layer-shifts from hitting outline edges. This
+fixes the gcode by shifting the z-hop or layer height change command to just
+after the previous end-of-layer retraction.
+
+# Heat/Cooling improvements.
+
+This uses a heat model to track how much heat is in the extruded material to
+control the amount of cooling to apply. It can reduce the cooling fan output
+by inserting PWM like fan on/off commands into the gcode, or adjust the wait
+time between layers.
+
+For the heat  model we have;
 
 t = time (seconds)
 e = extruded fillament length (mm of fillament)
@@ -35,14 +70,13 @@ dTc = dHc/V
 So temperature decays at exactly the same rate as heat. This is exponential
 decay with timeconstant hT which is;
 
-dHc = H * dt/(hT+dt)
-    ~= 1/hT * H * dt   # for dt small relative to hT
+dHc = H * dt/hT
 
 which gives us;
 
 1/hT = hc * A/V
 hT   = (V/A) / hc
-    = z / hc
+     = z / hc
 
 Note this suggests the heat decay rate decreases linearly as you go up the
 layers. This would be true if the material was a perfect heat conductor with
@@ -79,13 +113,17 @@ proportional to length of extruded fillament.
 
 dHe = Te*de
 
-So combining heat added by extruded fillament with heat lost through convection we have;
+So combining heat added by extruded fillament with heat lost through
+convection we can get the curren heat H from the previous heat H' after time
+dt with;
 
 dH = dHe - dHc
-   = Te*de - H*dt/(hT+dt)
-H = H + dH
-  = H + Te*de - H*dt/(hT+dt)
-  = Te*de + H*hT/(hT+dt)  # heat added plus previous heat decayed.
+   = Te*de - H*dt/hT
+
+           H = H' + dH
+           H = H' + Te*de - H*dt/hT
+(hT+dt)/hT*H = H' + Te*de
+           H = (H' + Te*de)*hT/(hT+dt)  # heat added plus previous heat decayed.
 
 Note if all the heat is in the last laid fillament and it is all at a
 temperature considered "hot" then H effectively gives us the volume of laid
@@ -120,15 +158,42 @@ speed.
 
 Note for electric fans, rotational speed is linearly proportional to PWM duty
 cycle, and airflow is linearly proportional to rotational speed. This means
-airflow velocity v should vary linearly with "percent on".
+airflow velocity v should vary linearly with "percent on". With option -A we
+assume that fan output is automatically adjusted linearly between 10% to 100%
+for extrusion rates between 0mm/sec to 1mm/sec for calculating the amount of
+cooling when the fan is on.
 
-The worst thing is the Adv3 executs fan-on and fan-off commands at gcode parse
-time, not at execution time. This means fan toggling on/off in gcode happens
-before the gcode before it is completely executed. The FlashPrint "fan on
-after first layer" feature puts a fan-on command after the first layer in the
-gcode, but you will notice the fan comes on before the first layer is
+The worst thing is the Adv3 executes fan-on and fan-off commands at gcode
+parse time, not at execution time. This means fan toggling on/off in gcode
+happens before the gcode before it is completely executed. The FlashPrint "fan
+on after first layer" feature puts a fan-on command after the first layer in
+the gcode, but you will notice the fan comes on before the first layer is
 completely printed. This makes it impossible to implement reduced fan output
 by toggling the fan on and off in the gcode.
+
+This means that the gcode PWM fan control this implements with option -P
+doesn't work for the Adv3, and the only way we can control cooling is by
+adding or changing wait times between layers.
+
+Note that FlashPrint also starts printing the next layer at the same place
+where the previous layer finished, which means it starts printing on top of
+the least-cooled part of the previous layer. The various shell start point
+options give only limited ability to prevent this. It seems using
+"Shells;Start Points" set to "use random start points" or "inner recess point"
+with "Permit optimize start points" set to "No" works best, but even then it
+will sometimes start layers on top of the end of the previous layer. This
+means the wait time between layers cannot really include the layer print time
+in the wait duration, which is what the "Cooling; Maximum Delay Time" does,
+and it also cannot be set higher than 6secs. So the -p option forces the wait
+time to always be the specified duration which can be arbitrarily large.
+
+# Linear Advance Retract/Restore.
+
+For printers that don't implement Linear Advance, the correct retract/restore
+distance depends on the amount of nozzle pressure (measured in extruder
+advance distance) that needs to be relieved on retraction, and applied on
+restore. The right amount of pressure depends on the extrusion rate before
+retraction, and after restore.
 
 """
 
