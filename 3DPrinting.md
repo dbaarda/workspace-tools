@@ -2,7 +2,7 @@
 
 ## Linear Advance
 
-Note that nozzle vs fillament diameters and/or track areas mean that de=1mm
+Note that nozzle vs filament diameters and/or track areas mean that de=1mm
 translates to nearly 20mm of nozzle thread, or possibly even more of track.
 This means 5mm of uncompensated pressure advance translates to more 100mm of
 track smear or stringing.
@@ -10,70 +10,106 @@ track smear or stringing.
 Linear Advance or Pressure Advance is mm of extrusion advance per mm/s of
 filament extrusion speed, and has typical values in the range 0.0-2.0. Note
 that 100mm/s print speed for a h=0.3 layer with w=0.4 width using 1.75mm
-diameter filament is 12mm^3/s or 5mm/s fillament rate. This suggests the
+diameter filament is 12mm^3/s or 5mm/s filament rate. This suggests the
 advance could get as high as 10mm, or 200mm of track!
 
 Linear advance assumes flow rate out the nozzle is linear with pressure, and
-pressure is linear with 'R' extrusion advance of filament (filament
-compression). This is based on assuming the fillament and boden tube behaves
-like a spring with force linear with compression distance as per [Hooke's
+pressure is linear with `r` extrusion advance of filament (how many mm of
+filament the extruder has pushed that has not yet come out the nozzle and is
+compressed filament). This is based on assuming the filament and boden tube
+between the extruder and nozzle behaves like a spring with force linear with
+compression distance as per [Hooke's
 law](https://en.wikipedia.org/wiki/Hooke%27s_law), and nozzle flow rate is
-linear with pressure as per [Poiseuille's
-law)[https://en.wikipedia.org/wiki/Poiseuille_law]. The fillament force
-divided by fillament cross-section area (nozzle input area) is the pressure in
-the nozzle, so nozzle flow is linear with fillament compression distance, or
-the extruder advance distance (how far ahead of the nozzle output the extruder
-is, in mm of fillament). See this for some thoughts on these assumptions;
+linear with pressure in the nozzle as per [Poiseuille's
+law)[https://en.wikipedia.org/wiki/Poiseuille_law]. The filament force divided
+by filament cross-section area (nozzle input area) is the pressure in the
+nozzle, so nozzle flow is linear with filament compression distance, or the
+extruder advance distance. See this for some thoughts on these assumptions;
 
 https://klipper.discourse.group/t/modification-of-pressure-advance-for-high-speed-bowden-printers/13053/18?u=dbaarda
 
-Note the linear advance factor for compensating for this is the mm of advance
-needed per mm/sec of extruder velocity for the nozzle output flow rate to
-match the extruder velocity.
+Note the linear advance factor `Kf` for compensating for this is the mm of
+advance needed per mm/sec of extruder velocity for the nozzle output flow rate
+to match the extruder velocity.
 
+```python
   r = Kf * de/dt
+```
 
 Where
 
-  de/dt is the extruder velocity in mm of fillament/sec.
+```
+  de/dt is the extruder velocity in mm of filament/sec.
   Kf is the linear advance factor in mm per mm/sec of extruder velocity.
-  r is the mm of linear advance.
+  r is the mm of filament linear advance distance.
+```
 
-Note that at the steady state, the fillament rate into the nozzle (de/dt)
-equals the fillament rate out of the nozzle (dz/dt). This means you can
-replace de/dt with dz/dt in the above equation and get the flow rate out of
-the nozzle as a function of r;
+Note that at the steady state, the filament rate into the nozzle `de/dt`
+equals the filament rate out of the nozzle `dz/dt`. This means you can
+replace `de/dt` with `dz/dt` in the above equation and get the flow rate out of
+the nozzle as a function of advance `r`;
 
+```python
+  r = Kf * dz/dt
   dz/dt = 1/Kf*r
+```
 
-
-The rate of change in r is dr/dt and is equal to the flow rate in minus the
+The rate of change in `r` is `dr/dt` and is equal to the flow rate in minus the
 flow rate out;
 
-dr/dt = de/dt - dz/dt
-      = de/dt - 1/Kf*r
+```python
+  dr/dt = de/dt - dz/dt
+        = de/dt - 1/Kf*r
+```
 
-Which gives us the change in r over time dt;
+Which gives us the change in `r` over time `dt`;
 
-dr = de - dt/Kf * r
+```python
+  dr = de - dt/Kf * r
+```
 
-Note that this is an exponential decay equation, with r exponentially
-approaching the steady state value for a fixed de/dt rate with a timeconstant
-of Kf. This exponential decay means extrusion effectively lags by Kf seconds!
-So for Kf=2.0 it will take about 2 seconds of extruding before the extrusion
-rate "catches up" and is extruding at about the right rate. At 100mm/s, 2
-seconds is 200mm worth of line. Note that this matches the 200mm of track ooze
-you will get when stopping.
+Note that this is an exponential decay equation, with `r` advance
+exponentially approaching the steady state value for a fixed `de/dt` rate with
+a timeconstant of `Kf`. Exponential decay processes cause both lag and a
+low-pass-filter "frequency cutoff" effects that depends on the timeconstant.
 
-This means that pressure can take some time to build up enough for the right
-extrusion rate when extruding lines at constant velocity. It also can take
-some time to decay back enough when you change to a lower extrusion velocity.
+The lag effect means that changes in the extruder input rate will take roughly
+`Kf` time in seconds to appear at the nozzle output. More specifically if you
+drive the extruder velocity with a sin-wave, the peaks and troughs in the
+sin-wave nozzle output will be exactly `Kf' seconds behind the peaks and
+troughs in the sin-wave input.
+
+The low-pass-filter "frequency cutoff" effect means that for a sin-wave
+extruder input with amplitude `Ae`, if the frequency `fe` is higher than
+`fc=1/(2*pi*Kf)`, then the nozzle output amplitude `Az` will be reduced by
+`Az=(fc/fe)*Ae`. This roughly means changes in extruder speed that happen
+every 2x faster than every `pi*Kf` seconds will only get half way to the max
+and min target nozzle output rates (but note those output peaks and troughs
+will also lag by `Kf` seconds).
+
+So for `Kf=2.0` it will take about 2 seconds of extruding before the extrusion
+rate "catches up" and is extruding at about the right rate, and switching
+speeds faster than every 3sec will mean it only gets about half way there. At
+100mm/s, 2 seconds is 200mm worth of line. Note that this matches the 200mm of
+track ooze you woud get without retracting when stopping after extruding a
+line at 100mm/s.
+
+So the pressure can take some time to build up enough for the right extrusion
+rate when extruding lines at constant velocity. It also can take some time to
+decay back enough when you change to a lower extrusion velocity.
+
+Printers that implement linear advance dynamically adjust the extrusion rates
+to take this into account, effectively compensating for the lag and frequency
+cutoff effects by adjusting extrusion rates in advance. See the following for
+how it's implemented;
+
+https://mmone.github.io/klipper/Kinematics.html
 
 ## Retract and Restore
 
 Retraction withdraws the extruder when you stop extruding, and restore
 advances it again before you start extruding. This helps avoid stringing when
-moving between extrusions. The idea is that retraction sucks the fillament
+moving between extrusions. The idea is that retraction sucks the filament
 back into the nozzle to prevent "drool", and restore pushes it back to the tip
 of the nozzle again. There are lots of calibration tests to help you figure
 out the right amount of retraction to minimize stringing.
@@ -84,17 +120,19 @@ does is relieve the accumulated advance pressure, and even more importantly,
 restore restores that pressure! This means when you print at constant speed,
 the advance pressure starts low giving under-extruded lines, but builds up
 over the Kt timeconstant duration to give the right extrusion rate. When the
-printer stops and retracts, it relieves that pressure so it can move without
-extruding, and when it restores, it restores that pressure so the printer is
-ready to print at the previous speed without under-extruding at the start.
+printer stops and retracts, it quickly relieves that pressure so it can move
+without extruding, and when it restores, it restores that pressure so the
+printer is ready to print at the previous speed without under-extruding at the
+start.
 
 What this means is the ideal retraction distance is the accumulated pressure
 advance distance. If the printer implements linear advance, and it is
 implemented and tuned perfectly, this means you shouldn't need any retraction
 or restore at all, but perhaps a tiny token amount to compensate for tiny
-errors would be wise. However, if the printer doesn't implement linear
-advance, then the ideal retraction distance depends on the previous extrusion
-speed, and the ideal restore distance depends on the next extrusion speed.
+miss-calibration errors would be wise. However, if the printer doesn't
+implement linear advance, then the ideal retraction distance depends on the
+previous extrusion speed, and the ideal restore distance depends on the
+**next** extrusion speed.
 
 If the printer always printed at constant extrusion rates, using a constant
 sufficiently large retraction would be fine, since the pressure to relive and
@@ -103,11 +141,23 @@ rates, they slow down for outer edges and corners. Also printers cannot
 instantaneously reach the requested line-speed, and have to accelerate and
 decelerate, adjusting extrusion rates along the way.
 
+I have been battling under/over extrusion problems and retraction tuning for a
+print that has quite a lot of speed variation due to having a large base (fast
+print) with small raised clips (slow print). The small clips had lots of
+stringing and over extrusion for the layers that also included large base
+areas, but the clips were fine for the higher layers without the large base
+areas. No amount of tuning retraction and extrusion rates could fix this.
+These pressure advance affects totally explain why.
+
 It should be possible to implement linear advance in gcode for printers that
 don't implement it in firmware. It would involve dynamically adjusting
 retraction/restore distances and explicitly inserting
 acceleration/deceleration line-segments with extrusion rates adjusted to
 build/decay the linear advance amount.
+
+Even without implementing full linear-advance including acceleration in gcode,
+it would probably be worth implementing dynamic retract/restore based on the
+previous/next extrusion rates. This would probably fix my clip print.
 
 # 3D Printing Settings
 
