@@ -297,10 +297,22 @@ M18
     """
     self.move(x, y, r=r, **kwargs)
 
-  def retract(self, e=None, de=None, ve=None, s=1.0):
-    """Do a retract, relieving any linear advance pressure and retracting extra de."""
+  def retract(self, e=None, de=None, ve=None, s=1.0, r=1.0, w=None, h=None):
+    """Do a retract, relieving any linear advance pressure and retracting extra de.
+
+    The default retract will relieve existing pressure but leave enough to
+    fill the end-of-line half-dot before adding further retraction de. Setting
+    r scales the half dot, so r=0 will not leave anything for the half-dot.
+    """
     if de is None: de = -self.Re
+    if h is None: h = self.l_h
+    if w is None: w = self.l_w
+    r = self.l_r * r
     de -= self.re  # Relieve existing advance or retraction.
+    # Add de to fill the ending half-dot.
+    sv = r * 0.5 * pi*(w/2)**2 * h  # volume of half-dot.
+    se = sv/self.Fa  # extrusion to fill half-dot.
+    de += se
     #self.log(f'retract {e=} {de=:.4f} {ve=} {s=} {self.re=:.4f}')
     self.move(e=e, de=de, v=ve, s=s)
 
@@ -323,14 +335,10 @@ M18
       # Add de for pre-applying pressure for upcoming print line.
       vlp = v if v else s*self.l_Vp  # upcoming print line velocity.
       vep = r * h * w * vlp / self.Fa  # upcoming print extrude velocity.
-      # Adjust the target vep extrusion velocity to take into account the
-      # acceleration time relative to how much Kf lag there is.
-      at = vlp/500 # acceleration time for 500mm/s^2
-      vep *= self.Kf/(self.Kf+at)
       de += self.Kf*vep
-    # Add de to half-fill the starting dot.
-    sv = r * 0.5 * pi*(w/2)**2 * h  # volume to half-fill starting dot.
-    se = sv/self.Fa  # extrusion to half-fill starting dot.
+    # Add de to fill the starting half-dot.
+    sv = r * 0.5 * pi*(w/2)**2 * h  # volume to fill half-dot.
+    se = sv/self.Fa  # extrusion to fill half-dot.
     de += se
     #self.log(f'restore {e=} {de=:.4f} {vb=} {s=} {self.re=:.4f}')
     self.move(e=e, de=de, v=vb, s=s)
@@ -343,7 +351,7 @@ M18
     """ Do a retract, raise, and move. """
     # default hop up is to Zh above layer height.
     if h is None: h = self.l_h + self.Zh
-    self.retract(e=e, de=de, ve=ve, s=s)
+    self.retract(e=e, de=de, ve=ve, s=s, r=r, w=w, h=h)
     self.move(z=z, dz=dz, v=vz, s=s, h=h)
 
   def dn(self,
