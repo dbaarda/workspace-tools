@@ -38,7 +38,8 @@ class GCodeGen(object):
     Vp: Speed when printing (mm/s).
     Vt: Speed when traveling (mm/s).
     Vz: Speed when raising/lowering (mm/s).
-    Ve: Speed when retracting/recovering (mm/s).
+    Ve: Speed when retracting (mm/s).
+    Vb: Speed when restoring (mm/s).
     r: Extrusion ratio (0.1 -> 10.0).
     h: Line height (0.1->0.4mm).
     w: Line width (0.2->0.8mm).
@@ -65,7 +66,8 @@ class GCodeGen(object):
 ;base_print_speed: {round(self.Vp)}
 ;travel_speed: {round(self.Vt)}
 ;vertical_speed: {round(self.Vz)}
-;extruder_speed: {round(self.Ve)}
+;retract_speed: {round(self.Ve)}
+;restore_speed: {round(self.Vb)}
 ;layer_height: {self.f_h:.2f}
 ;line_width: {self.f_w:.2f}
 ;extrusion_ratio: {self.f_r:.2f}
@@ -108,12 +110,12 @@ M18
 
   def __init__(self,
       Te=210, Tp=50, Fe=1.0, Fc=1.0, Kf=0.0, Re=5,
-      Vp=60, Vt=100, Vz=7, Ve=35,
+      Vp=60, Vt=100, Vz=7, Ve=40, Vb=30,
       h=0.2, w=Nd, r=1.0,
       advret=False):
     self.Te, self.Tp, self.Fe, self.Fc = Te, Tp, Fe, Fc
     self.Kf, self.Re = Kf, Re
-    self.Vp, self.Vt, self.Vz, self.Ve = Vp, Vt, Vz, Ve
+    self.Vp, self.Vt, self.Vz, self.Ve, self.Vb = Vp, Vt, Vz, Ve, Vb
     self.f_h, self.f_w, self.f_r = h, w, r  # Default line height, width, and extrusion ratio.
     self.advret = advret
     self.gcode=[]
@@ -151,7 +153,7 @@ M18
     self.add(fstr(self.endcode, locals=locals()))
 
   def startLayer(self, n=None,
-      Vp=None, Vt=None, Vz=None, Ve=None,
+      Vp=None, Vt=None, Vz=None, Ve=None, Vb=None,
       h=None, w=None, r=1.0):
     # Note we always start layers from a high "hop" position.
     try:
@@ -165,6 +167,7 @@ M18
     self.l_Vt = self.Vt if Vt is None else Vt
     self.l_Vz = self.Vz if Vz is None else Vz
     self.l_Ve = self.Ve if Ve is None else Ve
+    self.l_Vb = self.Vb if Vb is None else Vb
     self.l_h = self.f_h if h is None else h
     self.l_w = self.f_w if w is None else w
     self.l_r = self.f_r * r
@@ -212,8 +215,8 @@ M18
     default to the current layer's if not specified, and r is multiplied by
     the current layer's extrusion ratio.  Speed can be specified directly
     using the `v` velocity argument, or the `s` speed multiplier of the
-    default `Vp,Vt,Vz,Ve` speeds for print, travel, vertical, and extruder
-    movement.
+    default `Vp,Vt,Vz,Ve,Vb` speeds for print, travel, vertical, retract, and
+    restore movement.
     """
     if x is None:
       x = None if dx is None else self.x + dx
@@ -239,7 +242,7 @@ M18
     r = round(de * self.Fa / (dl * a), 4) if dl else None
     if v is None:
       if de:
-        v = s * (self.l_Vp if dl else self.l_Ve)
+        v = s * (self.l_Vp if dl else self.l_Ve if de < 0 else self.l_Vb)
       else:
         v = s * (self.l_Vt if abs(dz) < self.l_Vz/self.l_Vt*dl else self.l_Vz)
     f = round(60 * v)
@@ -256,14 +259,19 @@ M18
     # Only do something if anything changed.
     if (x,y,z,e,f) != (None, None, None, None, None):
       # if extruding with changed settings, log and update.
-      if r and (v,h,w,r) != (self.v, self.h, self.w, self.r):
-        self.log(f'draw {h:.2f}x{w:.2f}x{r:.2f}@{round(dl/dt)} ve={de/dt:.4f}')
-        self.v, self.h, self.w, self.r = v, h, w, r
-      elif de<0 and not dl:
-        self.log(f'retract {de:.4f}@{-round(de/dt)} {self.re=:.4f}')
-        self.v, self.h, self.w, self.r = v, h, w, r
-      elif de>0 and not dl:
-        self.log(f'restore {de:.4f}@{round(de/dt)} {self.re=:.4f}')
+      if de and (v,h,w,r) != (self.v, self.h, self.w, self.r):
+        old_reve = f've={0 if self.re < 0 else self.re/self.Kf:.4f}@re={self.re:.4f}'
+        if dl:
+          ve = de/dt
+          re = self.Kf*ve
+          self.log(f'draw {h:.2f}x{w:.2f}x{r:.2f}@{round(dl/dt)} {old_reve} -> {ve=:.4f}@{re=:.4f}')
+        else:
+          re=self.re+de
+          ve=0 if re < 0 else re/self.Kf
+          if de<0:
+            self.log(f'retract {self.re:.4f}{de:+.4f}@{-round(de/dt)} {old_reve} -> {ve=:.4f}@{re=:.4f}')
+          else:
+            self.log(f'restore {self.re:.4f}{de:+.4f}@{round(de/dt)}  {old_reve} -> {ve=:.4f}@{re=:.4f}')
         self.v, self.h, self.w, self.r = v, h, w, r
       self.cmd('G1', X=x, Y=y, Z=z, E=e, F=f)
       self.x += dx
@@ -296,7 +304,7 @@ M18
     #self.log(f'retract {e=} {de=:.4f} {ve=} {s=} {self.re=:.4f}')
     self.move(e=e, de=de, v=ve, s=s)
 
-  def restore(self, e=None, de=None, ve=None, v=None, s=1.0, r=1.0, w=None, h=None):
+  def restore(self, e=None, de=None, vb=None, v=None, s=1.0, r=1.0, w=None, h=None):
     """ Do a restore, reverting any retraction and applying linear advance pressure.
 
     The default restore is to add enough advance to start extruding a line
@@ -309,8 +317,10 @@ M18
     if h is None: h = self.l_h
     if w is None: w = self.l_w
     r = self.l_r * r
-    de -= self.re  # Compensate for existing advance or retraction.
+    # Compensate for existing advance or retraction.
+    de -= self.re
     if self.advret:
+      # Add de for pre-applying pressure for upcoming print line.
       vlp = v if v else s*self.l_Vp  # upcoming print line velocity.
       vep = r * h * w * vlp / self.Fa  # upcoming print extrude velocity.
       # Adjust the target vep extrusion velocity to take into account the
@@ -318,16 +328,17 @@ M18
       at = vlp/500 # acceleration time for 500mm/s^2
       vep *= self.Kf/(self.Kf+at)
       de += self.Kf*vep
-    sv = r * 0.5 * pi*(w/2)**2 * h # volume to half-fill starting dot.
-    se = sv/self.Fa # extra extrusion to half-fill starting dot.
+    # Add de to half-fill the starting dot.
+    sv = r * 0.5 * pi*(w/2)**2 * h  # volume to half-fill starting dot.
+    se = sv/self.Fa  # extrusion to half-fill starting dot.
     de += se
-    #self.log(f'restore {e=} {de=:.4f} {ve=} {s=} {self.re=:.4f}')
-    self.move(e=e, de=de, v=ve, s=s)
+    #self.log(f'restore {e=} {de=:.4f} {vb=} {s=} {self.re=:.4f}')
+    self.move(e=e, de=de, v=vb, s=s)
 
   def up(self,
       x=None, y=None, z=None, e=None,
       dx=None, dy=None, dz=None, de=None,
-      vt=None, vz=None, ve=None,
+      vt=None, vz=None, ve=None, vb=None,
       v=None, s=1.0, r=1.0, w=None, h=None):
     """ Do a retract, raise, and move. """
     # default hop up is to Zh above layer height.
@@ -338,14 +349,14 @@ M18
   def dn(self,
       x=None, y=None, z=None, e=None,
       dx=None, dy=None, dz=None, de=None,
-      vt=None, vz=None, ve=None,
+      vt=None, vz=None, ve=None, vb=None,
       v=None, s=1.0, r=1.0, w=None, h=None):
     # default hop down is to layer height.
     if h is None: h = self.l_h
     if (x, y, dx, dy) != (None, None, None, None):
       self.move(x=x, y=y, dx=dx, dy=dy, v=vt, s=s)
     self.move(z=z, dz=dz, v=vz, h=h, s=s)
-    self.restore(e=e, de=de, ve=ve, v=v, s=s, r=r, w=w, h=h)
+    self.restore(e=e, de=de, vb=vb, v=v, s=s, r=r, w=w, h=h)
 
   def getCode(self):
     return '\n'.join(self.gcode + [''])
@@ -567,8 +578,8 @@ class ExtrudeTest(GCodeGen):
   tdx = rdx + sdy  # test box total width.
   tdy = rdy + tn*ty + 5 # test box total height.
 
-  def preextrude(self,n=0,x0=-50,y0=-60,x1=70,y1=60,l=120):
-    self.preExt(x0-2*n,y0,x1,y1+2*n,m=5,le=l,lw=l)
+  def preextrude(self,n=0,x0=-50,y0=-60,x1=70,y1=60):
+    self.preExt(x0-2*n,y0,x1,y1+2*n,m=5)
 
   def brim(self, x0, y0, x1, y1):
     w = self.l_w
@@ -694,37 +705,35 @@ class ExtrudeTest(GCodeGen):
     self.preextrude()
     self.startLayer(Vp=10)
     self.brim(x0,y0,x0+self.rdx, y1)
-    self.testStartStop(x0,y0,Kfr=(0.0,2.0),vxr=60,ler=0,ver=self.Ve)
-    self.testStartStop(x0,y0-self.tdy,Kfr=1.0,vxr=(20,100),ler=0,ver=self.Ve)
-    self.testStartStop(x0,y0-2*self.tdy,Kfr=1.5,vxr=(20,100),ler=0,ver=self.Ve)
-    self.testStartStop(x0,y0-3*self.tdy,Kfr=1.0,vxr=60,ler=(0,4),ver=self.Ve)
+    self.testStartStop(x0,y0,Kfr=(0.5,1.5),vxr=60,ler=1.5)
+    self.testStartStop(x0,y0-self.tdy,Kfr=(0.5,1.5),vxr=100,ler=1.5)
+    self.testStartStop(x0,y0-2*self.tdy,Kfr=0.85,vxr=(20,100),ler=1.5)
+    self.testStartStop(x0,y0-3*self.tdy,Kfr=0.85,vxr=60,ler=(0,2))
     self.endLayer()
 
   def testStartStop(self, x0=None, y0=None, Kfr=0.0,
-      vxr=vx0, ler=le0, ver=ve0):
+      vxr=vx0, ler=le0):
     Kf, Kf1, dKf = self._getstep(self.tn,Kfr)
     vx, vx1, dvx = self._getstep(self.tn,vxr)
     le, le1, dle = self._getstep(self.tn,ler)
-    ve, ve1, dve = self._getstep(self.tn,ver)
-    logset = self._fset(sep=' ', Kf=Kfr, vx=vxr, le=ler, ve=ver)
+    logset = self._fset(sep=' ', Kf=Kfr, vx=vxr, le=ler)
     self.log(f'testStartStop {logset}')
     self.ruler(x0, y0)
     y = y0 - self.rdy
     self.cmt(f'structure:infill-solid')
-    while Kf<=Kf1 and vx <= vx1 and le <= le1 and ve <= ve1:
-      self.testStartStopLine(x0, y, Kf, vx, le, ve)
+    while Kf<=Kf1 and vx <= vx1 and le <= le1:
+      self.testStartStopLine(x0, y, Kf, vx, le)
       Kf+=dKf
       vx+=dvx
       le+=dle
-      ve+=dve
       y-=self.ty
-    self.settings(x0 + self.rdx+1, y0, Kf=Kfr, vx=vxr, le=ler, ve=ver)
+    self.settings(x0 + self.rdx+1, y0, Kf=Kfr, vx=vxr, le=ler)
 
-  def testStartStopLine(self, x0, y0, Kf, vx, le=0, ve=30):
+  def testStartStopLine(self, x0, y0, Kf, vx, le=0):
     """ Test starting and stopping extrusion for different settings. """
     # A printer with a=500mm/s^2 can go from 0 to 100mm/s in 0.2s over 10mm.
     oldKf,self.Kf = self.Kf, Kf
-    self.log(f'testStartStopLine {Kf=} {vx=} {le=} {ve=}')
+    self.log(f'testStartStopLine {Kf=} {vx=} {le=}')
     self.dn(x0, y0, v=1)
     # This slow draw and move is to ensure the nozzle is primed and wiped, and
     # any advance pressure, actual or estimated, has decayed away.
@@ -735,14 +744,14 @@ class ExtrudeTest(GCodeGen):
     # probably needs to be increased. If the start is too thick, pressure was
     # too high and Kf should probably be dropped. The line should be
     # consistently the same width as all the other lines.
-    self.restore(ve=ve, v=vx)
+    self.restore(v=vx)
     self.draw(dx=50,v=vx)
     # This retract and slow move is to relieve the advance pressure, and see
     # if any remaining pressure drools off. If there is any trailing drool,
     # the amount of pressure was underestimated and Kf probably needs to be
     # increased. If there is still stringing when otherwise Kf seems right,
     # adding some additional retraction with de could help.
-    self.retract(de=-le,ve=ve)
+    self.retract(de=-le)
     self.move(dx=10,v=1)
     # This restore applies low advance pressure for a final slow line after
     # the earlier retraction. It should be the same width as all the other
@@ -751,7 +760,7 @@ class ExtrudeTest(GCodeGen):
     # If it starts too thick it suggests the earlier retraction under
     # estimated the pressure and extra retraction was actually relieving
     # pressure, so K should be increased and de could possibly be reduced.
-    self.restore(ve=ve, v=5)
+    self.restore(v=5)
     self.draw(dx=15,v=5)
     self.up()
     self.Kf = oldKf
@@ -832,8 +841,10 @@ if __name__ == '__main__':
       help='Base travel speed in mm/s.')
   cmdline.add_argument('-Vz', type=RangeType(1,10), default=7,
       help='Base raise/lower speed in mm/s.')
-  cmdline.add_argument('-Ve', type=RangeType(1,50), default=30,
-      help='Base retract/restore speed in mm/s.')
+  cmdline.add_argument('-Ve', type=RangeType(1,50), default=40,
+      help='Base retract speed in mm/s.')
+  cmdline.add_argument('-Vb', type=RangeType(1,50), default=30,
+      help='Base restore speed in mm/s.')
   cmdline.add_argument('-Lh', type=RangeType(0.1,0.4), default=0.3,
       help='Layer height in mm.')
   cmdline.add_argument('-Lw', type=RangeType(0.2,0.8), default=0.6,
@@ -848,7 +859,7 @@ if __name__ == '__main__':
 
   gen=ExtrudeTest(Te=args.Te, Tp=args.Tp, Fe=args.Fe, Fc=args.Fc,
       Kf=args.Kf, Re=args.Re,
-      Vp=args.Vp, Vt=args.Vt, Vz=args.Vz, Ve=args.Ve,
+      Vp=args.Vp, Vt=args.Vt, Vz=args.Vz, Ve=args.Ve, Vb=args.Vb,
       h=args.Lh, w=args.Lw, r=args.Lr, advret=args.R)
   #gen.doKfTests(args.n, args.Kf)
   #gen.doRetractTests(args.n, args.Kf)
