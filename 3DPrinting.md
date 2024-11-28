@@ -2,24 +2,30 @@
 
 ## Printer characteristics.
 
-Low end printers have speeds up to 100mm/s and acceleration of about 500mm/s^2.
+Low end printers like my Flashforge Adventurer 3 have X and Y speeds up to
+100mm/s and acceleration of about 500mm/s^2.
 
 A printer with 500mm/s^2 acceleration can go from 0 to 100mm/s in 0.2s over
-10mm distance. For 0 to 60mm/s it is 0.12s over 3.6mm distance.
+10mm of distance. For 0 to 60mm/s it is 0.12s over 3.6mm of distance.
+
+Note that diameter 0.4mm nozzle vs 1.75mm filament means that extruding
+`de=1mm` of filament translates to nearly 20mm of nozzle thread. For layer
+h=0.2mm with line w=0.4mm for 0.2x0.4mm line areas, de=1mm is 30mm of printed
+line. For layer 0.1x0.4mm lines lines it is 60mm, and for 0.3x0.4mm it's 20mm.
+So line print velocity `vl` is between 20x to 60x, or typically 30x, extruder
+velocity `ve`.
 
 
 ## Linear Advance
 
-Note that nozzle vs filament diameters and/or track areas mean that de=1mm
-translates to nearly 20mm of nozzle thread, or possibly even more of track.
-This means 5mm of uncompensated pressure advance translates to more 100mm of
-track smear or stringing.
-
 Linear Advance or Pressure Advance is mm of extrusion advance per mm/s of
 filament extrusion speed, and has typical values in the range 0.0-2.0. Note
-that 100mm/s print speed for a h=0.3 layer with w=0.4 width using 1.75mm
-diameter filament is 12mm^3/s or 5mm/s filament rate. This suggests the
-advance could get as high as 10mm, or 200mm of track!
+that 100mm/s print speed for a 0.3x0.4 lines using 1.75mm diameter filament is
+12mm^3/s or 5mm/s filament rate. This suggests the advance could get as high
+as 10mm, or 200mm of track!
+
+This means 5mm of uncompensated pressure advance translates to more 100mm of
+line smear or stringing.
 
 Linear advance assumes flow rate out the nozzle is linear with pressure, and
 pressure is linear with `r` extrusion advance of filament (how many mm of
@@ -53,24 +59,24 @@ Where
 ```
 
 Note that at the steady state, the filament rate into the nozzle `de/dt`
-equals the filament rate out of the nozzle `dn/dt`. This means you can
-replace `de/dt` with `dn/dt` in the above equation and get the flow rate out of
-the nozzle as a function of advance `r`;
+equals the filament rate out of the nozzle `dn/dt`. This means you can replace
+`de/dt` with `dn/dt` in the above equation and get the flow rate out of the
+nozzle as a function of advance `r`;
 
 ```python
   r = Kf * dn/dt
   dn/dt = 1/Kf*r
 ```
 
-The rate of change in `r` is `dr/dt` and is equal to the flow rate in minus the
-flow rate out;
+The rate of change in `r` is `dr/dt` and is equal to the flow rate in minus
+the flow rate out;
 
 ```python
   dr/dt = de/dt - dz/dt
         = de/dt - 1/Kf*r
 ```
 
-Which gives us the change in `r` over time `dt`;
+Which gives us the change in `r` of `dr` over time `dt`;
 
 ```python
   dr = de - dt/Kf * r
@@ -95,12 +101,12 @@ every 2x faster than every `pi*Kf` seconds will only get half way to the max
 and min target nozzle output rates (but note those output peaks and troughs
 will also lag by `Kf` seconds).
 
-So for `Kf=2.0` it will take about 2 seconds of extruding before the extrusion
+So for `Kf=1.0` it will take about 1 seconds of extruding before the extrusion
 rate "catches up" and is extruding at about the right rate, and switching
-speeds faster than every 3sec will mean it only gets about half way there. At
-100mm/s, 2 seconds is 200mm worth of line. Note that this matches the 200mm of
-track ooze you woud get without retracting when stopping after extruding a
-line at 100mm/s.
+speeds faster than every 1.5sec will mean it only gets about half way there.
+At 100mm/s, 1 seconds is 100mm worth of line. Note that also means 100mm of
+track ooze you would get if you keep moving without retracting after you stop
+extruding a line at 100mm/s.
 
 So the pressure can take some time to build up enough for the right extrusion
 rate when extruding lines at constant velocity. It also can take some time to
@@ -117,10 +123,10 @@ https://mmone.github.io/klipper/Kinematics.html
 
 Retraction withdraws the extruder when you stop extruding, and restore
 advances it again before you start extruding. This helps avoid stringing when
-moving between extrusions. The idea is that retraction sucks the filament
-back into the nozzle to prevent "drool", and restore pushes it back to the tip
-of the nozzle again. There are lots of calibration tests to help you figure
-out the right amount of retraction to minimize stringing.
+moving between extrusions. The idea is that retraction sucks the filament back
+into the nozzle to prevent "drool", and restore pushes it back to the tip of
+the nozzle again. There are lots of calibration tests to help you figure out
+the right amount of retraction to minimize stringing.
 
 However, when you look at Linear Advance works and how the nozzle output rate
 varies with pressure, it becomes pretty clear that what retraction actually
@@ -143,7 +149,7 @@ previous extrusion speed, and the ideal restore distance depends on the
 **next** extrusion speed.
 
 If the printer always printed at constant extrusion rates, using a constant
-sufficiently large retraction would be fine, since the pressure to relive and
+sufficiently large retraction would be fine, since the pressure to releve and
 restore would be the same. However, slicers don't use constant extrusion
 rates, they slow down for outer edges and corners. Also printers cannot
 instantaneously reach the requested line-speed, and have to accelerate and
@@ -169,10 +175,13 @@ previous/next extrusion rates. This would probably fix my clip print.
 
 ## Kf Calibration
 
+### StartStopTest 1
+
 This test uses gcode generated by gcodegen.py that estimages accumulated
 pressure advance from extrude/move/retract/restore commands assuming a given
 Kf value, and scales the retract/restore actions to relieve/preapply the
-necessary pressure advance based on the prev/next commands. It has
+necessary pressure advance based on the prev/next commands. The printed result
+looks like this.
 
 ![StartStopTest -Kf=1 -Re=1 Output Annotated](StartStopTest_Kf1_Re1_A1.jpg "StartStop Test Output")
 
@@ -180,10 +189,14 @@ Each test line has the following sequence (blue markers);
 
 1. draw 5mm@5mm/s - initial extrude to prime the nozzle. Should leave the
 nozzle primed with fillament and some small residual pressure.
+
 2. move 10mm@1mm/s - slow move to drain accumulated pressure as drool. Should
 leave the nozzle primed with nearly zero residual pressure.
+
 3. draw 50mm@<vx>mm/s - fast draw to see fast line quality.
+
 4. move 10mm@1mm/s - slow move to see if there is any residual pressure drool.
+
 5. draw 15mm@5mm/s - slow draw to see slow line quality after a fast line.
 
 This has the following important transitions (green markers);
@@ -218,9 +231,12 @@ of the pressure relief retraction.
 
 1. See how it varies with Kf. Kf goes from 0.0 to 2.0 with each line
 increasing by 0.2. vx is 60mm/s and le is 0mm.
+
 2. See how it varies with speed. vx goes from 20mm/s to 100mm/s with each line
 increasing by 8mm/s. Kf is 1.0 and le is 0.0.
+
 3. Same as 2 except with Kf=1.5.
+
 4. See how it varies with additional retraction. le goes from 0.0mm to 4.0mm
 with each line increasing by 0.4mm. Kf is 1.0 and vx is 60mm/s.
 
@@ -254,18 +270,19 @@ and acceleration time are all bigger. Note this restore has no retraction
 before it, so it would be unaffected by any backlash.
 
 8. For a fixed Kf=1.0 the fast line end shows increasing under-retraction at
-lower speeds that almost goes away at higher speeds. This could be that pressure
-advance might be non-linear and we need lower Kf values at higher speeds. It
-could also be there is a constant offset pressure Kc. This would be a minimum pressure to extrude
-that is needed to overcome [friction](https://en.wikipedia.org/wiki/Friction).
-Note that friction forces are normally fixed and independent of velocity like
-this. That this reduces with higher speeds suggests Kf=1.0 is too high and
-could be lowered after adding a Kc offset. Note reducing Kf and adding Kc
-would also improve the artifacts in point 7.
+lower speeds that almost goes away at higher speeds. This could be that
+pressure advance might be non-linear and we need lower Kf values at higher
+speeds. It could also be there is a constant offset pressure Kc. This would be
+a minimum pressure to extrude that is needed to overcome
+[friction](https://en.wikipedia.org/wiki/Friction). Note that friction forces
+are normally fixed and independent of velocity like this. That this reduces
+with higher speeds suggests Kf=1.0 is too high and could be lowered after
+adding a Kc offset. Note reducing Kf and adding Kc would also improve the
+artifacts in point 7.
 
 9. Adding a bit of extra retraction improves both the fast-line
-under-retraction in point 8, and the slow-line under-restore in points 5 and
-6. This is because the extra retraction is treated like it sucks up the nozzle
+under-retraction in point 8, and the slow-line under-restore in points 5 and 6.
+This is because the extra retraction is treated like it sucks up the nozzle
 and doesn't relieve pressure on retraction, and needs to be reverted before
 pre-applying any pressure on restore, so it's an offset added on both
 retraction and restore. If the retraction pressure was actually
@@ -307,6 +324,76 @@ So it looks like the following settings would be about right;
 * Kc + Be = le = 1.5mm
 * Kb = 0.6 -> 1.2mm
 * Kc = 0.3 -> 0.8mm
+
+### StartStopTest2
+
+Second test points;
+
+For t1 with Kf=0.5-1.4, vx=60 (@60,ve=3.6037), le=1.5 (note: @5,ve=0.3742):
+
+* The @60 starts all look OK for `0.8 <= Kf <= 1.1`, or `3.1412 <= de <=
+4.4709`.
+
+* The @60 ends all look ok for `0.5 <= Kf <= 1.4` or `-3.6438 >= de >=
+-7.2955`, but for lines that were not under or over extruded it is `-4.8575 >=
+de >= -6.0736`.
+
+* The @5 line start only begins to look OK for` Kf <= 0.5` with @60->@5
+`de=-3.6438+1.7984=-1.8454`, but note the previous line was under-extruded so
+the drop would need to be higher if the previous line was fully extruded. The
+first fully extruded previous line was for `Kf=0.8` and had @60->@5
+`de=-4.8575+1.9621=-2.8954` which was too big a drop. 
+
+For t2 with Kf=0.5-1.4, vx=100 (@100,ve=7.4835), le=1.5 (note: @5,ve=0.3742):
+
+* The @100 starts all look OK for `0.8 <= Kf <= 1.1`, or `4.8071 <= de <=
+6.9831`.
+
+* The @100 ends all look ok for `0.5 <= Kf <= 1.4` or `-4.7648 >= de >=
+-10.3905`, but for OK lines it's `-6.6009 >= de >= -8.4811`
+
+* The @5 line start only begins to look OK for` Kf <= 0.5` with @100->@5
+`de=-4.7648+1.9267=-2.8381`, but note the previous line was under-extruded so
+the drop would need to be higher if the previous line was fully extruded.
+
+For t3 with Kf=0.85 vx=20-100 (@20-@100 ve=1.4967-7.4835), le=-1.5:
+
+* The line starts look OK between `52.0 <= vx <= vx=76.0` or `3.8914 <= ve <=
+4.8344`, but are under-extruded for slower speeds and over extruded at higher
+speeds.
+
+* The line ends mostly all look OK and look like all lines reached full
+extrusion rates by the end, except for slight signs of under-retraction up to
+maybe vx=36.0, ve=2.6941.
+
+* the @5 line starts are OKish up to about vx=36.0, ve=2.6941, though the
+start dot is not very clearly defined. At higher speeds the @5 line starts to
+disappear.
+
+For t4 with Kf=0.85, vx=60 (@60,ve=3.6037), le=0.0-2.0:
+
+* Strangely, the line starts look a little under-extruded for the `1.6 <= le
+<= 2.0` retractions, despite them all starting after the same de=3.3621. Are
+we getting some extruder slippage when re-extruding previously retracted
+fillament? Is the restore speed too high?
+
+* The line ends show signs of under-retraction for `0.0 <= le <= 0.6`, or
+`-3.5598 >= de >= -4.1598`.
+
+* The @5 lines are all pretty much non-existent.
+
+If we assume the fast lines starting restore de equals the re pressure for
+extruding the line at the required ve, for @60 we have `0.87 <= Kf <= 1.24`
+and for @100 `0.64 <= Kf <= 0.93`. This does seem to suggest that either `ve`
+is non-linear with `re`, or there is something approximating a `Kc` constant
+offset.
+
+Note it can't be a simple as a literal Kc constant offset, since then flow
+would decay to zero and stop at that offset, making it equivalent to
+over-retraction or backlash. Perhaps this is the "tiny drool" I was seeing
+after retractions?
+
+
 
 # FlashPrint Settings.
 
