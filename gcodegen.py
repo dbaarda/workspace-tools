@@ -713,17 +713,18 @@ class ExtrudeTest(GCodeGen):
     self.preextrude()
     self.startLayer(Vp=10)
     self.brim(x0,y0,x0+self.rdx, y1)
-    self.testStartStop(x0,y0,Kfr=(0.5,1.5),vxr=10,ler=0.0)
-    self.testStartStop(x0,y0-self.tdy,Kfr=(0.5,1.5),vxr=30,ler=0.0)
-    self.testStartStop(x0,y0-2*self.tdy,Kfr=(0.5,1.5),vxr=60,ler=0.0)
-    self.testStartStop(x0,y0-3*self.tdy,Kfr=(0.5,1.5),vxr=100,ler=0.0)
+    self.testStartStop(x0,y0,Kfr=0.8,vxr=(10,100),ler=0.0,tn=9)
+    self.testStartStop(x0,y0-self.tdy,Kfr=0.8,vxr=(10,100),ler=1.0,tn=9)
+    self.testStartStop(x0,y0-2*self.tdy,Kfr=0.8,vxr=60,ler=(0.0,2.0))
+    self.testStartStop(x0,y0-3*self.tdy,Kfr=0.8,vxr=100,ler=(0.0,2.0))
     self.endLayer()
 
   def testStartStop(self, x0=None, y0=None, Kfr=0.0,
-      vxr=vx0, ler=le0):
-    Kf, Kf1, dKf = self._getstep(self.tn,Kfr)
-    vx, vx1, dvx = self._getstep(self.tn,vxr)
-    le, le1, dle = self._getstep(self.tn,ler)
+      vxr=vx0, ler=le0, tn=tn):
+    Kf, Kf1, dKf = self._getstep(tn,Kfr)
+    vx, vx1, dvx = self._getstep(tn,vxr)
+    le, le1, dle = self._getstep(tn,ler)
+    assert dKf or dvx or dle
     logset = self._fset(sep=' ', Kf=Kfr, vx=vxr, le=ler)
     self.log(f'testStartStop {logset}')
     self.ruler(x0, y0)
@@ -769,13 +770,13 @@ class ExtrudeTest(GCodeGen):
     # If it starts too thick it suggests the earlier retraction under
     # estimated the pressure and extra retraction was actually relieving
     # pressure, so K should be increased and de could possibly be reduced.
-    #self.restore(v=5)
-    #self.draw(dx=15,v=5)
+    self.restore(v=5)
+    self.draw(dx=15,v=5)
     # This starts drawing at 1mm/sec extruding at 0.1mm/sec for 15mm to see
     # how much over-retraction there was. When the retraction is restored the
     # line should be 34% thicker than the previous fast line. Every mm without
     # without a thick line minus 0.1*Kf is 0.1mm of overretraction.
-    self.draw(dx=15, de=1.5, v=1)
+    #self.draw(dx=15, de=1.5, v=1)
     self.up()
     self.Kf = oldKf
 
