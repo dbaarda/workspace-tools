@@ -617,7 +617,7 @@ class ExtrudeTest(GCodeGen):
       self.up()
 
   def _fval(self,k,v):
-    v=f'{v[0]}-{v[1]}' if isinstance(v, tuple) else f'{v}'
+    v=f'{v[0]}-{v[1]}' if isinstance(v, tuple) else f'{round(v,4)}'
     return f'{k}={v}'
 
   def _fset(self, sep='\n', **kwargs):
@@ -713,10 +713,10 @@ class ExtrudeTest(GCodeGen):
     self.preextrude()
     self.startLayer(Vp=10)
     self.brim(x0,y0,x0+self.rdx, y1)
-    self.testStartStop(x0,y0,Kfr=(0.5,1.5),vxr=60,ler=1.5)
-    self.testStartStop(x0,y0-self.tdy,Kfr=(0.5,1.5),vxr=100,ler=1.5)
-    self.testStartStop(x0,y0-2*self.tdy,Kfr=0.85,vxr=(20,100),ler=1.5)
-    self.testStartStop(x0,y0-3*self.tdy,Kfr=0.85,vxr=60,ler=(0,2))
+    self.testStartStop(x0,y0,Kfr=(0.5,1.5),vxr=10,ler=0.0)
+    self.testStartStop(x0,y0-self.tdy,Kfr=(0.5,1.5),vxr=30,ler=0.0)
+    self.testStartStop(x0,y0-2*self.tdy,Kfr=(0.5,1.5),vxr=60,ler=0.0)
+    self.testStartStop(x0,y0-3*self.tdy,Kfr=(0.5,1.5),vxr=100,ler=0.0)
     self.endLayer()
 
   def testStartStop(self, x0=None, y0=None, Kfr=0.0,
@@ -729,7 +729,8 @@ class ExtrudeTest(GCodeGen):
     self.ruler(x0, y0)
     y = y0 - self.rdy
     self.cmt(f'structure:infill-solid')
-    while Kf<=Kf1 and vx <= vx1 and le <= le1:
+    e=0.00001
+    while Kf <= Kf1+e and vx <= vx1+e and le <= le1+e:
       self.testStartStopLine(x0, y, Kf, vx, le)
       Kf+=dKf
       vx+=dvx
@@ -741,7 +742,7 @@ class ExtrudeTest(GCodeGen):
     """ Test starting and stopping extrusion for different settings. """
     # A printer with a=500mm/s^2 can go from 0 to 100mm/s in 0.2s over 10mm.
     oldKf,self.Kf = self.Kf, Kf
-    self.log(f'testStartStopLine {Kf=} {vx=} {le=}')
+    self.log(f'testStartStopLine {Kf=:.2f} vx={round(vx)} {le=:.2f}')
     self.dn(x0, y0, v=1)
     # This slow draw and move is to ensure the nozzle is primed and wiped, and
     # any advance pressure, actual or estimated, has decayed away.
@@ -768,8 +769,13 @@ class ExtrudeTest(GCodeGen):
     # If it starts too thick it suggests the earlier retraction under
     # estimated the pressure and extra retraction was actually relieving
     # pressure, so K should be increased and de could possibly be reduced.
-    self.restore(v=5)
-    self.draw(dx=15,v=5)
+    #self.restore(v=5)
+    #self.draw(dx=15,v=5)
+    # This starts drawing at 1mm/sec extruding at 0.1mm/sec for 15mm to see
+    # how much over-retraction there was. When the retraction is restored the
+    # line should be 34% thicker than the previous fast line. Every mm without
+    # without a thick line minus 0.1*Kf is 0.1mm of overretraction.
+    self.draw(dx=15, de=1.5, v=1)
     self.up()
     self.Kf = oldKf
 
