@@ -192,9 +192,31 @@ time to always be the specified duration which can be arbitrarily large.
 For printers that don't implement Linear Advance, the correct retract/restore
 distance depends on the amount of nozzle pressure (measured in extruder
 advance distance) that needs to be relieved on retraction, and applied on
-restore. The right amount of pressure depends on the extrusion rate before
-retraction, and after restore.
+restore. The right amount of pressure to relieve, and thus length of
+retraction, depends on the extrusion rate before the retraction, and and the
+right amount of pressure to restore, and thus length of restore, depends on
+the extrusion rate after the restore.
 
+The Flashforge Adventurer3 doesn't seem to implement Linear Advance.
+FlashPrint does have a setting for it and does emit the M900 command to set
+it, but tests setting it between 0.0 to 3.0, even doing each different Kf
+value in a different print in case it is executed at parse time like fan
+on/off, showed no difference. (TODO: maybe it has pre 1.5 linear advance which
+is measured in steps with values typically in the range 0-150. Test if I just
+didn't set it high enough).
+
+I have experienced problems related to this in prints that have layers with a
+mixture of large fill areas that are printed fast, and fiddly fine features
+that are printed slow. The retraction after completing the fast fills relieves
+a large amount of advance pressure, which is then restored in the restore
+before printing the slow fiddly bits. This restores too much pressure which
+comes out as a blob at the start of the slow print, making a mess out of it.
+This can also contribute to stringing artifacts. At first I mistook this for a
+cooling problem which prompted the fancy cooling model included here.
+
+So this can modify the gcode changing all the restores and retracts to use
+dynamic lengths based on the linear advance pressure from the print speeds
+before and after.
 """
 
 import re
@@ -253,12 +275,14 @@ class Printer(object):
   def _fo(self, fd, de_dt):
     return fd*min(1.0, self.Kf*de_dt + self.Cf) if self.autofan else fd
 
-  def __init__(self, heatext=0.0, fanspeed=1.0, layerpause=0.0, pwmfan=False, autofan=True):
+  def __init__(self, heatext=0.0, fanspeed=1.0, layerpause=0.0, pwmfan=False, autofan=True, Kf=0.0, Re=0.0):
     self.hs = heatext  # heat extruded setting.
     self.fanspeed=fanspeed  # fan speed scale setting.
     self.layerpause=layerpause # duration to pause after each layer.
     self.pwmfan=pwmfan  # whether to control fanspeed with gcode pwm.
     self.autofan=autofan  # whether the printer autocontrols fan speed.
+    self.Kf = Kf # Linear Advance factor for dynamic retract/restore.
+    self.Re = Re # Extra retraction length for dynamic retract/restore.
     self.gcode=[]
     self.fan_on = None
     self.t = 0.0
@@ -270,6 +294,10 @@ class Printer(object):
     self.de = 0.0  # heat extruded since last fan cycle.
     self.dt = 0.0  # time since last fan cycle.
     self.de_dt = 0.0 # extrusion rate of last move command.
+    self.r = 0.0 # length of filament advance pressure.
+    # Note filament extruded out the nozzle n = e - r
+    self.pde = 0.0 # delta to e from linear advance adjustments.
+    self.prev_restore = None # deferred restore speed for linear advance.
     self._init_layer('P')
 
   def _init_layer(self, n=None):
@@ -289,7 +317,7 @@ class Printer(object):
       try:
         self.runline(line.decode())
       except UnicodeDecodeError:
-        # If it's not text, just append it.
+        # If it's not text it's *.gx file binary data; just append it.
         self.gcode.append(line)
 
   def _addline(self, line):
@@ -386,29 +414,82 @@ class Printer(object):
     self.setfan(0.0)
     return 0.0
 
+  def _calcr(self, de, dt):
+    # Calculate change in pressure advance 'r' by iterating over the time
+    # interval with a dt that is small relative to the Kf timeconstant.
+    t, r = dt, self.r
+    ve = de/dt if dt else 0 # extrusion velocity
+    dt = self.Kf/100
+    while t:
+      dt = min(dt,t)  # This iteration's time interval.
+      # Note filament doesn't get sucked back into the nozzle if the pressure
+      # advance is negative.
+      r += ve*dt  # Add filament extruded into the nozzle.
+      r -= max(0, r*dt/(self.Kf+dt)) # Remove filament extruded out the nozzle.
+      t -= dt
+    return r
+
   def G1(self, line):
     m = re.match(r'G1(?: X([-+0-9.]+))?(?: Y([-+0-9.]+))?(?: Z([-+0-9.]+))?(?: E([-+0-9.]+))?(?: F([-+0-9]+))?', line)
     x,y,z,e,f = m.groups()
     x = self.x if x is None else float(x)
     y = self.y if y is None else float(y)
     z = self.z if z is None else float(z)
-    e = self.e if e is None else float(e)
+    e = self.e if e is None else float(e)+self.pde
     f = self.f if f is None else float(f)/60
     dx,dy,dz,de,df=x-self.x,y-self.y,z-self.z,e-self.e,f-self.f
     dl=(dx*dx+dy*dy+dz*dz)**0.5
     dt=(dl if dl else abs(de))/f
-    # only count de and dl for extruding moves.
+    if self.Kf > 0 and de:
+      # We have pressure advance adjustment enabled.
+      if not dl and de < 0:
+        # This is a retraction, change the retraction amount to relieve pressure.
+        de, old_de = - self.r - self.Re, de
+        self.pde += de - old_de
+        e = self.e + de
+        dt = de/f
+        self._addline(f'; adjusting retraction, de={old_de:.4f}->{de:.4f} {self.pde=:.4f}')
+      elif not dl and de > 0:
+        if self.prev_restore:
+          # We are redoing a previous restore, clear and continue processing it.
+          old_de, old_f = self.prev_restore
+          self.prev_restore = None
+          self.pde += de
+          self._addline(f';adjusting restore, de={old_de:.4f}->{de:.4f} {self.pde=:.4f}')
+        else:
+          # We need to defer it until we know the next extrusion speed.
+          self.prev_restore = (de,f)  # save restore f to add later.
+          self.pde -= de
+          #self._addline(f';deferring restore {de=:.4f} {self.pde=:.4f}')
+          return 0,0
+      elif dl and self.prev_restore:
+        # We need to apply a restore before this extrusion.
+        old_de, old_f = self.prev_restore
+        new_de = self.Kf*de/dt - self.r
+        new_e = self.e - self.pde + new_de
+        #self._addline(f';reviving_restore, de={old_de:.4f} {self.pde=:.4f}')
+        self.runline(f'G1 E{new_e:.4f} F{int(old_f*60)}')
+        self.runline(line)
+        return 0,0
+    self.r = self._calcr(de,dt)
+    # Only count de and dl for extruding moves.
     de = de if dl else 0.0
     dl = dl if de else 0.0
     self.x,self.y,self.z,self.e,self.f = x,y,z,e,f
     self.layer_l += dl
     self.layer_e += de
+    if self.pde:
+      # Adjust the E value in the line.
+      line = re.sub(r'E\d+\.\d+',f'E{e:.4f}', line)
     self._addline(line)
     #self._addline(f';{ftime(self.t)}: dl={dl:.3f} de={de:.3f} dt={dt:.3f} f={f:.3}')
     return dt, de
 
   def G4(self, line):
     """ wait. """
+    if self.Kf and self.r > -self.Re:
+      # We should never pause without retracting to relieve nozzle pressure.
+      self._addline(f';WARNING: pause with residual nozzle pressure, r={self.r:.4f}>{-self.Re:.4f}')
     if self.layerpause:
       # Change all layer waits to wait for layerpause duration.
       dt = self.layerpause
@@ -424,26 +505,38 @@ if __name__ == '__main__':
   import argparse, sys
 
   inf=float('inf')
-  def FloatRangeType(min=-inf, max=inf):
+  def RangeType(min=-inf, max=inf):
     def init(s):
-      f=float(s)
-      if f<min or max<f:
+      v=type(min)(s)
+      if v<min or max<v:
         raise argparse.ArgumentTypeError(f'must be between {min} and {max}')
-      return f
+      return v
     return init
 
   cmdline = argparse.ArgumentParser(description='Postprocess FlashPrint gcode.')
-  cmdline.add_argument('-e', type=FloatRangeType(0.0), default=0.0, help='Heat extruded length target.' )
-  cmdline.add_argument('-f', type=FloatRangeType(0.0,1.0), default=1.0, help='Fan speed between 0.0 -> 1.0.' )
-  cmdline.add_argument('-p', type=FloatRangeType(0.0), default=0.0, help='Seconds to pause between each layer.')
-  cmdline.add_argument('-P', action='store_true', help='Control fan speed by pulsing it on/off.')
-  cmdline.add_argument('-A', action='store_true', help='Printer automatically adjusts fan speed when on.')
+  cmdline.add_argument('-e', type=RangeType(0.0), default=0.0,
+      help='Heat extruded target in mm of filament that is hot.' )
+  cmdline.add_argument('-f', type=RangeType(0.0, 1.0), default=1.0,
+      help='Fan speed between 0.0 -> 1.0.' )
+  cmdline.add_argument('-p', type=RangeType(0.0), default=0.0,
+      help='Seconds to pause between each layer.')
+  cmdline.add_argument('-P', action='store_true',
+      help='Control fan speed by pulsing it on/off.')
+  cmdline.add_argument('-A', action='store_true',
+      help='Printer automatically adjusts fan speed when on.')
+  cmdline.add_argument('-Kf', type=RangeType(0.0, 4.0), default=0.0,
+      help='Linear Advance K factor for dynamic retract/restore.')
+  cmdline.add_argument('-Re', type=RangeType(0.0, 10.0), default=0.1,
+      help='Additional retraction length for dynamic retract/restore.')
   cmdline.add_argument('infile', nargs='?', type=argparse.FileType('rb'), default=sys.stdin.buffer,
-                    help='Input gcode file to postprocess.')
+      help='Input gcode file to postprocess.')
   args=cmdline.parse_args()
 
   data = args.infile.read()
-  p=Printer(heatext=args.e, fanspeed=args.f, layerpause=args.p, pwmfan=args.P, autofan=args.A)
+  p=Printer(
+      heatext=args.e, fanspeed=args.f, layerpause=args.p,
+      pwmfan=args.P, autofan=args.A,
+      Kf=args.Kf, Re=args.Re)
   p.runCode(data)
   data=p.getCode()
   sys.stdout.buffer.write(data)
