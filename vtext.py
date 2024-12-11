@@ -25,8 +25,9 @@ out as unusual and make this bigger than it probably should be.
 * '@' is 6.20 high compared to 6.15 for overshoot-caps or 6.16 for '(' and ')'.
 
 If we resize '$' down to 6.2 to match '@' and shorten the 'p' and 'q'
-descenders to match at -1.64, this becomes a body height of 7.84, or giving
-them a little space 8.0, with 6.25 above the base line and 1.75 below.
+descenders to -1.70, this becomes a body height of 7.90, or 8.0 with 0.05
+extra space at the top and bottom, with 6.25 above the base line and 1.75
+below.
 
 So these modifications have been applied to the font below.
 
@@ -264,13 +265,13 @@ glyphs = {
         (3.39, 3.04), (3.03, 3.76), (2.49, 4.22), (1.82, 4.38), (1.14, 4.26),
         (0.44, 3.82), (0.0, 3.38)),
        #((0.0, 4.27), (0.0, -1.76))), #original descender.
-       ((0.0, 4.27), (0.0, -1.64))),
+       ((0.0, 4.27), (0.0, -1.70))),
  'q': (((3.52, 1.53), (3.08, 0.68), (2.72, 0.3), (2.35, 0.06), (1.99, -0.07),
         (1.65, -0.11), (0.94, 0.05), (0.43, 0.49), (0.11, 1.19), (0.0, 2.09),
         (0.13, 3.04), (0.49, 3.76), (1.03, 4.22), (1.7, 4.38), (2.38, 4.26),
         (3.08, 3.82), (3.52, 3.38)),
        #((3.52, 4.27), (3.52, -1.76))), #original descender.
-       ((3.52, 4.27), (3.52, -1.64))),
+       ((3.52, 4.27), (3.52, -1.70))),
  'r': (((0.0, 0.0), (0.0, 4.27)),
        ((0.0, 3.05), (0.45, 3.68), (0.82, 4.04), (1.18, 4.25), (1.51, 4.36),
         (1.8, 4.38), (1.88, 4.38), (1.97, 4.37))),
@@ -307,78 +308,92 @@ glyphs = {
         (2.88, 1.89), (3.2, 1.73), (3.64, 1.67), (4.24, 1.79), (4.64, 2.15),
         (4.87, 2.73), (4.95, 3.51), (4.95, 3.79)),)}
 
-# # convert dots with 2 identical points to a little line.
-# glyphs = {c:tuple(
-#     (l[0], (l[1][0]+0.2, l[1][1]) ) if l[0] == l[1] else l for l in v)
-#     for c,v in glyphs.items()}
-
 def width(a):
   # width is 4 (half body height) for space and 0 for newline.
   if a == ' ':
     return 4
   elif a == '\n':
     return 0
-  v=glyphs[a]
-  xs=[x for l in v for x,_ in l]
+  v = glyphs[a]
+  xs = [x for l in v for x, _ in l]
   return max(xs) - min(xs)
-
-def mround(v, m=0.01):
-  """round a value to the nearest multiple of m."""
-  return round(round(v/m)*m, 4) # round to 4 decimals to remove floating point noise.
 
 
 def bbox(v):
   """Get the bounding box for a sequence of lines."""
   if v:
-    xs,ys=zip(*(p for l in v for p in l))
-    return (min(xs),min(ys)),(max(xs),max(ys))
+    xs, ys = zip(*(p for l in v for p in l))
+    return (min(xs), min(ys)), (max(xs), max(ys))
   else:
-    return (0,0),(0,0)
+    return (0, 0), (0, 0)
 
 
-def scale(v,s=1.0,sx=None,sy=None,m=0.01):
+def scale(v, s=1.0, sx=None, sy=None, d=2):
   """scale a sequence of lines."""
   if sx is None: sx = s
   if sy is None: sy = s
-  return [[(mround(x*sx,m), mround(y*sy,m)) for x,y in l] for l in v]
+  return [[(round(x*sx, d), round(y*sy, d)) for x, y in l] for l in v]
 
 
-def translate(v, dx=0, dy=0, m=0.01):
+def translate(v, dx=0, dy=0, d=2):
   """move a sequence of lines."""
-  return [[(mround(x+dx,m),mround(y+dy,m)) for x,y in l] for l in v]
+  return [[(round(x+dx, d), round(y+dy, d)) for x, y in l] for l in v]
 
 
-def rotate(v, a=90, m=0.01):
+def rotate(v, a=90, d=2):
   """rotate a sequence of lines counterclockwise about the origin."""
   r = pi*a/180
-  s,c = math.sin(r), math.cos(r)
-  return [[(mround(c*x - sy, m), mround(s*x + c*y,m)) for x,y in l] for l in v]
+  s, c = math.sin(r), math.cos(r)
+  return [[(round(c*x - sy, d), round(s*x + c*y, d)) for x, y in l] for l in v]
+
+
+
+# # convert dots with 2 identical points to a little vertical line.
+glyphs = {c:tuple(
+    (l[0], (l[1][0], l[1][1]-0.1) ) if l[0] == l[1] else l for l in v)
+    for c, v in glyphs.items()}
 
 # Adjust '$' size to match the rest of the font.
-v=glyphs['$']
-v=translate(v,dy=0.11) # Shift up to preserve baseline overshoot.
-ymax = max(y for l in v for _,y in l)
-v=scale(v,(6.2+0.11)/ymax) # Scale so top will match '@'.
-v=translate(v,dy=-0.11) # Shift back down to restore baseline overshoot.
+v = glyphs['$']
+v = translate(v, dy=0.11) # Shift up to preserve baseline overshoot.
+ymax = max(y for l in v for _, y in l)
+v = scale(v, (6.2+0.11)/ymax) # Scale so top will match '@'.
+v = translate(v, dy=-0.11) # Shift back down to restore baseline overshoot.
 glyphs['$'] = v
 
-fsize = 8     # the font body size.
+fsize = 8     # the nominal font body size.
+wsize = 7.75  # the nominal widest character width.
 fbase = 6.25  # The font base line distance from the body top.
 fgap = 1      # the gap between glyphs.
-widths={c:width(c) for c in glyphs}
+widths = {c:width(c) for c in glyphs}
 
 
-def pfont(c,fs=5,w=0.4):
-  """Get the proportional font vector and width including gap for letter c."""
+def pfont(c, fs=5, w=0.5):
+  """Get the proportional font vector and width including gap for letter c.
+
+  Note `w` is the drawing line width, and `fs` is the text height including
+  the line width. The letter is shifted to leave a half-line-width gap on the
+  left side and a letter-gap plus half-line-width gap on right side, with the
+  origin at the top-left corner or (xmin,ymax) of the bounding box.
+
+  """
   s = (fs-w)/fsize
-  dx = 0 if c == '\n' else (widths[c] + fgap)*s + w
-  return scale(translate(glyphs[c],dx=fgap, dy=-fbase), s), dx
+  fw = 0 if c == '\n' else (widths[c] + fgap)*s + w
+  return scale(translate(glyphs[c], dx=w/s, dy=-fbase), s), fw
 
-def ffont(c,h=5):
-  """Get the fixed font vector and width including gap for letter c."""
-  dx = (fsize - fgap - widths[c])/2
-  dy = - fbase
-  return scale(translate(glyphs[c],dx,dy),h/fsize), h
+
+def ffont(c, fs=5, w=0.5):
+  """Get the fixed font vector and width including gap for letter c.
+
+  This horizonally centers the letters within a widest-character-width wide
+  bounding box with an extra half-line-width `w/2` gap on the left, leaving
+  the rest of the `fs` wide square bounding box for the letter-space gap on
+  the right.
+  """
+  s = (fs-w)/fsize
+  dx = (wsize - widths[c])/2
+  return scale(translate(glyphs[c], dx=dx+w/s, dy=-fbase), s), fs
+
 
 def ptext(t, x0=0, y0=0, x1=None, y1=None, fs=5, a=0, w=0.4):
   """Get the sequence of vectors for some text, optionally rotated, scaled and moved.
@@ -387,8 +402,8 @@ def ptext(t, x0=0, y0=0, x1=None, y1=None, fs=5, a=0, w=0.4):
   will be wrapped and truncated.
 
   Args:
-    x0,y0: the top left corner
-    x1,y1: the bottom right corner before rotation.
+    x0, y0: the top left corner
+    x1, y1: the bottom right corner before rotation.
     fs: the font size in mm.
     a: the rotation angle to apply in degrees.
     w: the line width.
@@ -396,29 +411,33 @@ def ptext(t, x0=0, y0=0, x1=None, y1=None, fs=5, a=0, w=0.4):
   x, y = 0, 0
   xw = None if x1 is None else x1-x0
   yw = None if y1 is None else y1-y0
-  v=[]
+  v = []
+  # First, render the scaled text within a bounding box at the origin.
   for c in t:
-    cv,dx = pfont(c,fs,w)
+    cv, dx = pfont(c, fs, w)
     if c == '\n' or (xw is not None and (x+dx) > xw):
       y -= fs
       x = 0
     if c != '\n' and (yw is None or (y-fs) > yw):
       v += translate(cv, x, y)
       x += dx
-  if a: v = rotate(v,a)
-  return translate(v,x0,y0)
+  # Next, rotate it about the origin if necessary.
+  if a: v = rotate(v, a)
+  # Finally, translate it to the (x0,y0) location.
+  return translate(v, x0, y0)
+
 
 if __name__ == '__main__':
-  import pprint,sys
+  import pprint, sys
 
-  bboxes = {c:bbox(v) for c,v in glyphs.items()}
+  bboxes = {c:bbox(v) for c, v in glyphs.items()}
   bbmax = bbox(bb for bb in bboxes.values())
 
   print('The glyphs max bounding box is')
   print(f'max={bbmax}')
 
   # Look for characters that are outliers for x and y values.
-  xs,ys=zip(*(p for bb in bboxes.values() for p in bb))
+  xs, ys = zip(*(p for bb in bboxes.values() for p in bb))
   xmaxs = sorted(set(bb[1][0] for bb in bboxes.values()))
   ymins = sorted(set(bb[0][1] for bb in bboxes.values()))
   ymaxs = sorted(set(bb[1][1] for bb in bboxes.values()))
@@ -427,13 +446,13 @@ if __name__ == '__main__':
   print(f'ymax range  is {ymaxs[:6]}...{ymaxs[-6:]}')
 
   for x in xmaxs:
-    cs=list(c for c in bboxes if x == bboxes[c][1][0])
-    print(f'x={x} is in {cs}')
+    cs = list(c for c in bboxes if x == bboxes[c][1][0])
+    print(f'xmax={x} is in {cs}')
 
   for y in ymins:
-    cs=list(c for c in bboxes if y == bboxes[c][0][1])
+    cs = list(c for c in bboxes if y == bboxes[c][0][1])
     print(f'ymin={y} is in {cs}')
 
   for y in ymaxs:
-    cs=list(c for c in bboxes if y == bboxes[c][1][1])
+    cs = list(c for c in bboxes if y == bboxes[c][1][1])
     print(f'ymax={y} is in {cs}')
