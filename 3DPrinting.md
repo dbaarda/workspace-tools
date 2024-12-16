@@ -264,7 +264,7 @@ nozzle flow velocity `nv` we get;
 ```python
   Pe = Kf*ve + Cf
   Cf = Kb*Db
-``
+```
 
 This is the Linear Advance model with a constant offset, which so far appears
 to match what I've seen. Note the constant offset will vary as a function of
@@ -281,9 +281,6 @@ Note that at very low speeds Pn should be very small, so we can directly
 measure Pb, assuming it doesn't vary with speeds. At low speeds we should be
 able to get several start/stop cycles per line with different retract/restore
 distances.
-
-
-
 
 1. Measure the Pb values to see how they vary with;
   * print speed
