@@ -15,7 +15,6 @@ line. For layer 0.1x0.4mm lines lines it is 60mm, and for 0.3x0.4mm it's 20mm.
 So line print velocity `vl` is between 20x to 60x, or typically 30x, extruder
 velocity `ve`.
 
-
 ## Linear Advance
 
 Linear Advance or Pressure Advance is mm of extrusion advance per mm/s of
@@ -43,11 +42,11 @@ extruder advance distance. See this for some thoughts on these assumptions;
 https://klipper.discourse.group/t/modification-of-pressure-advance-for-high-speed-bowden-printers/13053/18?u=dbaarda
 
 Note the linear advance factor `Kf` for compensating for this is the mm of
-advance needed per mm/sec of extruder velocity for the nozzle output flow rate
-to match the extruder velocity.
+advance `pe` needed per mm/sec of extruder velocity for the nozzle output flow
+rate to match the extruder velocity.
 
 ```python
-  r = Kf * de/dt
+  pe = Kf * de/dt
 ```
 
 Where
@@ -55,34 +54,34 @@ Where
 ```
   de/dt is the extruder velocity in mm of filament/sec.
   Kf is the linear advance factor in mm per mm/sec of extruder velocity.
-  r is the mm of filament linear advance distance.
+  pe is the mm of filament linear advance "pressure" distance.
 ```
 
 Note that at the steady state, the filament rate into the nozzle `de/dt`
 equals the filament rate out of the nozzle `dn/dt`. This means you can replace
 `de/dt` with `dn/dt` in the above equation and get the flow rate out of the
-nozzle as a function of advance `r`;
+nozzle as a function of advance `pe`;
 
 ```python
-  r = Kf * dn/dt
-  dn/dt = 1/Kf*r
+  pe = Kf * dn/dt
+  dn/dt = pe * 1/Kf
 ```
 
-The rate of change in `r` is `dr/dt` and is equal to the flow rate in minus
-the flow rate out;
+The rate of change in `pe` is `dpe/dt` and is equal to the flow rate in the
+extruder minus the flow rate out the nozzle;
 
 ```python
-  dr/dt = de/dt - dz/dt
-        = de/dt - 1/Kf*r
+  dpe/dt = de/dt - dn/dt
+        = de/dt - pe * 1/Kf
 ```
 
-Which gives us the change in `r` of `dr` over time `dt`;
+Which gives us the change in `pe` of `dpe` over time `dt`;
 
 ```python
-  dr = de - dt/Kf * r
+  dpe = de - pe * dt/Kf
 ```
 
-Note that this is an exponential decay equation, with `r` advance
+Note that this is an exponential decay equation, with `pe` advance
 exponentially approaching the steady state value for a fixed `de/dt` rate with
 a timeconstant of `Kf`. Exponential decay processes cause both lag and a
 low-pass-filter "frequency cutoff" effects that depends on the timeconstant.
@@ -131,13 +130,13 @@ the right amount of retraction to minimize stringing.
 However, when you look at Linear Advance works and how the nozzle output rate
 varies with pressure, it becomes pretty clear that what retraction actually
 does is relieve the accumulated advance pressure, and even more importantly,
-restore restores that pressure! This means when you print at constant speed,
-the advance pressure starts low giving under-extruded lines, but builds up
-over the Kt timeconstant duration to give the right extrusion rate. When the
-printer stops and retracts, it quickly relieves that pressure so it can move
-without extruding, and when it restores, it restores that pressure so the
-printer is ready to print at the previous speed without under-extruding at the
-start.
+restore re-applys that pressure! This means when you print at constant speed,
+the advance pressure initially starts low giving under-extruded lines, but
+builds up over the Kt timeconstant duration to give the right extrusion rate.
+When the printer stops and retracts, it quickly relieves that pressure so it
+can move without extruding, and when it restores, it re-applys that pressure
+so the printer is ready to print at the previous speed without under-extruding
+at the start.
 
 What this means is the ideal retraction distance is the accumulated pressure
 advance distance. If the printer implements linear advance, and it is
@@ -149,8 +148,8 @@ previous extrusion speed, and the ideal restore distance depends on the
 **next** extrusion speed.
 
 If the printer always printed at constant extrusion rates, using a constant
-sufficiently large retraction would be fine, since the pressure to releve and
-restore would be the same. However, slicers don't use constant extrusion
+sufficiently large retraction would be fine, since the pressure to releave and
+reapply would be the same. However, slicers don't use constant extrusion
 rates, they slow down for outer edges and corners. Also printers cannot
 instantaneously reach the requested line-speed, and have to accelerate and
 decelerate, adjusting extrusion rates along the way.
@@ -172,6 +171,125 @@ build/decay the linear advance amount.
 Even without implementing full linear-advance including acceleration in gcode,
 it would probably be worth implementing dynamic retract/restore based on the
 previous/next extrusion rates. This would probably fix my clip print.
+
+## Print Layer Back Pressure
+
+After playing around with trying to figure out the Kf value for my Adv3
+printer, it's become apparent that the simple linear advance model is
+insufficient to accurately reflect the real nozzle flow characteristics. It
+seems the relationship between nozzle flow rate and advance pressure is not
+linear. This is also discussed in various places online like;
+
+https://klipper.discourse.group/t/modification-of-pressure-advance-for-high-speed-bowden-printers/13053/26
+
+The reported experiences vary, with some reporting Kf seems to drop with
+increasing velocity, and others that it increases. In the speed ranges
+possible with the Adv3 it seems Kf drops with increasing velocity.
+
+After much fiddling around and experimenting, I've formed a theory that this
+is because extruding against the print surface generates back pressure. The
+nozzle is extruding into a bead of cooling filament that is pressed against
+the print surface. Below a certain pressure threshold it cannot push past that
+bead and the flow is effectively zero. So what actually drives the flow rate
+at low pressures is nozzle movement, moving away from the flow-blocking bead.
+At a constant head speed and with sufficient feed rate it will draw a pretty
+consistent line, with the bead smearing behind he nozzle. The advance pressure
+doesn’t make much difference because the flow rate is dominated by the
+back-pressure and nozzle speed moving away from that back-pressure.
+
+At higher nozzle speeds and flow rates, the pressure for the flow rate through
+the nozzle starts to dominate. I suspect the back-pressure might be pretty
+constant at any speed for a given material, layer height, track width, and
+extrusion ratio, because the smearing bead shape will be pretty much the same
+for the same track shape regardless of the speed. It might drop a bit as speed
+increases because the smearing bead has less time to cool and will flow
+better, but i’m not sure how much difference that would make. I don’t think
+the bead cools much under the nozzle at even super slow speeds. that is
+relieved by moving the print head, smearing the bead away. This would explain
+why Kf appears to decrease with velocity.
+
+At even higher speeds I suspect the linear [Poiseuille's
+equation](https://en.wikipedia.org/wiki/Hagen%E2%80%93Poiseuille_equation)
+assumption starts to fail and [Bernoulli’s
+equation](https://en.wikipedia.org/wiki/Bernoulli%27s_principle) with pressure
+as a function of velocity squared starts to dominate, which could explain why
+some people are seeing Kf increase with velocity.
+
+We will assume the back-pressure is a function of only the bead diameter,
+which is the track width, and is independent of the nozzle velocity. Note this
+could be very wrong, with faster speeds giving the bead less time to cool and
+harden, lowering the back-pressure, but we assume this for now. We also assume
+that the back-pressure for a given material and layer height is a linear
+function of the bead diameter. I could, and have, invent all sorts of
+rationalizations for this assumption but I'm basicly making stuff up so I
+won't include it here. We'll assume this for simplicity for now.
+
+The flow through the nozzle also requires pressure. Although I suspect that
+this should be Bernoulli’s equation, the existing PA model assumes
+Poiseuille’s equation, so for now we will assume Poiseuille’s law.
+
+This gives us;
+
+```python
+  Pe = Pn + Pb      # (1) total extruder advance pressure.
+  Pn = Kf*vn        # (2) nozzle pressure from flow rate.
+  Pb = Kb*Db        # (3) back pressure from extruded bead.
+  vn = v*Db*h/Af    # (4) nozzle flow velocity.
+  Db = r*w          # (5) extruded bead diameter.
+  Af = pi*(Df/2)^2  # (6) cross section area of filament.
+```
+
+Where:
+
+```
+  Pe is the extruder pressure in mm of filament advance.
+  Pn is the nozzle flow pressure in mm of filament advance.
+  Pb is the bead back-pressure in mm of filament advance.
+  Kf is the nozzle pressure factor.
+  Kb is the bead backpressure factor.
+  vn is the nozzle outflow velocity in mm/s of filament.
+  ve is the extruder velocity in mm/s of filament.
+  Df is the filament diameter in mm.
+  Db is the bead diameter in mm.
+  Af is the filament cross-section area in mm^2.
+  r is the extrusion ratio.
+  w is the nominal line width in mm.
+  h is the layer and line height in mm.
+  v is the nozzle velocity in mm/s
+```
+
+Note for a constant track width at steady state where extruder velocity `ve` equals
+nozzle flow velocity `nv` we get;
+
+```python
+  Pe = Kf*ve + Cf
+  Cf = Kb*Db
+``
+
+This is the Linear Advance model with a constant offset, which so far appears
+to match what I've seen. Note the constant offset will vary as a function of
+the target track-width and probably layer height.
+
+To validate and calibrate this model we need to measure Pe to see how it
+varies with other variables. Measuring Pe can be done by pre-applying
+different Pe values with a restore before printing a line, and seeing which Pe
+gives a good consistent line, or applying different retract values after a
+printed line has stabilized and seeing how much retraction is required to
+relieve the pressure.
+
+Note that at very low speeds Pn should be very small, so we can directly
+measure Pb, assuming it doesn't vary with speeds. At low speeds we should be
+able to get several start/stop cycles per line with different retract/restore
+distances.
+
+
+
+
+1. Measure the Pb values to see how they vary with;
+  * print speed
+  * layer height
+  * track width
+
 
 ## Kf Calibration
 
@@ -325,7 +443,7 @@ So it looks like the following settings would be about right;
 * Kb = 0.6 -> 1.2mm
 * Kc = 0.3 -> 0.8mm
 
-### StartStopTest2
+### StartStopTest 2
 
 Second test points;
 
@@ -342,7 +460,7 @@ de >= -6.0736`.
 `de=-3.6438+1.7984=-1.8454`, but note the previous line was under-extruded so
 the drop would need to be higher if the previous line was fully extruded. The
 first fully extruded previous line was for `Kf=0.8` and had @60->@5
-`de=-4.8575+1.9621=-2.8954` which was too big a drop. 
+`de=-4.8575+1.9621=-2.8954` which was too big a drop.
 
 For t2 with Kf=0.5-1.4, vx=100 (@100,ve=7.4835), le=1.5 (note: @5,ve=0.3742):
 
@@ -393,7 +511,179 @@ would decay to zero and stop at that offset, making it equivalent to
 over-retraction or backlash. Perhaps this is the "tiny drool" I was seeing
 after retractions?
 
+### Retract Test 1
 
+This was a rough ad-hock test in the middle of testing if pending code changes
+worked or made sense. Appologies to future me for not keeping all the details
+better.
+
+![RetractTest1 image](RetractTest1.jpg "RetractTest1 image")
+
+This test was run with the default width changed to `w=0.4mm` so the lines are
+thinner;
+
+```bash
+./gcodegen.py -Kf=0.4 -Kb=2.0 -Cb=0.0 -Re=1.0 -R -P > test.g
+```
+
+The verbose version output for this is in ./RetractTest_Kf04_Kb20_Cb00_Re10_RPv.g
+
+Note that this does have `-P` pressure advance compensation on, and the `-v`
+version of the output shows it has split the draw's into acceleration and
+deceleration phases with estimates for the pressure at each stage. I'm also
+using -Cb=0.0 because it's increasingly obvious that in the pressure advance
+calculations this just becomes a fixed offset identical to having a larger
+`-Re` because it never "oozes" away according to the model.
+
+This test consisted of the following phases;
+
+* 5mm@5mm/s: warmup draw.
+* 40mm@<vx>mm/s: draw to build pressure at the test speed.
+* 20mm@<vr>mm/s: move while retracting <re>mm.
+* 20mm@<vr>mm/s: move to allow for deceleration.
+* 0mm@0mm/s: restore <re>mm at <ve>mm/s.
+* 5mm@5mm/s: cooldown draw.
+
+There were three tests done;
+
+1. vx and vr both = 20-100mm/s with re=8mm. The idea was the draw and
+retracting move are both at the same speed to minimize acceleration affects
+during the transition.
+1. vx=20-100mm/s, vr=10mm/s, re=8mm. The idea was to use a slower speed for
+the moving retract to get a more accurate read on the amount of retraction
+needed.
+1. vx=1-10mm/s, vr=1mm/s, re=4mm. This was to try and get a better reading for
+very low speeds.
+
+Some observations;
+
+1. In the first 2 tests, the warmup/cooldown 5mm@5mm/s bits are very
+over-extruded. These are the slowest parts of those lines suggesting that the
+`-R` dynamic restore feature for `-Kf=0.4 -Kb=2.0` is restoring too much for
+them, probably underestimating the vestigial pressure after the draw and
+assuming the moving retract has more "overretraction" than it really does.
+
+1. For the last test, the warmup 5mm@5mm/s at the start looks fine. Note the
+first line is a tiny bit overextruded because of vestigial pressure from the
+previous test. However, the cooldown is underextruded and messy, with the
+restore clearly being insufficient. This suggests the vestigial pressure from
+the draw was over-estimated by `-P`.
+
+1. For the first 2 tests, `-P` broke the draw into a separate acceleration
+phase to build pressure which is visible as under-extrusion at the start, that
+builds to slight over-extrusion at the end, but is mostly pretty good at
+getting the rest of the draw at the right extrusion levels, maybe a little
+under for lower speeds and a little over at higher speeds, suggesting maybe
+`Kb>2.0` and `Kf<0.4` would be better, but it's pretty damn close. That the
+lines are not consistent over the (assumed) linear acceleration suggests
+pressure advance really is not linear, and/or the Adv3 doesn't do a good job
+of keeping extrusion rates consistent during accelerations.
+
+1. For the 3rd test the slow draws had acceleration distances that were too
+small to break into separate phases. The lines mostly look OK except there is
+clear over-estrusion at the start of the <3mm/s lines, and some
+under-extrusion at the start of the >7mm/s lines. This suggests the criteria
+for deciding whether to break apart phases should be not be if the distance
+travelled when accelerating is greater than some small threshold (which is
+what is currently used), but if the pressure delta is greater than some small
+threshold. Both under and over extrusion takes a long time/distance to decay
+away.
+
+1. The 1st test shows signs of increasing over-extrusion with increasing `vx`
+and `vr` at the transition from the draw to the moving retract. When watching
+the print there was a clear slowdown for these transitions despite both `vx`
+and `vr` being the same speed. This shows that extruder acceleration is
+finite, and the printer compensates for this. The extruder rate cannot
+instantly go from +ve to -ve, so the nozzle velocity has to slow down while
+the extruder accelerates to keep the extrusion per line consistent. The
+over-extrusion is because the pressure advance was too high for the slower
+velocity. It might pay to include extruder acceleration limits in the model.
+
+1. The 1st test's retracting move has drool-lengths that increase roughly
+linearly with `vx` and `vr`, showing that the pressure advance does increase
+with velocity. The lengths go from about 3mm to 5mm, which for `de=-8mm` over
+`dx=20mm`, and include the smeared material over that length assuming an
+average of about 0.8 extrusion ratio we get the following, or `Pe=1.3` at
+20mm/s and `Pe=2.2` at 100mm/s (but note the observation in the next point
+that suggests this is an underestimation);
+   ```python
+   >>> Fd = 1.75
+   >>> Fa = pi*(Fd/2)**2
+   >>> w, h, r = 0.4, 0.3, 0.8
+   >>> (h*w*r/Fa + 8/20) * 3  # for vx=20mm/s
+   1.319736486166115
+   >>> (h*w*r/Fa + 8/20) * 5  # for vx=100mm/s
+   2.199560810276858
+   ```
+1. The 2nd test's retracting move has drool-lengths that are all almost
+exactly the same, regardless of `vx`. However, this test has constant
+`vr=10mm/s` and the `-P` option breaks the draw up to include a deceleration
+phase, and all the lines decelerate to the same 10mm/s with the same
+(estimated) pressure required for that velocity by the end of the draw. That
+they all have the same drool length means this deceleration and pressure
+reduction phase succeeded at reducing to the same pressure at all velocities.
+There is also zero visible artifacts for this deceleration phase suggesting
+the `Kf` and `Kb` values are bang-on, which contradicts what we see for the
+acceleration phases. It seems there is something harder/slower/different about
+increasing pressure vs decreasing it. The drool lengths are all about 5mm for
+the large drool, with another tiny tail up to about 10mm. This is about the
+same as the `vx=100mm/s` line in the first test, which suggests that for some
+reason the pressure at `vx=10mm/s` in this test is the same as at `vx=100mm/s` in
+the 1st test. However, there are the following points/observations that might
+explain this;
+   * the 1st test did actually decelerate for the extruder velocity change at
+   the end of the draw, so `vx` was actually less than 100mm/s.
+   * the 2nd test drool lines are all at `vr=10mm/s` compared to
+   `vr=vx=20-100mm/s` for the 1st test which will make the drool lines thinner
+   for the same amount of pressure.
+   * there are tiny mess-blobs in the 1st test for most lines at increasing
+   distances from about 8mm to 16mm, suggesting the drool and pressure was
+   higher than first glance suggests. There are no such blobs for the 2nd test.
+I think what happens is at higher speeds the blob-smear is so thin it doesn't
+even touch the bed, becoming mostly stringing that sometimes snaps, as the
+blob-bead builds up on the nozzle tip. When this blob gets big enough it
+touches the bed, flicking off a mess-blob and starting another string. At slow
+speeds this doesn't tend to happen, as the bead has enough time to reach the
+bed and/or the speeds are slow enough to not snap the strings leaving them to
+settle like a thin trail. At slow speeds the thin drool-trail can even suggest
+pressure long after it has gone as the previously accumulated bead gets
+stretched into a long string. This suggests the real Pe values for this and the
+previous test are closer to this;
+   ```python
+   >>> h = 0.5  # low-speed drool was fatter
+   >>> (h*w*r/Fa + 8/20) * 5  # for vx=10mm/s in 2nd test
+   2.1247255064230366
+   >>> h = 0.3  # high-speed drool was thinner
+   >>> (h*w*r/Fa + 8/20) * 8  # for vx=vr=20mm/s in 1st test
+   3.319736486166115
+   >>> (h*w*r/Fa + 8/20) * 16 # for vx=vr=100mm/s in 1st test
+   6.63947297233223
+```
+1. The `-P` dynamic pressure model in the output estimates the following
+pressures after the draw, but note it also had an extra `Re=1.0` of retraction
+to compensate if these were under-estimates.
+   * `Pe=1.0025` for vx=10mm/s in 2nd test. Note the second test did go as
+   high as `Pe=1.4749` for vx=28mm/s before `-P` started partitioning the draw
+   with deceleration phases.
+   * `Pe=1.2865` for vx=vr=20mm/s in 1st test.
+   * `Pe=2.7836` for vx=vr=100mm/s in the 1st test.
+
+Thinking about the difference between the acceleration and deceleration phases
+with `-P`, and how deceleration looks fine but acceleration looks
+under-extruded. The printer will assume ve has to accelerate at the same rate
+as vl, giving constant extruder acceleration `ae` for constant nozzle
+acceleration `al`. However for a consistent line we need nozzle flow rate `vn`
+to match `vl` for a consistent line, and that depends on how far the extruder
+`e` is ahead of the nozzle flow `n`. The ideal PA implementation needs to step
+`ve` at each change of acceleration. This can't be done cleanly in gcode,
+since `ve` will always be a multiple of `vl`. The approximation of just adding
+sufficient `de` to acceleration phases for the require pressure change is
+pretty good, but it will underextrude particularly at the start of lines. It's
+still much better than not doing any pressure advance compensation.
+
+A spreadsheet comparing firmware vs gcode vs no pressure advance is at;
+
+https://docs.google.com/spreadsheets/d/1lqm9OUPRjJmuuPAP1AJQVks3GbTPaaQwL20jl9914gg/edit?usp=sharing
 
 # FlashPrint Settings.
 
