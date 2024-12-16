@@ -508,7 +508,7 @@ would decay to zero and stop at that offset, making it equivalent to
 over-retraction or backlash. Perhaps this is the "tiny drool" I was seeing
 after retractions?
 
-### Retract Test 1
+### RetractTest1
 
 This was a rough ad-hock test in the middle of testing if pending code changes
 worked or made sense. Appologies to future me for not keeping all the details
@@ -523,7 +523,8 @@ thinner;
 ./gcodegen.py -Kf=0.4 -Kb=2.0 -Cb=0.0 -Re=1.0 -R -P > test.g
 ```
 
-The verbose version output for this is in ./RetractTest_Kf04_Kb20_Cb00_Re10_RPv.g
+The verbose version output for this is in
+[RetractTest1_Kf04_Kb20_Cb00_Re10_RPv.g](./RetractTest1_Kf04_Kb20_Cb00_Re10_RPv.g)
 
 Note that this does have `-P` pressure advance compensation on, and the `-v`
 version of the output shows it has split the draw's into acceleration and
@@ -655,15 +656,18 @@ previous test are closer to this;
    3.319736486166115
    >>> (h*w*r/Fa + 8/20) * 16 # for vx=vr=100mm/s in 1st test
    6.63947297233223
-```
+   ```
 1. The `-P` dynamic pressure model in the output estimates the following
 pressures after the draw, but note it also had an extra `Re=1.0` of retraction
-to compensate if these were under-estimates.
+to compensate if these were under-estimates. Note the overextruded
+warmup/cooldown lines do suggest the model was underestimating pressures.
    * `Pe=1.0025` for vx=10mm/s in 2nd test. Note the second test did go as
    high as `Pe=1.4749` for vx=28mm/s before `-P` started partitioning the draw
-   with deceleration phases.
-   * `Pe=1.2865` for vx=vr=20mm/s in 1st test.
-   * `Pe=2.7836` for vx=vr=100mm/s in the 1st test.
+   with deceleration phases. This is low compared to what the tests suggest.
+   * `Pe=1.2865` for vx=vr=20mm/s in 1st test. This is low compared to the
+   `Pe=1.3` and `Pe=3.3` we get from test1 and test2.
+   * `Pe=2.7836` for vx=vr=100mm/s in the 1st test. This is a little higher
+   than test1's `Pe=2.2`, but much lower than the `Pe=6.6` test2 revised it to.
 
 Thinking about the difference between the acceleration and deceleration phases
 with `-P`, and how deceleration looks fine but acceleration looks
