@@ -1,4 +1,4 @@
-#!/bin/python3
+#!/bin/pypy3
 """
 gcodegen.py gcode generator.
 
@@ -11,16 +11,15 @@ The Linear Advance model is...
 
 https://klipper.discourse.group/t/modification-of-pressure-advance-for-high-speed-bowden-printers/13053?u=dbaarda
 
-The new model
-
-The nozzle extrudes into a bead of cooling filament that is pressed against
-the print surface. This puts back pressure against the nozzle. The back
-pressure will be a function of be bead size; the more pressure, the bigger the
-bead.
+The new model is an extension of the linear advance model that adds
+back-pressure from the print surface. The nozzle extrudes into a bead of
+cooling filament that is pressed against the print surface. This puts back
+pressure against the nozzle. The back pressure will be a function of be bead
+size; the more pressure, the bigger the bead.
 
 At zero-to-low speeds the pressure does not define the flow rate, just the
-bead size. What does define the flow rate is the nozzle velocity. As the
-nozzle moves it smears the bead, leaving a bead-diameter-wide track of
+bead size. What does define the flow rate is the nozzle travel velocity. As
+the nozzle moves it smears the bead, leaving a bead-diameter-wide track of
 filament behind, which is the flow rate.
 
 We will assume the back-pressure is a function of only the bead diameter,
@@ -69,7 +68,7 @@ Where:
   v is the nozzle velocity in mm/s
 
 For a constant track width at steady state where extruder velocity `ve` equals
-nozle flow velocity `nv` this can be simplified to;
+nozzle flow velocity `nv` this can be simplified to;
 
   Pe = Kf*ve + Cf
   Cf = Kb*Db + Cb
@@ -204,8 +203,8 @@ class MoveBase(NamedTuple):
   v: float  # target velocity in mm/s.
   v0: float = None # start velocity in mm/s.
   v1: float = None # end velocity in mm/s.
-  h: float | None = None # The line height.
-  w: float | None = None # The line width.
+  h: float = None  # The line or end of move height above the current layer.
+  w: float = None  # The line width.
   # Note the extrusion ratio r is calculated as a property.
 
   Fd = 1.75  # Fillament diameter.
@@ -215,9 +214,7 @@ class MoveBase(NamedTuple):
   Gp = 0.1  # printer cornering deviation distance in mm.
   Fa = acircle(Fd)  # Fillament area in mm^2.
   Na = acircle(Nd)  # Nozzle area in mm^2.
-  a0 = Ap  # acceleration for first phase of movements.
   am = 0.0 # acceleration for mid phase of movements.
-  a1 = -Ap # acceleration for last phase of movememnts.
   log = None  # optional log(msg) function to use.
 
   def __str__(self):
@@ -235,7 +232,7 @@ class MoveBase(NamedTuple):
     elif self.isrestore:
       return f'restore {de=:.4f}@{v}'
     else:
-      return f'move {dl=:.2f}@{v0}<{v}>{v1} {h=}'
+      return f'move {dl=:.2f}@{v0}<{v}>{v1} {de=:.4f} {h=}'
     #return f'{self.__class__.__name__}({dx=:.2f}, {dy=:.2f}, {dz=:.2f}, {de=:.4f}, {v=:.2f}, {v0=:.2f}, {v1=:.2f}, {h=:.2f}, {w=:.2f})'
 
   def set(self, *args, s=None, **kwargs):
@@ -247,14 +244,16 @@ class MoveBase(NamedTuple):
     return self._replace(*args,**kwargs)
 
   @classmethod
-  def _dvdl(cls, v0, v1):
+  def _dvdl(cls, v0, v1, a=None):
     """ The distance travelled accelerating between two velocities. """
-    return abs(v0**2 - v1**2)/(2*cls.Ap)
+    if a is None: a = cls.Ap if v1>=v0 else -cls.Ap
+    return (v1**2 - v0**2)/(2*a)
 
   @classmethod
-  def _dvdt(cls, v0, v1):
+  def _dvdt(cls, v0, v1, a=None):
     """ The time taken accelerating between two velocities. """
-    return abs(v1-v0)/cls.Ap
+    if a is None: a = cls.Ap if v1>=v0 else - cls.Ap
+    return (v1-v0)/a
 
   @classmethod
   def _eb(cls, h, w, r=1.0):
@@ -288,11 +287,11 @@ class MoveBase(NamedTuple):
 
   @property
   def dt0(self):
-    return self._dvdt(self.v0, self.v) if self.isgo else 0.0
+    return 2*self.dl0/(self.v0 + self.v) if self.isgo else 0.0
 
   @property
   def dt1(self):
-     return self._dvdt(self.v,self.v1) if self.isgo else 0.0
+     return 2*self.dl1/(self.v + self.v1) if self.isgo else 0.0
 
   @property
   def dtm(self):
@@ -304,6 +303,18 @@ class MoveBase(NamedTuple):
   def dt(self):
     """ Get the execution time for a move. """
     return self.dt0 + self.dtm + self.dt1
+
+  @property
+  def a0(self):
+    """ The acceleration at the start of a move. """
+    dt0 = self.dt0
+    return (self.v - self.v0)/dt0 if dt0 else 0.0
+
+  @property
+  def a1(self):
+    """ The acceleration at the start of a move. """
+    dt1 = self.dt1
+    return (self.v1 - self.v)/dt1 if dt1 else 0.0
 
   @property
   def ve(self):
@@ -347,11 +358,11 @@ class MoveBase(NamedTuple):
 
   @property
   def isdraw(self):
-    return self.isgo and self.de
+    return self.isgo and self.de > 0
 
   @property
   def ismove(self):
-    return self.isgo and not self.de
+    return self.isgo and self.de <= 0
 
   @property
   def isretract(self):
@@ -384,12 +395,17 @@ class MoveBase(NamedTuple):
     return self.dt0/dt > 0.9 or self.dt1/dt > 0.9
 
   def costh(self, m):
-    """ Get cos(a) of the angle a between two moves. """
+    """ Get cos(a) of the angle a between two moves.
+
+    Note this is not the change in direction angle, but the angle between the
+    two moves. So 180deg means no change in direction, and 0deg is a full
+    reverse.
+    """
     # cos(th) = v0.v1/(|v0|*|v1|)
     dx0, dy0, dl0 = self.dx, self.dy, self.dl
     dx1, dy1, dl1 = m.dx, m.dy, m.dl
     # if a move has no horizontal movement, treat as 0deg.
-    return (dx0*dx1 + dy0*dy1)/(dl0 * dl1) if dl0 and dl1 else 1.0
+    return -(dx0*dx1 + dy0*dy1)/(dl0 * dl1) if dl0 and dl1 else 1.0
 
   def joind(self, m):
     """ Calculate the max path deviation when joining two moves.
@@ -453,10 +469,10 @@ class MoveBase(NamedTuple):
     This updates a move's velocities to what the printer will do based on
     on the moves before and after.
 
+    if v is not set it uses m.v.
     if m0 is set the v0 start velocity is set to the m0.v1 end velocity.
     If m1 is set the v1 end velocity is set to the corner velocity.
-    if v is not set it uses m.v.
-    If v0, or v1 are not otherwise set they default to 0.0.
+    If v0, or v1 are still not set they default to 0.0.
     """
     if v is None: v = self.v
     if m0 is not None: v0 = m0.v1
@@ -464,7 +480,7 @@ class MoveBase(NamedTuple):
     dl = self.dl
     if not dl:
       # A stop move, v0 and v1 are zero.
-      m =self.set(v=v, v0=0, v1=0)
+      m = self.set(v=v, v0=0, v1=0)
     else:
       if self.log and self._dvdl(v0, v1) > dl:
         self.log(f'WARNING:cannot accelerate {v0}mm/s to {v1}mm/s over {dl}mm with a={self.Ap}mm/s^2.')
@@ -475,16 +491,15 @@ class MoveBase(NamedTuple):
       # If vlim is less than v0 or v1, we don't need acceleration at both ends.
       vlim = max(v0, v1, vlim)
       v = min(v, vlim)  # don't set v higher than requested.
-      assert v0 <= v <= self.Vp
-      assert v1 <= v <= self.Vp
+      assert 0 <= v0 <= v <= self.Vp
+      assert 0 <= v1 <= v <= self.Vp
       m = self.set(v=v,v0=v0,v1=v1)
     return m
 
   def join(self, m):
     """ Add two moves together. """
-    v, v0, v1 = (self.v+m.v)/2, self.v0, m.v1
     return self._replace(dx=self.dx+m.dx, dy=self.dy+m.dy, dz=self.dz+m.dz,
-        de=self.de+m.de, v=v, v0=v0, v1=v1, h=m.h, w=m.w)
+        de=self.de+m.de, v=max(self.v, m.v), v1=m.v1)
 
   def split(self):
     """ Partition a move into a list of moves for the acceleration phases. """
@@ -525,11 +540,13 @@ class Move(MoveBase):
     cls.Fd, cls.Nd, cls.Ap, cls.Vp, cls.Gp, cls.log = Fd, Nd, Ap, Vp, Gp, log
     cls.Fa = acircle(Fd)
     cls.Na = acircle(Nd)
-    cls.a0, cls.a1 = cls.Ap, -cls.Ap
 
   def __new__(cls, *args, **kwargs):
     """ Make v0 and v1 default to v for moves and 0.0 for non-moves. """
     m = super().__new__(cls, *args, **kwargs)
+    assert 0 <= m.v <= cls.Vp
+    assert m.v0 is None or 0 <= m.v0 <= m.v
+    assert m.v1 is None or 0 <= m.v1 <= m.v
     if m.v0 is None or m.v1 is None:
       v0 = m.v if m.v0 is None else m.v0
       v1 = m.v if m.v1 is None else m.v1
@@ -541,6 +558,8 @@ class Move(MoveBase):
 
 
 def ljoin(l):
+  # TODO: make this and lfixv methods of GCodeGen and make ljoin not optimze
+  # pre-extrudes.
   i = m = None
   i1 = 0
   while i1<len(l):
@@ -602,9 +621,9 @@ class Layer(NamedTuple):
   Vz: int
   Ve: int
   Vb: int
-  h : float
-  w : float
-  r : float
+  h : float # layer height.
+  w : float # default line width.
+  r : float # default line extrusion ratio.
 
 
 class GCodeGen(object):
@@ -804,7 +823,7 @@ M18
         # We need to fstr() reformat that last log entry...
         self.gcode[-1] = self.fstr(self.gcode[-1])
     else:
-      self.add(self.fstr(code))
+      self.add(self.fstr(code.strip()))
 
   def add(self, code):
     """ Add code Layer, Move or format-string instances. """
@@ -812,8 +831,6 @@ M18
       self.inclayer(code)
     elif isinstance(code, Move):
       self.incmove(code)
-    else:
-      code = code.strip()
     self.gcode.append(code)
 
   def cmd(self, cmd, **kwargs):
@@ -858,41 +875,37 @@ M18
     self.up(**upargs)
     self.layerstats()
 
-  def _calc_pe(self, db, ve, dt=0.0):
-    """ Get steady-state pressure advance pe for db and ve.
-
-    If dt is provided, the pe is a reduced starting pressure where the move
-    should get close to the target pressure within dt time.
-    """
-    pb = self.Kb*db + self.Cb
-    pn = self.Kf*ve * e**(-dt/self.Kf)
+  def _calc_pe(self, db, ve):
+    """ Get steady-state pressure advance pe needed for target db and ve. """
+    pb = max(0, self.Kb*db + self.Cb)
+    pn = max(0, self.Kf*ve)
+    #pn = self.Kf*ve * e**(-dt/self.Kf)
     return pn+pb
 
   def _db(self, eb=None, h=None):
     """ Get bead diameter from bead volume."""
-    if h is None: h = self.layer.h
+    if h is None: h = self.z - self.layer.z
     if eb is None: eb = self.eb
     assert eb >= 0.0
-    return 2*sqrt(eb*self.Fa/(h*pi))
+    return 2*sqrt(eb*self.Fa/(h*pi)) if eb else 0.0
 
-  def _vn(self,pe=None,eb=None,h=None):
-    """Get nozzle flow velocity from pe, eb, and h."""
+  def _vn(self,pe=None,eb=None,h=None,ve=None):
+    """Get nozzle flow velocity from pe, eb, h, and ve."""
     if pe is None: pe = self.pe
-    if eb is None: eb = self.eb
-    if h is None: h = self.layer.h
+    if ve is None: ve = self.ve
     db = self._db(eb,h)                # diameter of bead
     pb = max(0, self.Kb*db + self.Cb)  # bead backpressure.
     pn = max(0, pe - pb)               # nozzle pressure.
-    return pn/self.Kf if self.Kf else self.ve
+    return pn/self.Kf if self.Kf else ve if pe>=pb else 0.0
 
   def _calc_pe_eb_en(self, m):
     """ Calculate updated pe, eb, and en values after a move."""
-    dx,dy,dz,de,v,v0,v1,h,w = m
-    if self.Kf:
+    de,h = m.de, m.h
+    if (self.Kf or self.Kb or self.Cb) and (self.eb>0 or self.pe>0 or de>0):
       # Calculate change in pressure advance 'pe' and bead volume `eb` by
       # iterating over the time interval with a dt that is small relative to
       # the Kf timeconstant.
-      dt, dl = m.dt, m.dl
+      dt, dl, v0, v1 = m.dt, m.dl, m.v0, m.v1
       if not dl:
         # A hop, drop, retract, restore, or set speed.
         assert v0 == v1
@@ -906,14 +919,14 @@ M18
       pe, eb, el = self.pe, self.eb, 0.0
       for t,a in phases:
         while t>0:
-          dt = min(0.001, t)   # This iteration's time interval.
-          dv = a*dt           # do trapezoidal integration for dl.
+          dt = min(0.001, t)  # Use this iteration time interval.
+          dv = a*dt           # Do trapezoidal integration for dl.
           dl = (v + dv/2)*dt
           v += dv
           # Note filament doesn't get sucked back into the nozzle if the pressure
           # advance is negative, and the bead cannot give negative backpressure.
           pe += de_dl * dl if dl else ve*dt   # Add filament extruded into the nozzle.
-          db = self._db(eb)                   # diameter of bead
+          db = self._db(eb, h)                # diameter of bead
           pb = max(0, self.Kb*db + self.Cb)   # bead backpressure.
           pn = max(0, pe - pb)                # nozzle pressure.
           nde = pn*dt/(self.Kf+dt)            # Get filament extruded out the nozzle.
@@ -922,21 +935,22 @@ M18
           eb = max(0.0, eb + nde - lde)
           el += lde
           t -= dt
-      assert abs(v - m.v1) < 0.001, f'{m} {v=} != {m.v1=}'
+      assert abs(v - v1) < 0.001, f'{m} {v=} != {v1=}'
     else:
-      ex = self.pe + de
-      pe, eb, el = min(ex, 0), 0, max(0, ex)
-    assert abs((pe+eb+el)-(self.pe+self.eb+de)) < 0.00001, f'{pe+eb+el} != {self.pe+self.eb+de}'
+      ex = self.eb + self.pe + de
+      pe, eb, el = min(ex, 0), m.eb, max(0, ex - m.eb)
+    #print(f'{self.Kf=} {self.Kb=} {self.Cb=} {self.pe=} {self.eb=} {m} -> {pe=} {eb=} {el=}')
+    assert abs((pe+eb+el)-(self.pe+self.eb+de)) < 0.00001, f'{pe=}+{eb=}+{el=} != {self.pe=}+{self.eb=}+{de=}'
     # Note we return pe,eb,en not pe,eb,el, because "what came out the nozzle"
     # is more useful than "what came out the nozzle not including the bead".
     # We also recalculate en from the raw inputs to avoid accumulated integration errors.
     return pe, eb, self.pe + de - pe
 
-  def move(self,
+  def draw(self,
       x=None, y=None, z=None, e=None,
       dx=None, dy=None, dz=None, de=None,
-      v=None, s=1.0, h=None, w=None, r=0.0):
-    """ Move the extruder.
+      v=None, s=1.0, h=None, w=None, r=1.0):
+    """ Draw a line.
 
     Movement can be absolute using `x,y,z,e` arguments, or relative using
     `dx,dy,dz,de` arguments. The z axis can also be specified with `h` height
@@ -955,10 +969,9 @@ M18
     dx = x - self.x if x is not None else dx if dx is not None else 0.0
     dy = y - self.y if y is not None else dy if dy is not None else 0.0
     dz = z - self.z if z is not None else dz if dz is not None else 0.0
-    x,y,z = self.x + dx, self.y + dy, self.z + dz
     dl = sqrt(dx**2 + dy**2)
     # Note: setting h and z or dz means explicit h overrides z height for de calcs.
-    if h is None: h = z - self.layer.z
+    if h is None: h = self.z + dz - self.layer.z
     if w is None: w = self.layer.w
     r = self.layer.r * r
     el = dl * w * h / self.Fa  # line filament volume not including extrusion ratio.
@@ -976,13 +989,13 @@ M18
     else:
       self.log(f'skipping empty move {m}')
 
-  def draw(self, x=None, y=None, r=1.0, **kwargs):
-    """ Draw a line.
+  def move(self, x=None, y=None, z=None, r=0.0, **kwargs):
+    """ Move the extruder.
 
-    This is the same as move() but with the default r=1.0 so it prints instead
-    of travels by default.
+    This is the same as draw() but with the default r=0.0 so it travels instead
+    of prints by default.
     """
-    self.move(x, y, r=r, **kwargs)
+    self.draw(x, y, z, r=r, **kwargs)
 
   def retract(self, e=None, de=None, ve=None, s=1.0):
     """Do a retract.
@@ -991,6 +1004,10 @@ M18
     advance pressure is added in post processing if enabled.
     """
     if de is None: de = -self.Re
+    # If dynamic retraction is enabled and de is zero, set de to a tiny
+    # retraction so that it doesn't get optimized away and can be dynamically
+    # adjusted later.
+    if self.en_dynret and not de: de = -0.00001
     self.move(e=e, de=de, v=ve, s=s)
 
   def restore(self, e=None, de=None, vb=None, s=1.0):
@@ -1001,6 +1018,10 @@ M18
     enabled.
     """
     if de is None: de = self.Re
+    # If dynamic retraction is enabled and de is zero, set de to a tiny
+    # restore so that it doesn't get optimized away and can be dynamically
+    # adjusted later.
+    if self.en_dynret and not de: de = 0.00001
     self.move(e=e, de=de, v=vb, s=s)
 
   def up(self,
@@ -1029,7 +1050,7 @@ M18
   def getCode(self):
     if self.en_optmov:
       # Join together any moves that can be joined.
-      ljoins(self.gcode)
+      ljoin(self.gcode)
     # Fix all the velocities.
     lfixv(self.gcode)
     if self.en_dynext:
@@ -1040,7 +1061,7 @@ M18
     self.resetfile()
     for i,c in enumerate(gcode):
       # Adjust Move's to include dynamic retraction and extrusion.
-      if isinstance(c,Move):
+      if isinstance(c, Move):
         if c.isretract and self.en_dynret:
           # Adjust retraction to also relieve advance pressure.
           c = c.set(de=c.de - self.pe)
@@ -1271,10 +1292,7 @@ class ExtrudeTest(GCodeGen):
   ve0 = 15  # test min retraction speed
   ve1 = 45  # test max retraction speed
   ty = 2    # height for each test run.
-  tn = 10   # number of test runs for each test.
-  dvx = 2.5  # test speed step
-  dle = 0.2  # test extraction length step
-  dve = 1  # test extraction speed step
+  tn = 10   # number of increments for each test (tn+1 test lines).
   t0x = 5  # test line warmup distance
   t1x = 20  # test line phase distance.
   rdx = 2*t0x + 4*t1x # test ruler length.
@@ -1282,6 +1300,60 @@ class ExtrudeTest(GCodeGen):
   sdy = 30 # test text settings box width.
   tdx = rdx + sdy  # test box total width.
   tdy = rdy + tn*ty + 5 # test box total height.
+
+  def _fval(self,k,v):
+    """ Format a single test argument value or range."""
+    v=f'{v[0]}-{v[1]}' if isinstance(v, tuple) else f'{round(v,4)}'
+    return f'{k}={v}'
+
+  def _fset(self, sep=' ', **kwargs):
+    """ Format several test argument values or ranges. """
+    return sep.join(self._fval(k,v) for k,v in kwargs.items())
+
+  def _getstep(self,tn,vr):
+    """ Convert a value-range into start, stop, delta. """
+    if not isinstance(vr, tuple):
+      return vr, vr, 0
+    v0, v1 = vr
+    dv = (v1-v0)/tn
+    return v0, v1, dv
+
+  def pushconf(self, **kwargs):
+    """Push and change config attributes on self."""
+    if not hasattr(self, 'confstack'):
+      self.confstack = []
+    # Filter out configs set to None.
+    kwargs = {k:v for k,v in kwargs.items() if v is not None}
+    old_conf = {k:getattr(self,k) for k in kwargs}
+    self.confstack.append(old_conf)
+    if kwargs:
+      self.log(f'setting config {self._fset(**kwargs)}')
+    self.add(kwargs)
+
+  def popconf(self):
+    """Pop and restore config attributes on self."""
+    conf = self.confstack.pop()
+    if conf:
+      self.log(f'restoring config {self._fset(**conf)}')
+    self.add(conf)
+
+  def incconf(self, conf):
+    """Apply a config change to the current state."""
+    for k, v in conf.items():
+      setattr(self, k, v)
+
+  def fadd(self, code):
+    # Test config args don't emit anything in the final output.
+    if isinstance(code, dict):
+      self.incconf(code)
+    else:
+      super().fadd(code)
+
+  def add(self, code):
+    # Test config args need to be set on self.
+    if isinstance(code, dict):
+      self.incconf(code)
+    super().add(code)
 
   def preextrude(self,n=0,x0=-50,y0=-60,x1=70,y1=60):
     self.preExt(x0-2*n,y0,x1,y1+2*n,m=5)
@@ -1313,202 +1385,191 @@ class ExtrudeTest(GCodeGen):
       self.draw(dy=-l)
       self.up()
 
-  def _fval(self,k,v):
-    """ format a single gcode command argument."""
-    v=f'{v[0]}-{v[1]}' if isinstance(v, tuple) else f'{round(v,4)}'
-    return f'{k}={v}'
-
-  def _fset(self, sep='\n', **kwargs):
-    return sep.join(self._fval(k,v) for k,v in kwargs.items())
-
   def settings(self, x0, y0, **kwargs):
+    """ Draw the test arguments at (x0,y0)."""
     self.cmt("structure:brim")
-    self.text(self._fset(**kwargs), x0, y0, fsize=5)
+    self.text(self._fset(sep='\n', **kwargs), x0, y0, fsize=5)
 
-  def doRetractTests(self):
-    t4x, t4y = self.tdx, 4*self.tdy - 5
-    x0 = -self.rdx/2
-    y0 = 55
-    x1 = x0+t4x
-    y1 = y0-t4y
-    self.preextrude()
-    self.startLayer(z=0.0, Vp=10)
-    self.brim(x0,y0,x0+self.rdx, y1)
-    self.testRetract(x0,y0,Kf=0.0,vxr=20,ler=(-1,4),ver=self.Ve,vex=0.0)
-    self.testRetract(x0,y0-self.tdy,Kf=1.0,vxr=20,ler=(-1,4),ver=self.Ve,vex=0.0)
-    self.testRetract(x0,y0-2*self.tdy,Kf=2.0,vxr=20,ler=(-1,4),ver=self.Ve,vex=0.0)
-    self.testRetract(x0,y0-3*self.tdy,Kf=3.0,vxr=20,ler=(-1,4),ver=self.Ve,vex=0.0)
-    #self.testRetract(x0,y0,vxr=(self.vx0, self.vx1),ler=self.Re,ver=self.Ve)
-    #self.testRetract(x0,y0-self.tdy,vxr=self.Vp,ler=(self.le0,self.le1),ver=self.Ve)
-    #self.testRetract(x0,y0-2*self.tdy,vxr=self.Vp,ler=self.Re, ver=(self.ve0,self.ve1))
-    self.endLayer()
+  def doTests(self, name, linefn, tests, n=None):
+    """Run up to 4 tests.
 
-  def _getstep(self,tn,vr):
-    """ Convert a value-range into start, stop, delta. """
-    if not isinstance(vr, tuple):
-      return vr, vr, 0
-    v0, v1 = vr
-    dv = (v1-v0)/tn
-    return v0, v1, dv
-
-  def testRetract(self, x0=None, y0=None, Kf=None,
-      vxr=vx0, ler=le0, ver=ve0, vex=None):
-    vx, vx1, dvx = self._getstep(self.tn,vxr)
-    le, le1, dle = self._getstep(self.tn,ler)
-    ve, ve1, dve = self._getstep(self.tn,ver)
-    logset = self._fset(sep=' ', vx=vxr, le=ler, ve=ver)
-    self.log(f'testRetract {logset}')
-    self.ruler(x0, y0)
-    y = y0 - self.rdy
-    self.cmt(f'structure:infill-solid')
-    while vx <= vx1 and le <= le1 and ve <= ve1:
-      self.testRetractLine(x0, y, Kf, vx, le, ve, vex)
-      vx+=dvx
-      le+=dle
-      ve+=dve
-      y-=self.ty
-    if vex is None: vex='2*ve'
-    self.settings(x0 + self.rdx+1, y0, Kf=Kf, vx=vxr, le=ler, ve=ver, vex=vex)
-
-  def testRetractLine(self, x0, y0, Kf, vx, le=0, ve=35, vex=None):
-    """ Test starting and stopping extrusion for different settings. """
-    # A printer with a=500mm/s^2 can go from 0 to 100mm/s in 0.2s over 10mm.
-    # Retracting de=10mm at ve=20mm/s will take 0.5s, which is 50mm at 100mm/s
-    # So retracting over a distance of 25mm is max le=5mm@20mm/s or le=10mm@40mm/s.
-    # Alternatively we can reduce our speed to 2*ve while extracting.
-
-    # For vex use vx to retract without slowing down, 2*ve to retract at reduced
-    # speed, or 0 to stop for retraction.
-    oldKf = self.Kf
-    if Kf is not None:
-      self.Kf = Kf
-    if vex is None: vex = 2*ve  # moving speed while retracting.
-    self.log(f'testRetractLine {Kf=} v={vx} le={le} ve={ve} vex={vex}')
-    dt = le/ve  # time to do retraction
-    ex = vex*dt # distance travelled while retracting.
-    assert ex <= self.t1x
-    self.dn(x0, y0)
-    self.draw(dx=self.t0x,v=self.vx0)
-    self.draw(dx=self.t1x,v=vx)
-    if vex == 0.0:
-      self.retract(de=-le, ve=ve)  # retract while stopped.
-      self.move(dx=2*self.t1x,v=vx)    # move gap between moving retract/restore.
-      self.restore(vb=ve)   # restore while stopped.
-    else:
-      self.move(dx=ex,v=vex,de=-le)  # retract while moving at v=vex.
-      self.move(dx=2*(self.t1x-ex),v=vex) # move gap between moving retract/restore.
-      self.move(dx=ex,v=vex,de=le)   # restore while moving at v=vx
-    self.draw(dx=self.t1x,v=vx)
-    self.draw(dx=self.t0x,v=self.vx0)
-    self.up()
-    self.Kf = oldKf
-
-
-  def doStartStopTests(self):
+    Args:
+      name: the text name of the tests
+      linefn: The function that executes a single line of a test.
+      tests: A sequence of up to 4 dicts containing args for each test.
+      n: optional index of a single test to run, otherwise run all.
+    """
+    assert len(tests) <= 4, 'Can only fit max 4 tests.'
+    # set alltests for running all tests and initialize n=0 if needed.
+    alltests, n = n is None, n or 0
     t4x, t4y = self.tdx, 4*self.tdy - 5
     x0, y0 = -self.rdx/2, 55
     x1, y1 = x0+t4x, y0-t4y
-    self.preextrude()
+    self.preextrude(n=n)
     self.startLayer(z=0.0, Vp=10)
-    self.brim(x0,y0,x0+self.rdx, y1)
-    self.testStartStop(x0,y0,Kfr=0.8,vxr=(10,100),ler=0.0,tn=9)
-    self.testStartStop(x0,y0-self.tdy,Kfr=0.8,vxr=(10,100),ler=1.0,tn=9)
-    self.testStartStop(x0,y0-2*self.tdy,Kfr=0.8,vxr=60,ler=(0.0,2.0))
-    self.testStartStop(x0,y0-3*self.tdy,Kfr=0.8,vxr=100,ler=(0.0,2.0))
+    # Only draw the brim if running test 0.
+    if n==0:
+      self.brim(x0,y0,x0+self.rdx, y1)
+    for i,t in enumerate(tests):
+      # only run test n if not running all tests.
+      if alltests or i == n:
+        self.doTest(name, x0, y0, linefn, **t)
+      y0 -= self.tdy
     self.endLayer()
 
-  def testStartStop(self, x0=None, y0=None, Kfr=0.0,
-      vxr=vx0, ler=le0, tn=tn):
-    Kf, Kf1, dKf = self._getstep(tn,Kfr)
-    vx, vx1, dvx = self._getstep(tn,vxr)
-    le, le1, dle = self._getstep(tn,ler)
-    assert dKf or dvx or dle
-    logset = self._fset(sep=' ', Kf=Kfr, vx=vxr, le=ler)
-    self.log(f'testStartStop {logset}')
+  def doTest(self, name, x0, y0, linefn, **kwargs):
+    testargs = {k:self._getstep(self.tn, v) for k,v in kwargs.items()}
+    assert any(dv for _,_,dv in testargs.values()), 'At least one arg in {kwargs} must be a range.'
+    self.log(f'Test {name} {self._fset(**kwargs)}')
     self.ruler(x0, y0)
     y = y0 - self.rdy
     self.cmt(f'structure:infill-solid')
     e=0.00001
-    while Kf <= Kf1+e and vx <= vx1+e and le <= le1+e:
-      self.testStartStopLine(x0, y, Kf, vx, le)
-      Kf+=dKf
-      vx+=dvx
-      le+=dle
+    while all(v <= v1+e for (v,v1,dv) in testargs.values()):
+      lineargs={k:v for k,(v,_,_) in testargs.items()}
+      confargs={k:v for k,v in lineargs.items() if k in ('Kf','Kb','Cb','Re')}
+      funcargs={k:v for k,v in lineargs.items() if k not in confargs}
+      self.log(f'Test Line {name} {self._fset(**lineargs)}')
+      self.pushconf(**confargs)
+      linefn(x0, y, **funcargs)
+      self.popconf()
+      for k,(v,v1,dv) in testargs.items():
+        testargs[k] = (v+dv,v1,dv)
       y-=self.ty
-    self.settings(x0 + self.rdx+1, y0, Kf=Kfr, vx=vxr, le=ler)
+    self.settings(x0 + self.rdx+1, y0, **kwargs)
 
-  def testStartStopLine(self, x0, y0, Kf, vx, le=0):
-    """ Test starting and stopping extrusion for different settings. """
-    # if le is set to 0, set it to a tiny value so that retract/restore don't
-    # get optimized away.
-    if not le: le=0.001
+  def testRetract(self, x0, y0, vx, vr=10, re=8, ve=30):
+    """ Test retract and restore for different settings.
+
+    This test is to try and figure out how much retraction is needed to stop
+    extruding after moving or figure out how retract/restore speed matters. It
+    has two test modes, and in both modes the pre/post phases are;
+
+      * 5mm: warmup draw at 5mm/s
+      * 40mm: draw at <vx>mm/s to build pressure at that speed.
+      * 20mm: move at <vr>mm/s while retracting <re>mm.
+      * 20mm: move at <vr>mm/s to check for vestigial drool.
+      * 0mm: restore <re>mm at <ve>mm/s.
+      * 5mm: cooldown draw at 5mm/s
+
+    The the length `l` of the drool line after the draw indicates the amount
+    of retraction required to stop extruding of roughly `l*re/20`. However,
+    note that each 10mm of normal 0.4mm wide 0.3 layer height drool represents
+    an additional 0.5mm of retraction needed.
+
+    Args:
+      vx: draw speed before/after retract/restore.
+      vr: move speed while retracting/restoring.
+      re: retract/restore distance.
+      ve: restore speed for final restore.
+    """
     # A printer with a=500mm/s^2 can go from 0 to 100mm/s in 0.2s over 10mm.
-    oldKf,self.Kf = self.Kf, Kf
-    self.log(f'testStartStopLine {Kf=:.2f} vx={round(vx)} {le=:.2f}')
+    # Retracting de=10mm at vr=100mm/s over 40mm means retracting at ve=25mm/s
+    # which is probably fine.
+    ve = re/(2*self.t1x)
+    assert ve < 50, f'{vr=} gives {ve=} > 50mm/s.'
     self.dn(x0, y0)
-    # This slow draw and move is to ensure the nozzle is primed and wiped, and
-    # any advance pressure, actual or estimated, has decayed away.
-    self.draw(dx=5,v=1)
-    self.move(dx=10,v=1)
+    self.draw(dx=self.t0x,v=self.vx0)     # warmup draw.
+    self.draw(dx=2*self.t1x,v=vx)         # draw at v=vx.
+    self.move(dx=self.t1x,v=vr,de=-re)    # retract while moving at v=vr.
+    self.move(dx=self.t1x,v=vr)           # continue moving at v=vr.
+    self.restore(de=re)                   # restore to recover from retract.
+    self.draw(dx=self.t0x,v=self.vx0)     # cooldown draw.
+    self.up()
+
+  def testStartStop(self, x0, y0, vx, re=1):
+    """ Test starting and stopping extrusion for different settings.
+
+    This test is to check dynamic retracting for different Kf/Kb/Cb/Re
+    settings.
+
+    Test phases are;
+
+      * 5mm: warmup draw at 1mm/s to prime nozzle with fillament.
+      * 10mm: move at 1mm/s to drain actual and estimated pressure.
+      * 0mm: restore <Re>mm to pre-apply pressure before draw.
+      * 50mm: draw at <vx>mm/s to check pre-applied pressure and build pressure.
+      * 0mm: retract -<Re>mm to relieve pressure.
+      * 10mm: move at 1mm/s to check and drain any vestigial pressure.
+      * 1mm: draw at 1mm/s while restoring bead+re pressure.
+      * 14mm: draw at 1mm/s while building pressure
+
+
+    Args:
+      vx: movement speed to check against.
+      re: extra restore distance to add before final slow restore.
+    """
+    # Set different line-phase lengths.
+    d0x,d1x = self.t0x, 4*self.t1x
+    dx = (d0x, d1x*1/8, d1x*5/8, d1x*1/8, d1x*1/8+d0x)
+    # A printer with a=500mm/s^2 can go from 0 to 100mm/s in 0.2s over 10mm.
+    self.dn(x0, y0)
+    # This slow draw then move is to ensure the nozzle is primed and wiped, and
+    # any advance pressure, actual and estimated, has decayed away.
+    self.draw(dx=dx[0],v=1)
+    self.move(dx=dx[1],v=1)
     # This restore pre-loads advance pressure for drawing the line. If the
     # start of the line is too thin, there was not enough pressure, and Kf
     # probably needs to be increased. If the start is too thick, pressure was
     # too high and Kf should probably be dropped. The line should be
     # consistently the same width as all the other lines.
-    self.restore(de=le)
-    self.draw(dx=50,v=vx)
+    self.restore()
+    self.draw(dx=dx[2],v=vx)
     # This retract and slow move is to relieve the advance pressure, and see
     # if any remaining pressure drools off. If there is any trailing drool,
     # the amount of pressure was underestimated and Kf probably needs to be
     # increased. If there is still stringing when otherwise Kf seems right,
-    # adding some additional retraction with de could help.
-    self.retract(de=-le)
-    self.move(dx=10,v=1)
-    # This restore applies low advance pressure for a final slow line after
+    # adding some additional retraction with Re could help.
+    self.retract()
+    self.move(dx=dx[3],v=1)
+
+    # This restore applies advance pressure for a final slow line after
     # the earlier retraction. It should be the same width as all the other
     # lines. If it starts too thin, it suggests the earlier retraction
     # over-estimated the pressure and over-retracted, so Kf should be reduced.
     # If it starts too thick it suggests the earlier retraction under
     # estimated the pressure and extra retraction was actually relieving
-    # pressure, so K should be increased and de could possibly be reduced.
-    self.restore(de=le)
-    self.draw(dx=15,v=5)
-    # This starts drawing at 1mm/sec extruding at 0.1mm/sec for 15mm to see
-    # how much over-retraction there was. When the retraction is restored the
-    # line should be 34% thicker than the previous fast line. Every mm without
-    # without a thick line minus 0.1*Kf is 0.1mm of overretraction.
-    #self.draw(dx=15, de=1.5, v=1)
+    # pressure, so Kf should be increased and Re could possibly be reduced.
+    #self.restore()
+    #self.draw(dx=dx[4],v=5)
+
+    # All together this restores the bead + re + 0.1mm per mm of travel over
+    # 15mm. Assuming the previous retraction+move drained all the vestigial
+    # pressure, this tells you that `re + (mm to full line width * 0.1)` is
+    # the total restore needed to undo any previous over-retraction + apply
+    # enough pressure to draw.  We add re because 0.1mm*15 is usually not enough
+    # restore before drawing because of bead-backpressure.
+
+    # This restores enough for a starting bead + re + 0.1mm of pressure over a
+    # 1mm draw at 1mm/s. We do this as a draw not restore to prevent dynamic
+    # retraction from changing it.
+    eb = Move._eb(self.layer.h,self.layer.w,self.layer.r)
+    self.draw(dx=1,v=1,de=eb+re+0.1)
+    # This continues drawing at 1mm/sec extruding at 0.1mm/sec for 14mm to see
+    # how much over-retraction there was. Every mm with the line narrower
+    # than the target w*r is 0.1mm of over-retraction more than re.
+    dx = dx[4]-1
+    self.draw(dx=dx, de=dx*0.1, v=1)
     self.up()
-    self.Kf = oldKf
 
+  def testKf(self, x0, y0, vx0, vx1):
+    """ Test linear advance changing speed different speeds.
 
-  def doKfTests(self, n=1, Kf=0.0):
-    n -= 1 # test number for offset indexes starts at 0.
-    x0,y0 = -self.rdx/2, 55 - n*self.tdy
-    self.preextrude(n)
-    self.startLayer(z=0, Vp=10)
-    # Only draw the brim on the first test.
-    if n == 0:
-      x1,y1 = x0+self.rdx, y0-4*self.tdy+5
-      self.brim(x0,y0,x1,y1)
-    self.testKf(x0,y0,Kf)
-    self.endLayer()
+    This is to test that dynamic extrusion for different Kf/Kb/Cb settings for
+    different speed changes is right.
 
-  def testKf(self, x0, y0, Kf=0.0, vxr=(vx0,vx1)):
-    vx, vx1, dvx = self._getstep(self.tn, vxr)
-    logset = self._fset(sep=' ', Kf=Kf, vx=vxr)
-    self.log(f'testKf {logset}')
-    self.ruler(x0, y0)
-    y = y0 - self.rdy
-    self.cmt(f'structure:infill-solid')
-    while vx <= vx1:
-      self.testKfLine(x0, y, vx0=20, vx1=vx)
-      vx+=dvx
-      y-=1
-    self.settings(x0 + self.rdx+1, y0, Kf=self.Kf, vx0=20, vx=vxr)
+    The test phases are;
 
-  def testKfLine(self, x0, y0, vx0, vx1):
-    """ Test linear advance changing speed different speeds. """
+      * 5mm: warmup draw at 5mm/s
+      * 20mm: draw at <vx0>mm/s base speed before changing speed.
+      * 40mm: draw at <vx1>mm/s to check changing to and from this speed.
+      * 20mm: draw at <vx>mm/s base speed after changing speed.
+      * 5mm: cooldown draw at 5mm/s
+
+    Args:
+      vx0: the slow speed to use.
+      vx1: the fast speed to use.
+    """
     self.log(f'testKfline vx0={vx0} vx1={vx1}')
     self.dn(x0, y0)
     self.draw(dx=self.t0x,v=self.vx0)
@@ -1526,19 +1587,8 @@ class TextTest(GCodeGen):
     self.text(chars,x0,y0,x1,y1,fsize=h)
 
 
-if __name__ == '__main__':
-  import argparse, sys
-
-  inf=float('inf')
-  def RangeType(min=-inf, max=inf):
-    def init(s):
-      v=type(min)(s)
-      if v<min or max<v:
-        raise argparse.ArgumentTypeError(f'must be between {min} and {max}')
-      return v
-    return init
-
-  cmdline = argparse.ArgumentParser(description='Generate test gcode.')
+def GCodeGenArgs(cmdline):
+  """Add argparse cmdline arguments for GCodeGen params."""
   cmdline.add_argument('-Te', type=RangeType(0, 265), default=245,
       help='Extruder temperature.')
   cmdline.add_argument('-Tp', type=RangeType(0, 100), default=100,
@@ -1551,7 +1601,7 @@ if __name__ == '__main__':
       help='Linear Advance factor between 0.0 to 4.0 in mm/mm/s.')
   cmdline.add_argument('-Kb', type=RangeType(0.0,10.0), default=2.0,
       help='Bead backpressure factor between 0.0 to 10.0 in mm/mm.')
-  cmdline.add_argument('-Cb', type=RangeType(-5.0,5.0), default=0.8,
+  cmdline.add_argument('-Cb', type=RangeType(-5.0,5.0), default=0.0,
       help='Bead backpressure offset between -5.0 to 5.0 in mm.')
   cmdline.add_argument('-Re', type=RangeType(0.0,10.0), default=1.0,
       help='Retraction distance between 0.0 to 10.0 in mm.')
@@ -1567,7 +1617,7 @@ if __name__ == '__main__':
       help='Base restore speed in mm/s.')
   cmdline.add_argument('-Lh', type=RangeType(0.1,0.4), default=0.3,
       help='Layer height in mm.')
-  cmdline.add_argument('-Lw', type=RangeType(0.2,0.8), default=0.6,
+  cmdline.add_argument('-Lw', type=RangeType(0.2,0.8), default=0.4,
       help='Line width in mm.')
   cmdline.add_argument('-Lr', type=RangeType(0.0,10.0), default=1.0,
       help='Line extrusion ratio between 0.0 to 10.0.')
@@ -1579,8 +1629,24 @@ if __name__ == '__main__':
       help='Enable optimize, merging draw/move cmds where possible.')
   cmdline.add_argument('-v', action='store_true',
       help='Enable verbose logging output.')
-  cmdline.add_argument('-n', type=RangeType(1,5), default=1,
-      help='Test number for linear advance tests.')
+
+
+if __name__ == '__main__':
+  import argparse, sys
+
+  inf=float('inf')
+  def RangeType(min=-inf, max=inf):
+    def init(s):
+      v=type(min)(s)
+      if v<min or max<v:
+        raise argparse.ArgumentTypeError(f'must be between {min} and {max}')
+      return v
+    return init
+
+  cmdline = argparse.ArgumentParser(description='Generate test gcode.')
+  GCodeGenArgs(cmdline)
+  cmdline.add_argument('-n', type=RangeType(0,4), default=None,
+      help='Test number when running individual tests.')
   args=cmdline.parse_args()
 
   gen=ExtrudeTest(Te=args.Te, Tp=args.Tp, Fe=args.Fe, Fc=args.Fc,
@@ -1588,9 +1654,19 @@ if __name__ == '__main__':
       Vp=args.Vp, Vt=args.Vt, Vz=args.Vz, Ve=args.Ve, Vb=args.Vb,
       h=args.Lh, w=args.Lw, r=args.Lr,
       en_dynret=args.R, en_dynext=args.P, en_optmov=args.O, en_verb=args.v)
-  #gen.doKfTests(args.n, args.Kf)
-  #gen.doRetractTests(args.n, args.Kf)
-  gen.doStartStopTests()
+
+  retractargs=dict(name="Retract", linefn=gen.testRetract, tests=(
+    dict(vx=(20,100),vr=(20,100),re=8.0),
+    dict(vx=(20,100),vr=10,re=8.0),
+    dict(vx=(1,10),vr=1,re=4.0)))
+
+  startstopargs=dict(name="StartStop", linefn=gen.testStartStop, tests=(
+    dict(Kf=0.4,Kb=2.0,Cb=0.8,vx=(10,100),re=1.0),
+    dict(Kf=(0.0,1.0),Kb=2.0,Cb=0.8,vx=(20,100),re=1.0),
+    dict(Kf=0.4,Kb=(0.0,4.0),Cb=0.8,vx=(20,100),re=1.0),
+    dict(Kf=0.4,Kb=2.0,Cb=(-1.0,1.0),vx=(20,100),re=1.0)))
+
+  gen.doTests(n=args.n, **retractargs)
   gen.endFile()
   data=gen.getCode()
   sys.stdout.write(data)
