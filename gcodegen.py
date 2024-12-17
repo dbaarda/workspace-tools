@@ -1438,41 +1438,65 @@ class ExtrudeTest(GCodeGen):
       y-=self.ty
     self.settings(x0 + self.rdx+1, y0, **kwargs)
 
-  def testRetract(self, x0, y0, vx, vr=10, re=8, ve=30):
+  def testRetract(self, x0, y0, vx=None, ve=None, h=None, w=None, r=1.0, vr=10, re=4):
     """ Test retract and restore for different settings.
 
     This test is to try and figure out how much retraction is needed to stop
-    extruding after moving or figure out how retract/restore speed matters. It
-    has two test modes, and in both modes the pre/post phases are;
+    extruding after moving or figure out how retract/restore speed matters.
+    The pre/post phases are;
 
-      * 5mm: warmup draw at 5mm/s
-      * 40mm: draw at <vx>mm/s to build pressure at that speed.
-      * 20mm: move at <vr>mm/s while retracting <re>mm.
-      * 20mm: move at <vr>mm/s to check for vestigial drool.
-      * 0mm: restore <re>mm at <ve>mm/s.
+      * 5mm: warmup draw at 1mm/s to prime the nozzle.
+      * 10mm: move at 1mm/s to drain actual and estimated pressure.
+      * 0mm: restore default Re to prepare for draw.
+      * 30mm: draw at vx mm/s to build pressure at that speed.
+      * 40mm: move at vr mm/s while retracting <re>mm.
+      * 0mm: restore re mm.
       * 5mm: cooldown draw at 5mm/s
 
     The the length `l` of the drool line after the draw indicates the amount
-    of retraction required to stop extruding of roughly `l*re/20`. However,
-    note that each 10mm of normal 0.4mm wide 0.3 layer height drool represents
-    an additional 0.5mm of retraction needed.
+    of retraction required to stop extruding of roughly `l*(0.025+re/40)`,
+    assuming the drool is average half the thickness of of a normal w=0.4 x
+    h=0.3 line which is 0.5mm of filament per 10mm of line.
 
     Args:
       vx: draw speed before/after retract/restore.
+      ve: optional extrude speed while drawing.
+      h: optional line height.
+      w: optional line width.
       vr: move speed while retracting/restoring.
       re: retract/restore distance.
-      ve: restore speed for final restore.
     """
+    assert ve is not None or vx is not None, 'must specify at least ve or vx'
+    if vx is None:
+      if h is None: h = self.layer.h
+      if w is None: w = self.layer.w
+      # figure out vx from ve, w, and h.
+      vx = ve*self.Fa/(h*w*r)
+    if ve is None:
+      if h is None: h = self.layer.h
+      if w is None: w = self.layer.w
+      # figure out ve from vx, w, and h.
+      ve = h*w*r*vx/self.Fa
+    # Set h and w
+    if h is None: h = self.layer.h if w is None else ve*self.Fa/(w*r*vx)
+    if w is None: w = ve*self.Fa/(h*r*vx)
+    assert abs(ve*self.Fa - h*w*r*vx) < 0.0001
     # A printer with a=500mm/s^2 can go from 0 to 100mm/s in 0.2s over 10mm.
     # Retracting de=10mm at vr=100mm/s over 40mm means retracting at ve=25mm/s
     # which is probably fine.
-    ve = re/(2*self.t1x)
-    assert ve < 50, f'{vr=} gives {ve=} > 50mm/s.'
-    self.dn(x0, y0)
-    self.draw(dx=self.t0x,v=self.vx0)     # warmup draw.
-    self.draw(dx=2*self.t1x,v=vx)         # draw at v=vx.
-    self.move(dx=self.t1x,v=vr,de=-re)    # retract while moving at v=vr.
-    self.move(dx=self.t1x,v=vr)           # continue moving at v=vr.
+    self.dn(x0, y0, h=h)
+    # This slow draw then move is to ensure the nozzle is primed and wiped, and
+    # any advance pressure, actual and estimated, has decayed away.
+    self.draw(dx=5,v=1,w=w)
+    self.move(dx=10,v=1)
+    # This restore pre-loads advance pressure for drawing the line. If the
+    # start of the line is too thin, there was not enough pressure, and Kf
+    # probably needs to be increased. If the start is too thick, pressure was
+    # too high and Kf should probably be dropped. The line should be
+    # consistently the same width as all the other lines.
+    self.restore()
+    self.draw(dx=30,v=vx,w=w,r=r)      # draw at v=vx.
+    self.move(dx=40,v=vr,de=-re)          # retract while moving at v=vr.
     self.restore(de=re)                   # restore to recover from retract.
     self.draw(dx=self.t0x,v=self.vx0)     # cooldown draw.
     self.up()
@@ -1655,6 +1679,12 @@ if __name__ == '__main__':
       h=args.Lh, w=args.Lw, r=args.Lr,
       en_dynret=args.R, en_dynext=args.P, en_optmov=args.O, en_verb=args.v)
 
+  backpressureargs=dict(name="Backpressure", linefn=gen.testRetract, tests=(
+    dict(w=(0.3, 0.8), vx=10, ve=0.3*0.3*10/Move.Fa),
+    dict(h=(0.1,0.35), ve=0.5*0.35*10/Move.Fa, w=0.5),
+    dict(w=(0.3, 0.8), ve=0.2*0.8*10/Move.Fa, h=0.2),
+    dict(vx=(10, 60), h=0.2, w=0.5)))
+
   retractargs=dict(name="Retract", linefn=gen.testRetract, tests=(
     dict(vx=(20,100),vr=(20,100),re=8.0),
     dict(vx=(20,100),vr=10,re=8.0),
@@ -1666,7 +1696,7 @@ if __name__ == '__main__':
     dict(Kf=0.4,Kb=(0.0,4.0),Cb=0.8,vx=(20,100),re=1.0),
     dict(Kf=0.4,Kb=2.0,Cb=(-1.0,1.0),vx=(20,100),re=1.0)))
 
-  gen.doTests(n=args.n, **retractargs)
+  gen.doTests(n=args.n, **backpressureargs)
   gen.endFile()
   data=gen.getCode()
   sys.stdout.write(data)
