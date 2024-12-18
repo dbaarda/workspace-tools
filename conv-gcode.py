@@ -1,4 +1,4 @@
-#!/bin/python3
+#!/bin/pypy3
 """
 Post-process gcode files to fix various problems.
 
@@ -68,14 +68,14 @@ dTc = dHc/V
     = hc * A/V * T * dt
 
 So temperature decays at exactly the same rate as heat. This is exponential
-decay with timeconstant hT which is;
+decay with timeconstant Th which is;
 
-dHc = H * dt/hT
+dHc = H * dt/Th
 
 which gives us;
 
-1/hT = hc * A/V
-hT   = (V/A) / hc
+1/Th = hc * A/V
+Th   = (V/A) / hc
      = z / hc
 
 Note this suggests the heat decay rate decreases linearly as you go up the
@@ -84,10 +84,10 @@ the heat evenly distributed through the whole model and only loosing heat
 through the top. However, most of the heat will be concentrated near the top
 layer, with the lower layers mostly "cooled to equilibrium" with a constant
 temperature and no heat transfer. This probably means only the top couple of
-layers count, so z is effectively constant, making hT only proportional to
+layers count, so z is effectively constant, making Th only proportional to
 1/hc.
 
-To calculate hT, a rough formula for hc for air velocities v in the range 2m/s
+To calculate Th, a rough formula for hc for air velocities v in the range 2m/s
 to 20m/s is;
 
 # From https://www.engineeringtoolbox.com/convective-heat-transfer-d_430.html
@@ -104,7 +104,7 @@ squeeze about half of that through the blower nozzle, so about 10m/s would be
 max blower speed?
 
 So hc with fan on should be about 3x as hc with fan off, or fan on h1T should
-be 1/3 of fan off h0T. But note the fan at only 10% with v=1m/s has hc 2x h0T,
+be 1/3 of fan off Th0. But note the fan at only 10% with v=1m/s has hc 2x Th0,
 so a fan at only 10% will double the rate of cooling.
 
 We extrude at constant temp Te, so heat extruded is proportional to extruded
@@ -118,12 +118,12 @@ convection we can get the curren heat H from the previous heat H' after time
 dt with;
 
 dH = dHe - dHc
-   = Te*de - H*dt/hT
+   = Te*de - H*dt/Th
 
            H = H' + dH
-           H = H' + Te*de - H*dt/hT
-(hT+dt)/hT*H = H' + Te*de
-           H = (H' + Te*de)*hT/(hT+dt)  # heat added plus previous heat decayed.
+           H = H' + Te*de - H*dt/Th
+(Th+dt)/Th*H = H' + Te*de
+           H = (H' + Te*de)*Th/(Th+dt)  # heat added plus previous heat decayed.
 
 Note if all the heat is in the last laid fillament and it is all at a
 temperature considered "hot" then H effectively gives us the volume of laid
@@ -220,7 +220,7 @@ before and after.
 """
 
 import re
-
+import gcodegen
 
 def RelativeToAbsoluteE(data):
   lines=[]
@@ -238,11 +238,6 @@ def FixFlashPrintLayerStartHop(data):
   data=re.sub(r'(\n;layer:.*\n(?:M.*\n)*G1 E.*\n)((?:.*\n)*?)(G1 Z.*\n)'.encode(),r'\1\3\2'.encode(),data)
   return data
 
-def ftime(t):
-  h,s = divmod(t,3600)
-  m,s = divmod(s,60)
-  return f'{int(h):02d}:{int(m):02d}:{s:06.3f}'
-
 def fbool(b):
   """ Format a boolean as 'Y', 'N', or '?' for True, False, None (unknown). """
   return '?' if b is None else 'Y' if b else 'N'
@@ -252,141 +247,118 @@ def hc(v):
   return 10.45 - v + 10*(v**0.5)
 
 
-class Printer(object):
-  fT = 5.0    # fan speed timeconstant.
-  pT = 1.0    # fan pwm cycle time.
-  # The h0T heat decay rate is the seconds it takes to cool 63%, or
+class Printer(gcodegen.GCodeGen):
+  Tf = 5.0    # fan speed timeconstant.
+  Tp = 1.0    # fan pwm cycle time.
+  # The Th0 heat decay rate is the seconds it takes to cool 63%, or
   # about 2x the time to cool from 245degC to 160degC in a 30degC enclosure.
-  h0T = 15.0  # decay rate of heat extruded with 0% fan.
-  # The hT decay rate varies with fan output fo as;
-  # hT = Kht/hc(vf1*fo)
-  vf1 = 10.0  # airflow velocity for max fan in m/s.
-  KhT = h0T*hc(0)
+  Th0 = 15.0  # decay rate of heat extruded with 0% fan.
+  # The Th decay rate varies with fan output fo as;
+  # Th = Kht/hc(fva1*fo)
+  fva1 = 10.0  # airflow velocity for max fan in m/s.
+  KTh = Th0*hc(0)
   # For printers with automatic fan speed control we assume fan speed is a
   # linear function of extrusion rate. The fan output fo in the range 0->1 is;
-  # fo = fd*(Kf*de/dt + Cf)
-  ve1 = 1.0   # extrusion rate for max fan in mm/s.
-  Cf = 0.1  # min fan speed while fan is on is 10%.
-  Kf = (1-Cf)/ve1
+  # fo = fd*(Fk*de/dt + Fc)
+  fve1 = 1.0   # extrusion rate for max fan in mm/s.
+  Fc = 0.1  # min fan speed while fan is on is 10%.
+  Fk = (1-Fc)/fve1
 
-  def _hT(self, fo):
-    return self.KhT / hc(self.vf1 * fo)
+  def _Th(self, fo):
+    return self.KTh / hc(self.fva1 * fo)
 
   def _fo(self, fd, de_dt):
-    return fd*min(1.0, self.Kf*de_dt + self.Cf) if self.autofan else fd
+    return fd*min(1.0, self.Fk*de_dt + self.Fc) if self.en_autofan else fd
 
-  def __init__(self, heatext=0.0, fanspeed=1.0, layerpause=0.0, pwmfan=False, autofan=True, Kf=0.0, Re=0.0):
-    self.hs = heatext  # heat extruded setting.
-    self.fanspeed=fanspeed  # fan speed scale setting.
-    self.layerpause=layerpause # duration to pause after each layer.
-    self.pwmfan=pwmfan  # whether to control fanspeed with gcode pwm.
-    self.autofan=autofan  # whether the printer autocontrols fan speed.
-    self.Kf = Kf # Linear Advance factor for dynamic retract/restore.
-    self.Re = Re # Extra retraction length for dynamic retract/restore.
-    self.gcode=[]
+  def __init__(self, Hs=0.0, Lp=0.0, en_pwmfan=False, en_autofan=True, **kwargs):
+    super().__init__(**kwargs)
+    self.Hs = Hs  # heat extruded setting.
+    self.Lp=Lp # duration to pause after each layer.
+    self.en_pwmfan=en_pwmfan  # whether to control fanspeed with gcode pwm.
+    self.en_autofan=en_autofan  # whether the printer autocontrols fan speed.
+
+  def resetfile(self):
+    """ Reset all state variables. """
+    super().resetfile()
     self.fan_on = None
-    self.t = 0.0
-    self.x = self.y = self.z = self.e = self.f = 0.0
     self.ho = 0.0  # accumulated heat extruded out.
     self.fs = 0.0  # current dynamicly adjusted fanspeed.
     self.fo = 0.0  # filtered fan speed output.
     self.fd = 0.0  # current fan speed drive.
-    self.de = 0.0  # heat extruded since last fan cycle.
-    self.dt = 0.0  # time since last fan cycle.
+    self.fe = 0.0  # heat extruded since last fan cycle.
+    self.ft = 0.0  # time since last fan cycle.
     self.de_dt = 0.0 # extrusion rate of last move command.
-    self.r = 0.0 # length of filament advance pressure.
-    # Note filament extruded out the nozzle n = e - r
-    self.pde = 0.0 # delta to e from linear advance adjustments.
-    self.prev_restore = None # deferred restore speed for linear advance.
-    self._init_layer('P')
-
-  def _init_layer(self, n=None):
-    try:
-      self.layer_n = n if n else self.layer_n + 1
-    except TypeError:
-      # The previous layer was a pre-emission layer, start at layer 1.
-      self.layer_n = 1
-    self.layer_t = self.layer_l = self.layer_e = 0.0
-
-  def getCode(self):
-    return b'\n'.join(self.gcode + [b''])
 
   def runCode(self, code):
+    self.resetfile()
     code = FixFlashPrintLayerStartHop(code)
     for line in code.splitlines():
       try:
         self.runline(line.decode())
       except UnicodeDecodeError:
         # If it's not text it's *.gx file binary data; just append it.
-        self.gcode.append(line)
-
-  def _addline(self, line):
-    self.gcode.append(line.encode())
+        self.add(line)
 
   def fanstats(self, de, dt, fs, fd):
-    fo, ho, hs = self.fo, self.ho, self.hs
-    self._addline(
-        f';{ftime(self.t)}: fan={fbool(self.fan_on)} '
+    fo, ho, Hs = self.fo, self.ho, self.Hs
+    self.log(
+        f'fan={fbool(self.fan_on)} '
         f'de/dt={de:.2f}/{dt:.2f} '
         f'fo/fs={fo:.2f}/{fs:.2f} '
-        f'ho/hs={ho:.2f}/{hs:.2f} '
+        f'ho/Hs={ho:.2f}/{Hs:.2f} '
         f'fd={fd:.1f}')
 
   def setfan(self, fs):
-    de, dt = self.de, self.dt
-    if self.dt > self.pT and fs > 0.0:
-      self.dt = self.de = 0.0
-    if self.pwmfan:
-      fd = 1.0 if self.dt < fs*self.pT else 0.0
+    de, dt = self.fe, self.ft
+    if self.ft > self.Tp and fs > 0.0:
+      self.ft = self.fe = 0.0
+    if self.en_pwmfan:
+      fd = 1.0 if self.ft < fs*self.Tp else 0.0
     else:
       fd = fs
     if fd != self.fd or fs != self.fs:
       self.fanstats(de, dt, fs, fd)
     if fd != self.fd:
       if 0.0 < fd < 1.0:
-        self._addline(f'M106 S{int(fd*255)}')
+        self.cmd('M106', S=f'{int(fd*255)}')
       else:
-        self._addline('M106' if fd else 'M107')
+        self.cmd('M106' if fd else 'M107')
     self.fs, self.fd = fs,fd
 
   def dofan(self, de, dt):
-    self.dt += dt
-    self.de += de
+    self.ft += dt
+    self.fe += de
     if dt:
       self.de_dt = de/dt
     # Get and filter fan output fo.
     fo = self._fo(self.fd, self.de_dt)
-    self.fo = (dt*fo + self.fT*self.fo)/(self.fT + dt)
-    # Get hT and calculate extruded heat ho.
-    hT = self._hT(fo)
-    self.ho = (de + self.ho)*hT/(hT + dt)
+    self.fo = (dt*fo + self.Tf*self.fo)/(self.Tf + dt)
+    # Get Th and calculate extruded heat ho.
+    Th = self._Th(fo)
+    self.ho = (de + self.ho)*Th/(Th + dt)
     # Turn on if there is excess heat extruded.
-    on = self.fan_on and self.ho > self.hs
-    self.setfan(self.fanspeed if on else 0.0)
+    on = self.fan_on and self.ho > self.Hs
+    self.setfan(self.Fe if on else 0.0)
 
   def layerstats(self):
-    self._addline(
-        f';{ftime(self.t)}: layer={self.layer_n} '
-        f't={self.layer_t:.1f} l={self.layer_l:.1f} e={self.layer_e:.1f} '
-        f'l/t={self.layer_l/self.layer_t:.3f} '
-        f'e/t={self.layer_e/self.layer_t:.3f} '
-        f'e/l={self.layer_e/self.layer_l:.3f} '
-        f'ho={self.ho:.1f} fo={self.fo:.2f}')
-    self._init_layer()
+    super().layerstats()
+    self.log(f'  ho={self.ho:.1f} fo={self.fo:.2f}')
 
   def runline(self,line):
+    #print(line)
     dt=de=0.0
     if line.startswith(';start gcode'):
-      self._addline(f';heat_ext: {self.hs}')
-      self._addline(f';fan_speed: {self.fanspeed}')
-      self._addline(f';layer_pause: {self.layerpause}')
-      self._addline(line)
+      self.cmt('heat_ext: {Hs}')
+      self.cmt('layer_pause: {Lp}')
+      self.add(line)
+      self.startLayer(0, 0.0)
+    elif line.startswith(';preExtrude:'):
+      self.Layer(line)
     elif line.startswith(';layer:'):
-      self.layerstats()
-      self._addline(line)
+      self.Layer(line)
     elif line.startswith(';end gcode'):
       self.layerstats()
-      self._addline(line)
+      self.add(line)
     elif line.startswith('M106'):
       dt = self.M106(line)
     elif line.startswith('M107'):
@@ -396,15 +368,24 @@ class Printer(object):
     elif line.startswith('G1 '):
       dt, de = self.G1(line)
     else:
-      self._addline(line)
-    self.t += dt
-    self.layer_t += dt
+      self.add(line)
     self.dofan(de, dt)
+
+  def Layer(self, line):
+    """ Start a new layer. """
+    t, h= re.match(';(preExtrude|layer):(\d+.\d+)', line).groups()
+    h = float(h)
+    if t == 'preExtrude':
+      self.startLayer(n=0, z=0.0, h=h)
+      self.add(line)
+    else:
+      self.layerstats()
+      self.startLayer(h=h)
 
   def M106(self, line):
     """ Fan on."""
     self.fan_on=True
-    self.setfan(self.fanspeed)
+    self.setfan(self.Fe)
     return 0.0
 
   def M107(self, line):
@@ -414,129 +395,58 @@ class Printer(object):
     self.setfan(0.0)
     return 0.0
 
-  def _calcr(self, de, dt):
-    # Calculate change in pressure advance 'r' by iterating over the time
-    # interval with a dt that is small relative to the Kf timeconstant.
-    t, r = dt, self.r
-    ve = de/dt if dt else 0 # extrusion velocity
-    dt = self.Kf/100
-    while t:
-      dt = min(dt,t)  # This iteration's time interval.
-      # Note filament doesn't get sucked back into the nozzle if the pressure
-      # advance is negative.
-      r += ve*dt  # Add filament extruded into the nozzle.
-      r -= max(0, r*dt/(self.Kf+dt)) # Remove filament extruded out the nozzle.
-      t -= dt
-    return r
-
   def G1(self, line):
     m = re.match(r'G1(?: X([-+0-9.]+))?(?: Y([-+0-9.]+))?(?: Z([-+0-9.]+))?(?: E([-+0-9.]+))?(?: F([-+0-9]+))?', line)
-    x,y,z,e,f = m.groups()
-    x = self.x if x is None else float(x)
-    y = self.y if y is None else float(y)
-    z = self.z if z is None else float(z)
-    e = self.e if e is None else float(e)+self.pde
-    f = self.f if f is None else float(f)/60
-    dx,dy,dz,de,df=x-self.x,y-self.y,z-self.z,e-self.e,f-self.f
-    dl=(dx*dx+dy*dy+dz*dz)**0.5
-    dt=(dl if dl else abs(de))/f
-    if self.Kf > 0 and de:
-      # We have pressure advance adjustment enabled.
-      if not dl and de < 0:
-        # This is a retraction, change the retraction amount to relieve pressure.
-        de, old_de = - self.r - self.Re, de
-        self.pde += de - old_de
-        e = self.e + de
-        dt = de/f
-        self._addline(f'; adjusting retraction, de={old_de:.4f}->{de:.4f} {self.pde=:.4f}')
-      elif not dl and de > 0:
-        if self.prev_restore:
-          # We are redoing a previous restore, clear and continue processing it.
-          old_de, old_f = self.prev_restore
-          self.prev_restore = None
-          self.pde += de
-          self._addline(f';adjusting restore, de={old_de:.4f}->{de:.4f} {self.pde=:.4f}')
-        else:
-          # We need to defer it until we know the next extrusion speed.
-          self.prev_restore = (de,f)  # save restore f to add later.
-          self.pde -= de
-          #self._addline(f';deferring restore {de=:.4f} {self.pde=:.4f}')
-          return 0,0
-      elif dl and self.prev_restore:
-        # We need to apply a restore before this extrusion.
-        old_de, old_f = self.prev_restore
-        new_de = self.Kf*de/dt - self.r
-        new_e = self.e - self.pde + new_de
-        #self._addline(f';reviving_restore, de={old_de:.4f} {self.pde=:.4f}')
-        self.runline(f'G1 E{new_e:.4f} F{int(old_f*60)}')
-        self.runline(line)
-        return 0,0
-    self.r = self._calcr(de,dt)
-    # Only count de and dl for extruding moves.
-    de = de if dl else 0.0
-    dl = dl if de else 0.0
-    self.x,self.y,self.z,self.e,self.f = x,y,z,e,f
-    self.layer_l += dl
-    self.layer_e += de
-    if self.pde:
-      # Adjust the E value in the line.
-      line = re.sub(r'E\d+\.\d+',f'E{e:.4f}', line)
-    self._addline(line)
-    #self._addline(f';{ftime(self.t)}: dl={dl:.3f} de={de:.3f} dt={dt:.3f} f={f:.3}')
-    return dt, de
+    x,y,z,e,f = (a if a is None else float(a) for a in m.groups())
+    # Always use the previous f value when parsing gcode files.
+    if f is None: f = self.f
+    self.move(x=x, y=y, z=z, e=e, v=f/60)
+    # Get the last added move to get it's dt and de. Note it could be logged
+    # as skipped if it didn't do anything.
+    m=self.gcode[-1]
+    return (m.dt, m.de) if isinstance(m, gcodegen.Move) else (0.0, 0.0)
 
   def G4(self, line):
     """ wait. """
-    if self.Kf and self.r > -self.Re:
+    if self.pe > self.Re:
       # We should never pause without retracting to relieve nozzle pressure.
-      self._addline(f';WARNING: pause with residual nozzle pressure, r={self.r:.4f}>{-self.Re:.4f}')
-    if self.layerpause:
-      # Change all layer waits to wait for layerpause duration.
-      dt = self.layerpause
-      self._addline(f'G4 P{int(dt*1000)}')
+      self.log(f';WARNING: pause with residual nozzle pressure, pe={self.pe:.4f}>{self.Re:.4f}')
+    if self.Lp:
+      # Change all layer waits to wait for Lp duration.
+      dt = self.Lp
     else:
       m = re.match(r'G4 P([0-9]+)', line)
       dt = float(m[1])/1000.0
-      self._addline(line)
+    self.wait(dt)
     return dt
 
 
 if __name__ == '__main__':
   import argparse, sys
-
-  inf=float('inf')
-  def RangeType(min=-inf, max=inf):
-    def init(s):
-      v=type(min)(s)
-      if v<min or max<v:
-        raise argparse.ArgumentTypeError(f'must be between {min} and {max}')
-      return v
-    return init
+  from gcodegen import RangeType
 
   cmdline = argparse.ArgumentParser(description='Postprocess FlashPrint gcode.')
-  cmdline.add_argument('-e', type=RangeType(0.0), default=0.0,
+  gcodegen.GCodeGenArgs(cmdline)
+  cmdline.add_argument('-Hs', type=RangeType(0.0), default=0.0,
       help='Heat extruded target in mm of filament that is hot.' )
-  cmdline.add_argument('-f', type=RangeType(0.0, 1.0), default=1.0,
-      help='Fan speed between 0.0 -> 1.0.' )
-  cmdline.add_argument('-p', type=RangeType(0.0), default=0.0,
+  cmdline.add_argument('-Lp', type=RangeType(0.0), default=0.0,
       help='Seconds to pause between each layer.')
-  cmdline.add_argument('-P', action='store_true',
+  cmdline.add_argument('-F', action='store_true',
       help='Control fan speed by pulsing it on/off.')
   cmdline.add_argument('-A', action='store_true',
       help='Printer automatically adjusts fan speed when on.')
-  cmdline.add_argument('-Kf', type=RangeType(0.0, 4.0), default=0.0,
-      help='Linear Advance K factor for dynamic retract/restore.')
-  cmdline.add_argument('-Re', type=RangeType(0.0, 10.0), default=0.1,
-      help='Additional retraction length for dynamic retract/restore.')
   cmdline.add_argument('infile', nargs='?', type=argparse.FileType('rb'), default=sys.stdin.buffer,
       help='Input gcode file to postprocess.')
   args=cmdline.parse_args()
 
   data = args.infile.read()
   p=Printer(
-      heatext=args.e, fanspeed=args.f, layerpause=args.p,
-      pwmfan=args.P, autofan=args.A,
-      Kf=args.Kf, Re=args.Re)
+      Te=args.Te, Tp=args.Tp, Fe=args.Fe, Fc=args.Fc,
+      Kf=args.Kf, Kb=args.Kb, Cb=args.Cb, Re=args.Re,
+      Vp=args.Vp, Vt=args.Vt, Vz=args.Vz, Ve=args.Ve, Vb=args.Vb,
+      h=args.Lh, w=args.Lw, r=args.Lr,
+      en_dynret=args.R, en_dynext=args.P, en_optmov=args.O, en_verb=args.v,
+      Hs=args.Hs, Lp=args.Lp, en_pwmfan=args.F, en_autofan=args.A)
   p.runCode(data)
   data=p.getCode()
   sys.stdout.buffer.write(data)

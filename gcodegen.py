@@ -232,7 +232,7 @@ class MoveBase(NamedTuple):
     elif self.isrestore:
       return f'restore {de=:.4f}@{v}'
     else:
-      return f'move {dl=:.2f}@{v0}<{v}>{v1} {de=:.4f} {h=}'
+      return f'move {dl=:.2f}@{v0}<{v}>{v1} {de=:.4f} {h=:.2f}'
     #return f'{self.__class__.__name__}({dx=:.2f}, {dy=:.2f}, {dz=:.2f}, {de=:.4f}, {v=:.2f}, {v0=:.2f}, {v1=:.2f}, {h=:.2f}, {w=:.2f})'
 
   def set(self, *args, s=None, **kwargs):
@@ -543,6 +543,9 @@ class Move(MoveBase):
 
   def __new__(cls, *args, **kwargs):
     """ Make v0 and v1 default to v for moves and 0.0 for non-moves. """
+    # Round all arguments to 4 decimal places to clean out fp errors.
+    args = tuple(round(a,4) for a in args)
+    kwargs = {k:round(v,4) for k,v in kwargs.items()}
     m = super().__new__(cls, *args, **kwargs)
     assert 0 <= m.v <= cls.Vp
     assert m.v0 is None or 0 <= m.v0 <= m.v
@@ -739,7 +742,6 @@ M18
     class GMove(Move, Fd=self.Fd, Nd=self.Nd, log=self.log): pass
     self.GMove = GMove
     self.resetfile()
-    self.startFile()
 
   def resetfile(self):
     """ Reset all state variables. """
@@ -817,13 +819,21 @@ M18
     elif isinstance(code, Move):
       out = self.fmove(code)
       self.incmove(code)
-      self.add(out)
+      self.fadd(out)
       if self.en_verb:
         self.log('{pe=:.4f} {eb=:.4f} {ve=:.4f} {vn=:.4f} {vl=:.3f} {db=:.2f}')
         # We need to fstr() reformat that last log entry...
-        self.gcode[-1] = self.fstr(self.gcode[-1])
+        self.fadd(self.gcode.pop())
+    elif isinstance(code, str):
+      self.add(self.fstr(code.strip()).encode())
+    elif isinstance(code, int):
+      # ints are waits.
+      self.t += code/1000
+      self.l_t += code/1000
+      self.fadd(self.fcmd('G4', P=code))
     else:
-      self.add(self.fstr(code.strip()))
+      # It's probably Flashprint binary header stuff.
+      self.add(code)
 
   def add(self, code):
     """ Add code Layer, Move or format-string instances. """
@@ -831,6 +841,10 @@ M18
       self.inclayer(code)
     elif isinstance(code, Move):
       self.incmove(code)
+    elif isinstance(code, int):
+      # ints are waits.
+      self.t += code/1000
+      self.l_t += code/1000
     self.gcode.append(code)
 
   def cmd(self, cmd, **kwargs):
@@ -840,12 +854,13 @@ M18
     self.add(f';{cmt}')
 
   def log(self, txt):
+    #print(self.fstr(txt))
     if self.en_verb:
       self.cmt('{ftime(t)}: ' + txt)
 
   def startFile(self):
     self.add(self.fstr(self.startcode))
-    self.startLayer(0, 0.00)
+    self.startLayer(0)
 
   def endFile(self):
     # Retract to -2.5mm for the next print.
@@ -855,10 +870,10 @@ M18
   def startLayer(self, n=None, z=None,
       Vp=None, Vt=None, Vz=None, Ve=None, Vb=None,
       h=None, w=None, r=1.0):
-    # Note we always start layers from a high "hop" position.
+    if n is None: n = self.layer.n + 1 if self.layer else 0
+    if z is None: z = self.layer.z + self.layer.h if self.layer.n else 0.0
     l = Layer(
-        self.layer.n + 1 if n is None else n,
-        self.layer.z + self.layer.h if z is None else z,
+        n, z,
         Vp or self.Vp,
         Vt or self.Vt,
         Vz or self.Vz,
@@ -868,8 +883,9 @@ M18
         w or self.w,
         r*self.r)
     self.add(l)
-    self.cmt('{"preExtrude" if not layer.n else "layer"}:{layer.h:.2f}')
-    self.log('layer={layer.n} h={layer.h:.2f} w={layer.w:.2f} r={layer.r:.2f}')
+    if l.n:
+      self.cmt('layer:{layer.h:.2f}')
+      self.log('layer={layer.n} h={layer.h:.2f} w={layer.w:.2f} r={layer.r:.2f}')
 
   def endLayer(self, **upargs):
     self.up(**upargs)
@@ -885,6 +901,9 @@ M18
   def _db(self, eb=None, h=None):
     """ Get bead diameter from bead volume."""
     if h is None: h = self.z - self.layer.z
+    # h=0 can happen for moves at the start of a new layer before a hop.
+    # Assume h is the current layer height.
+    if h < 0.01: h = self.layer.h
     if eb is None: eb = self.eb
     assert eb >= 0.0
     return 2*sqrt(eb*self.Fa/(h*pi)) if eb else 0.0
@@ -900,7 +919,7 @@ M18
 
   def _calc_pe_eb_en(self, m):
     """ Calculate updated pe, eb, and en values after a move."""
-    de,h = m.de, m.h
+    de, h = m.de, m.h
     if (self.Kf or self.Kb or self.Cb) and (self.eb>0 or self.pe>0 or de>0):
       # Calculate change in pressure advance 'pe' and bead volume `eb` by
       # iterating over the time interval with a dt that is small relative to
@@ -909,7 +928,7 @@ M18
       if not dl:
         # A hop, drop, retract, restore, or set speed.
         assert v0 == v1
-        v, ve, de_dl = 0.0, de/dt, None
+        v, ve, de_dl = 0.0, de/dt if dt else 0.0, None
         # There is only one phase.
         phases =((dt,0),)
       else:
@@ -981,9 +1000,11 @@ M18
         v = s * (self.layer.Vp if dl else self.layer.Ve if de < 0 else self.layer.Vb)
       else:
         v = s * (self.layer.Vt if dl else self.layer.Vz)
+    else:
+      # Always keep explicit f values as they can be used for future moves.
+      self.f = round(v*60)
     m = self.GMove(dx,dy,dz,de,v,h=h,w=w)
     # Only add it if it does anything.
-    # Note we don't add speed changes, as moves all keep their own speeds.
     if any(m[:4]):
       self.add(m)
     else:
@@ -1047,6 +1068,9 @@ M18
     self.move(z=z, dz=dz, v=vz, h=h, s=s)
     self.restore(e=e, de=de, vb=vb, s=s)
 
+  def wait(self, t):
+    self.add(round(t*1000))
+
   def getCode(self):
     if self.en_optmov:
       # Join together any moves that can be joined.
@@ -1087,7 +1111,7 @@ M18
           #self.log(f'adjusting {c} {c.ve=:.4f}({c.ve0:.4f}<{c.vem:.4f}>{c.ve1:.4f}) {c.isaccel=}')
           c = c.set(de=c.de + pe - self.pe)
       self.fadd(c)
-    return '\n'.join(self.gcode) + '\n'
+    return b'\n'.join(self.gcode) + b'\n'
 
   def layerstats(self):
     h='{layer.h:.2f}'
@@ -1108,6 +1132,7 @@ M18
     primed with no residual advance pressure, and prevent the wipe from
     becoming a big piece of stringing that messes with the print.
     """
+    self.cmt('preExtrude:{layer.h:.2f}')
     self.cmt('structure:pre-extrude')
     x0,x1 = sorted([x0,x1])
     y0,y1 = sorted([y0,y1])
@@ -1406,7 +1431,7 @@ class ExtrudeTest(GCodeGen):
     x0, y0 = -self.rdx/2, 55
     x1, y1 = x0+t4x, y0-t4y
     self.preextrude(n=n)
-    self.startLayer(z=0.0, Vp=10)
+    self.startLayer(Vp=10)
     # Only draw the brim if running test 0.
     if n==0:
       self.brim(x0,y0,x0+self.rdx, y1)
@@ -1611,6 +1636,15 @@ class TextTest(GCodeGen):
     self.text(chars,x0,y0,x1,y1,fsize=h)
 
 
+inf=float('inf')
+def RangeType(min=-inf, max=inf):
+  def init(s):
+    v=type(min)(s)
+    if v<min or max<v:
+      raise argparse.ArgumentTypeError(f'must be between {min} and {max}')
+    return v
+  return init
+
 def GCodeGenArgs(cmdline):
   """Add argparse cmdline arguments for GCodeGen params."""
   cmdline.add_argument('-Te', type=RangeType(0, 265), default=245,
@@ -1658,15 +1692,6 @@ def GCodeGenArgs(cmdline):
 if __name__ == '__main__':
   import argparse, sys
 
-  inf=float('inf')
-  def RangeType(min=-inf, max=inf):
-    def init(s):
-      v=type(min)(s)
-      if v<min or max<v:
-        raise argparse.ArgumentTypeError(f'must be between {min} and {max}')
-      return v
-    return init
-
   cmdline = argparse.ArgumentParser(description='Generate test gcode.')
   GCodeGenArgs(cmdline)
   cmdline.add_argument('-n', type=RangeType(0,4), default=None,
@@ -1696,7 +1721,9 @@ if __name__ == '__main__':
     dict(Kf=0.8, Kb=1.0, Re=(0.0,1.0), vx=60, re=0.0),
     dict(Kf=0.8, Kb=1.0, Re=0.5, vx=(20,100), re=0.0)))
 
+  gen.startFile()
   gen.doTests(n=args.n, **startstopargs)
   gen.endFile()
   data=gen.getCode()
-  sys.stdout.write(data)
+  sys.stdout.buffer.write(data)
+  #sys.stdout.write(data)
