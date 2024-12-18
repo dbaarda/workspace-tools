@@ -1501,7 +1501,7 @@ class ExtrudeTest(GCodeGen):
     self.draw(dx=self.t0x,v=self.vx0)     # cooldown draw.
     self.up()
 
-  def testStartStop(self, x0, y0, vx, re=1):
+  def testStartStop(self, x0, y0, vx, re):
     """ Test starting and stopping extrusion for different settings.
 
     This test is to check dynamic retracting for different Kf/Kb/Cb/Re
@@ -1571,7 +1571,7 @@ class ExtrudeTest(GCodeGen):
     self.draw(dx=1,v=1,de=eb+re+0.1)
     # This continues drawing at 1mm/sec extruding at 0.1mm/sec for 14mm to see
     # how much over-retraction there was. Every mm with the line narrower
-    # than the target w*r is 0.1mm of over-retraction more than re.
+    # than the target w*r is an extra 0.1mm of over-retraction more than re.
     dx = dx[4]-1
     self.draw(dx=dx, de=dx*0.1, v=1)
     self.up()
@@ -1621,9 +1621,9 @@ def GCodeGenArgs(cmdline):
       help='Extruder fan speed between 0.0 to 1.0.')
   cmdline.add_argument('-Fc', type=RangeType(0.0,1.0), default=0.0,
       help='Case fan speed between 0.0 to 1.0.')
-  cmdline.add_argument('-Kf', type=RangeType(0.0,4.0), default=0.4,
+  cmdline.add_argument('-Kf', type=RangeType(0.0,4.0), default=0.8,
       help='Linear Advance factor between 0.0 to 4.0 in mm/mm/s.')
-  cmdline.add_argument('-Kb', type=RangeType(0.0,10.0), default=2.0,
+  cmdline.add_argument('-Kb', type=RangeType(0.0,10.0), default=1.0,
       help='Bead backpressure factor between 0.0 to 10.0 in mm/mm.')
   cmdline.add_argument('-Cb', type=RangeType(-5.0,5.0), default=0.0,
       help='Bead backpressure offset between -5.0 to 5.0 in mm.')
@@ -1641,7 +1641,7 @@ def GCodeGenArgs(cmdline):
       help='Base restore speed in mm/s.')
   cmdline.add_argument('-Lh', type=RangeType(0.1,0.4), default=0.3,
       help='Layer height in mm.')
-  cmdline.add_argument('-Lw', type=RangeType(0.2,0.8), default=0.4,
+  cmdline.add_argument('-Lw', type=RangeType(0.2,0.8), default=0.5,
       help='Line width in mm.')
   cmdline.add_argument('-Lr', type=RangeType(0.0,10.0), default=1.0,
       help='Line extrusion ratio between 0.0 to 10.0.')
@@ -1691,12 +1691,12 @@ if __name__ == '__main__':
     dict(vx=(1,10),vr=1,re=4.0)))
 
   startstopargs=dict(name="StartStop", linefn=gen.testStartStop, tests=(
-    dict(Kf=0.4,Kb=2.0,Cb=0.8,vx=(10,100),re=1.0),
-    dict(Kf=(0.0,1.0),Kb=2.0,Cb=0.8,vx=(20,100),re=1.0),
-    dict(Kf=0.4,Kb=(0.0,4.0),Cb=0.8,vx=(20,100),re=1.0),
-    dict(Kf=0.4,Kb=2.0,Cb=(-1.0,1.0),vx=(20,100),re=1.0)))
+    dict(Kf=(0.0,1.0), Kb=1.0, Re=0.5, vx=60, re=0.0),
+    dict(Kf=0.8, Kb=(0.0,2.0), Re=0.5, vx=60, re=0.0),
+    dict(Kf=0.8, Kb=1.0, Re=(0.0,1.0), vx=60, re=0.0),
+    dict(Kf=0.8, Kb=1.0, Re=0.5, vx=(20,100), re=0.0)))
 
-  gen.doTests(n=args.n, **backpressureargs)
+  gen.doTests(n=args.n, **startstopargs)
   gen.endFile()
   data=gen.getCode()
   sys.stdout.write(data)
