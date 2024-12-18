@@ -172,7 +172,7 @@ Even without implementing full linear-advance including acceleration in gcode,
 it would probably be worth implementing dynamic retract/restore based on the
 previous/next extrusion rates. This would probably fix my clip print.
 
-## Print Layer Back Pressure
+## Print Layer BackPressure
 
 After playing around with trying to figure out the Kf value for my Adv3
 printer, it's become apparent that the simple linear advance model is
@@ -213,20 +213,21 @@ equation](https://en.wikipedia.org/wiki/Hagen%E2%80%93Poiseuille_equation)
 assumption starts to fail and [Bernoulli’s
 equation](https://en.wikipedia.org/wiki/Bernoulli%27s_principle) with pressure
 as a function of velocity squared starts to dominate, which could explain why
-some people are seeing Kf increase with velocity.
+some people are seeing `Kf` increase with velocity.
 
 We will assume the back-pressure is a function of only the bead diameter,
-which is the track width, and is independent of the nozzle velocity. Note this
-could be very wrong, with faster speeds giving the bead less time to cool and
-harden, lowering the back-pressure, but we assume this for now. We also assume
-that the back-pressure for a given material and layer height is a linear
-function of the bead diameter. I could, and have, invent all sorts of
-rationalizations for this assumption but I'm basicly making stuff up so I
-won't include it here. We'll assume this for simplicity for now.
+which is the track width (and extrusion ratio), and is independent of the
+nozzle velocity. Note this could be very wrong, with faster speeds giving the
+bead less time to cool and harden, lowering the back-pressure, but we assume
+this for now. We also assume that the back-pressure for a given material and
+layer height is a linear function of the bead diameter. I could, and have,
+invent all sorts of rationalizations for this assumption but I'm basicly
+making stuff up so I won't include it here. We'll assume this for simplicity
+for now.
 
 The flow through the nozzle also requires pressure. Although I suspect that
 this should be Bernoulli’s equation, the existing PA model assumes
-Poiseuille’s equation, so for now we will assume Poiseuille’s law.
+Poiseuille’s equation, so for now we will too.
 
 This gives us;
 
@@ -270,6 +271,10 @@ This is the Linear Advance model with a constant offset, which so far appears
 to match what I've seen. Note the constant offset will vary as a function of
 the target track-width and probably layer height.
 
+Note in earlier work on this I included a `Cb` constant offset for the
+backpressure, but I've adbandoned it because it makes no difference to, and is
+impossible to distinguish from, additional `Re` retraction.
+
 To validate and calibrate this model we need to measure Pe to see how it
 varies with other variables. Measuring Pe can be done by pre-applying
 different Pe values with a restore before printing a line, and seeing which Pe
@@ -277,15 +282,112 @@ gives a good consistent line, or applying different retract values after a
 printed line has stabilized and seeing how much retraction is required to
 relieve the pressure.
 
-Note that at very low speeds Pn should be very small, so we can directly
-measure Pb, assuming it doesn't vary with speeds. At low speeds we should be
-able to get several start/stop cycles per line with different retract/restore
-distances.
+Note that at very low speeds `Pn` should be very small, so we can almost
+directly measure `Pb` without it being significantly impacted by `Pn`,
+assuming it doesn't vary with speeds. At low speeds we should be able to get
+several start/stop cycles per line with different retract/restore distances.
 
-1. Measure the Pb values to see how they vary with;
-  * print speed
-  * layer height
-  * track width
+### Backpressure Testing
+
+We need to measure the `Pb` values to see how they vary with;
+
+* print speeds: 20-100mm? 10mm? 1mm? Note higher speeds will also be
+  affected by `Kf` and nozzle flow rates, and it will be hard to separate these
+  affects. However, it's also very possible that print speeds affect `Pb` in
+  ways that cannot just be included with the linear `Kf` affects, and make `Pb`
+  not purely dependent on line width.
+
+* layer heights: Try values 0.1,0.2,0.3,0.4?
+
+* track widths: 0.3,0.4.0.5,0.6,0.7,0.8?
+
+Can we measure `Pb` on a single line using the RetractTest technique of doing
+a moving retraction and measuring the smear length? We need to make sure the
+test is run without `-P` so it doesn't pressure-compensate in the deceleration
+of the draw. The RetractTest1 results below show that the `vr` retracting-move
+speed will have an impact on the measurement. I think 10mm/s is probably a
+sweet spot between too fast to get a readable track and so slow it just drools
+forever. Any pressure too low to leave a track at 10mm/s can be considered
+zero. Note drool with an average thinkness of half a h=0.3 x w=0.4 x r=1.0 is
+about 0.025mm of filament per mm, and we should include that in the
+end-of-draw pressure.
+
+The other problem is should we try to measure the restore pressure needed to
+start the line? The StartStopTests measure restore and retract pressure by
+trying a range of retract/restore lengths so the ideal pressure can be found
+by picking the best line. Unfortunately this requires 10 lines to figure out
+the right pressure, instead of the single line the RetractTest uses.
+
+So I think we use a RetractTest to get the initial readings, and then maybe
+validate it with a StartStopTest.
+
+If we keep `ve` constant we can avoid nozzle flow rate variations. We can do
+this by varying the line dimensions while keeping the line area and print
+speed constant. We can also vary the line area and print speed to keep the
+extrusion rate constant.
+
+For all 4 tests we should use;
+
+* Use args `-Kf=0.4 -Kb=3.0 -Cb=0.0 -Re=1.0 -R`. These settings seem to be
+   pretty close and give good retract/restore pressure-handling to help ensure
+   there is no pressure accumulation artifacts between tests and give good
+   ruler/brim/etc results.
+
+* Change the RetractTest to include the StartStopTest initial line
+   prime/drain/restore steps to ensure the lines start without carryover
+   pressure artifacts from earlier tests and get a good line start without
+   `-P` enabled.
+
+* Extend the retraction distance to 40mm, removing the 20m move. The move was
+  originally added to ensure there was no deceleration at the end of the
+  retracting move to mess up the drool length measure. However, at 10mm/s the
+  deceleration is so short it's negilgable.
+
+* Only retract 4mm, making each 10mm of ooze be 1mm of retraction, noting that
+  each 10mm of line is also about 0.6*0.2*10/Fa=0.5mm of fillament, so
+  assuming the average ooze width is half that, each 10mm of ooze is about
+  1.25mm of total ooz+retract Pe.
+
+* Use a fixed ve where possible for the tests to avoid nozzle flow rate
+  differences.
+
+For the 4 tests use;
+
+1. Constant `vx`, constant `ve`, to test how `Pe` varies with `w` and `h`. We
+  expect `Pe` to vary linearly with `w`;
+
+  * w=(0.3,0.8) for 10 steps every 0.05mm width.
+  * h=0.09/w giving h=0.3 to 0.1125.
+  * vx=10mm/s
+  * ve=0.3*0.3*10/Fa = 0.3742mm/s.
+  * Expected Pn=0.1, Pb=0.9 to 2.4, Pe=1.0 to 2.5.
+
+1. Constant `w`, constant `ve` to test that `Pe` doesn't vary with `h` and
+  `vx`. We expect that `Pe` should be the same for all these lines;
+
+   * w=0.5
+   * h=(0.1,0.35) for 10 steps every 0.025mm.
+   * vx=3.5/h giving vx=10 to 35mm/s.
+   * ve=0.5*0.35*10/Fa = 0.7276mm/s.
+   * Expected Pn=0.3, Pb=1.5, Pe=1.8 mm for all tests.
+
+1. Constant `h`, constant `ve` to test how `Pe` varies with `w` and `vx`. We
+  expect `Pe` to vary linearly with `w`;
+
+   * w=(0.3,0.8) for 10 steps every 0.05mm width.
+   * h=0.2
+   * vx=8/w giving vx=26.7 to 10mm/s.
+   * ve=0.2*0.8*10/Fa = 0.6652mm/s
+   * Expected Pn=0.3, Pb=0.9 to 2.4, Pe=1.2 to 2.7 mm.
+
+1. Constant 'h', constant 'w' to test how `Pe` varies with `vx` and `ve`. We
+  expect `Pe` to increase linearly with `ve`.
+
+   * w=0.5
+   * h=0.2
+   * vx=(10,60) for 10 steps every 5mm/s
+   * ve=0.2*0.5/Fa*vx = 0.0416*vx giving ve=0.416 to 2.495 mm/s.
+   * Expected Pn=0.2 to 1.0, Pb=1.5, Pe=1.7 to 2.5 mm.
 
 
 ## Kf Calibration
@@ -514,7 +616,7 @@ This was a rough ad-hock test in the middle of testing if pending code changes
 worked or made sense. Appologies to future me for not keeping all the details
 better.
 
-![RetractTest1 image](RetractTest1.jpg "RetractTest1 image")
+![RetractTest1 -Kf=0.4 -Kb=3.0 -Re=1.0 result](RetractTest1.jpg "RetractTest1 result")
 
 This test was run with the default width changed to `w=0.4mm` so the lines are
 thinner;
@@ -523,23 +625,23 @@ thinner;
 ./gcodegen.py -Kf=0.4 -Kb=2.0 -Cb=0.0 -Re=1.0 -R -P > test.g
 ```
 
-The verbose version output for this is in
+The verbose commented version of gcode output for this is in
 [RetractTest1_Kf04_Kb20_Cb00_Re10_RPv.g](./RetractTest1_Kf04_Kb20_Cb00_Re10_RPv.g)
 
 Note that this does have `-P` pressure advance compensation on, and the `-v`
 version of the output shows it has split the draw's into acceleration and
-deceleration phases with estimates for the pressure at each stage. I'm also
-using -Cb=0.0 because it's increasingly obvious that in the pressure advance
-calculations this just becomes a fixed offset identical to having a larger
-`-Re` because it never "oozes" away according to the model.
+deceleration phases for fast draws with estimates for the pressure at each
+stage. I'm also using -Cb=0.0 because it's increasingly obvious that in the
+pressure advance calculations this just becomes a fixed offset identical to
+having a larger `-Re` because it never "oozes" away according to the model.
 
 This test consisted of the following phases;
 
 * 5mm@5mm/s: warmup draw.
-* 40mm@<vx>mm/s: draw to build pressure at the test speed.
-* 20mm@<vr>mm/s: move while retracting <re>mm.
-* 20mm@<vr>mm/s: move to allow for deceleration.
-* 0mm@0mm/s: restore <re>mm at <ve>mm/s.
+* 40mm@`vx` mm/s: draw to build pressure at the test speed.
+* 20mm@`vr` mm/s: move while retracting `re` mm.
+* 20mm@`vr` mm/s: move to allow for deceleration.
+* 0mm@0mm/s: restore `re` mm at `ve` mm/s.
 * 5mm@5mm/s: cooldown draw.
 
 There were three tests done;
@@ -547,9 +649,11 @@ There were three tests done;
 1. vx and vr both = 20-100mm/s with re=8mm. The idea was the draw and
 retracting move are both at the same speed to minimize acceleration affects
 during the transition.
+
 1. vx=20-100mm/s, vr=10mm/s, re=8mm. The idea was to use a slower speed for
 the moving retract to get a more accurate read on the amount of retraction
 needed.
+
 1. vx=1-10mm/s, vr=1mm/s, re=4mm. This was to try and get a better reading for
 very low speeds.
 
@@ -685,6 +789,104 @@ still much better than not doing any pressure advance compensation.
 A spreadsheet comparing firmware vs gcode vs no pressure advance is at;
 
 https://docs.google.com/spreadsheets/d/1lqm9OUPRjJmuuPAP1AJQVks3GbTPaaQwL20jl9914gg/edit?usp=sharing
+
+### RetractTest2
+
+This was a more thorough test to see how pressure varied with different
+parameters as documented under <#backpressure-testing>.
+
+![RetractTest2 -Kf=0.4 -Kb=3.0 -Re=1.0 result](RetractTest2.jpg "RetractTest2 result")
+
+This `gcodegen.py` was changed to have the following defaults for ASA filament;
+
+* -Te=245: Extruder temperature.
+* -Tp=100: Platform temperature.
+* -Fe=0.0: Extruder fan speed between 0.0 to 1.0.
+* -Fc=0.0: Case fan speed between 0.0 to 1.0.
+* -Kf=0.4: Linear Advance factor between 0.0 to 4.0 in mm/mm/s.
+* -Kb=2.0: Bead backpressure factor between 0.0 to 10.0 in mm/mm.
+* -Cb=0.0: Bead backpressure offset between -5.0 to 5.0 in mm.
+* -Re=1.0: Retraction distance between 0.0 to 10.0 in mm.
+* -Vp=50: Base printing speed in mm/s.
+* -Vt=10: Base travel speed in mm/s.
+* -Vz=7: Base raise/lower speed in mm/s.
+* -Ve=4: Base retract speed in mm/s.
+* -Vb=30: Base restore speed in mm/s.
+* -Lh=0.3: Layer height `h` in mm.
+* -Lw=0.4: Line width `w` in mm.
+* -Lr=1.0: Line extrusion ratio `r` between 0.0 to 10.0.
+
+And was run with these arguments;
+
+```bash
+./gcodegen.py -Kf=0.4 -Kb=2.0 -Cb=0.0 -Re=1.0 -R -P >RetractTest2_Kf04_Kb30_Cb00_Re10_R.g
+```
+
+The verbose commented version of gcode output for this is in
+<./RetractTest2_Kf04_Kb30_Cb00_Re10_Rv.g>
+
+Some observations;
+
+1. The really thin layer h=0.1 tests it looks like the nozzle was pressed
+  against the bed+glue and barely extruded anything. This suggests actual
+  line heights are less than targeted.
+
+1. The 5mm@1mm/s warmup draw looks heavily over-extruded, and it appears to be
+  worse for increasing widths and seems unaffected by `vx`, `ve`, or `h`. This
+  suggest Kb=3.0 is too high. There is excessive restore before this draw,
+  with the verbose gcode saying test1 line1's restore of de=1.9239 to
+  pe=0.9172, db=0.26 has vn=0.2377, with the @1mm/s draw only needing
+  vn=0.0374, but this high `vn` is an artifact of the restore being fast and
+  still oozing afterwards. This large restore is all due to Kb, with
+  Pb=Kb*w=3.0*0.3=0.9mm. The line widths are about 3x wider than they should
+  be, suggesting Kb=1.0 would be better.
+
+1. The 5mm@5mm/s cooldown draws all look mostly OK, though the thin layers
+  struggled a bit.
+
+1. The test 4 draw lines look under-extruded and it was worse as vx increased.
+  This suggests Kf=0.4 is too low. The retract lines have l=20 to 30mm or
+  Pe=2.0 to 3.0mm for ve=0.4158 to 2.4945mm/s. Note the estimated (and
+  probably actually applied and isufficient) pressures were were Pe=1.66 to
+  2.35. I'm guessing the old Kf=0.8 would be better?
+
+1. The test 1 retraction lines do show that pressure increased with w, mabye
+  linearly with the following values, but it's a bit hard to read and could
+  be +-5mm. My impression is the stringing effect makes them look longer than
+  they should be. Note for all lines ve=0.3742 giving Pn=Kf*ve=0.15mm, but
+  note that Kf=0.4 appears to be an underestimate so it's probably more like
+  Kf=0.8 or Pn=0.3. Note this gives roughly dPe=1.5 for dw=0.5, for Kb=3.0,
+  but with Cb=0.5 of constant offset. This contradicts the observation in
+  point 2 above that Kb=3.0 looks too high for the @1mm/sec warmup lines. I
+  suspect this RetractTest approach to measuring pressure is over-estimating
+  Pe by anywhere between 0.5mm to 1.5mm;
+
+  * w=0.3 l=18mm, Pe=1.8mm, Pb=1.5 (estimated Pe=1.0507, Pb=0.9)
+  * w=0.4 l=20mm, Pe=2.0mm, Pb=1.8 (estimated Pe=1.3521, Pb=1.2)
+  * w=0.5 l=24mm, Pe=2.4mm, Pb=2.1 (estimated Pe=1.6539, Pb=1.6)
+  * w=0.6 l=28mm, Pe=2.8mm, Pb=2.5 (estimated Pe=1.9559, Pb=1.8)
+  * w=0.7 l=30mm, Pe=3.0mm, Pb=2.7 (estimated Pe=2.2580, Pb=2.1)
+  * w=0.8 l=32mm, Pe=3.2mm, Pb=2.9 (estimated Pe=2.5603, Pb=2.4)
+
+1. The test2 retraction lines do seem to show that pressure was pretty constant for
+constant w. However, looking at the gcode logging suggests something was wrong
+with this test as the `ve` values are different for each line. However, looking
+closer this is an artifact of the logged `ve` being for the speed at the end of
+the line after deceleration. The results are about l=35mm or Pe=3.5mm with
+estimated Pn=0.3, giving Pb=3.2mm compared to the estimated. For some reason
+this is way higher than for test 1. Also note the restores were all about
+1.8mm and the lines all look OK except maybe a bit under-extruded for the
+faster lines (Kf too low). Is the line length highly variable with
+bed-adhesion varying with the glue thickness? I suspect Pe is closer to the
+restore values of about 1.8mm.
+
+These tests do seem to have mostly validated the theory that backpressure is
+just a function of bead diameter (AKA `w`) and independent of `h` and `vx`.
+They haven't given us very good data for estimating Kf or Kb though. The drool
+test for measuring pressure doesn't seem to be very accurate.  It does seem to
+show Kf=0.4 is too low and Kb=3.0 is too high.
+
+Maybe time to just jump to some PA tests around the values Kf=0.8, Kb=1.0
 
 # FlashPrint Settings.
 
