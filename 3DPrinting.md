@@ -10,10 +10,10 @@ A printer with 500mm/s^2 acceleration can go from 0 to 100mm/s in 0.2s over
 
 Note that diameter 0.4mm nozzle vs 1.75mm filament means that extruding
 `de=1mm` of filament translates to nearly 20mm of nozzle thread. For layer
-h=0.2mm with line w=0.4mm for 0.2x0.4mm line areas, de=1mm is 30mm of printed
-line. For layer 0.1x0.4mm lines lines it is 60mm, and for 0.3x0.4mm it's 20mm.
-So line print velocity `vl` is between 20x to 60x, or typically 30x, extruder
-velocity `ve`.
+`h=0.2mm` with line `w=0.4mm` for 0.2x0.4mm line areas, `de=1mm` is 30mm of
+printed line. For layer 0.1x0.4mm lines lines it is 60mm, and for 0.3x0.4mm
+it's 20mm. So line print velocity `vl` is between 20x to 60x, or typically
+30x, extruder velocity `ve`.
 
 ## Linear Advance
 
@@ -21,20 +21,20 @@ Linear Advance or Pressure Advance is mm of extrusion advance per mm/s of
 filament extrusion speed, and has typical values in the range 0.0-2.0. Note
 that 100mm/s print speed for a 0.3x0.4 lines using 1.75mm diameter filament is
 12mm^3/s or 5mm/s filament rate. This suggests the advance could get as high
-as 10mm, or 200mm of track!
+as 10mm, or 200mm of line!
 
 This means 5mm of uncompensated pressure advance translates to more 100mm of
 line smear or stringing.
 
 Linear advance assumes flow rate out the nozzle is linear with pressure, and
-pressure is linear with `r` extrusion advance of filament (how many mm of
+pressure is linear with `pe` extrusion advance of filament (how many mm of
 filament the extruder has pushed that has not yet come out the nozzle and is
 compressed filament). This is based on assuming the filament and boden tube
 between the extruder and nozzle behaves like a spring with force linear with
 compression distance as per [Hooke's
 law](https://en.wikipedia.org/wiki/Hooke%27s_law), and nozzle flow rate is
 linear with pressure in the nozzle as per [Poiseuille's
-law)[https://en.wikipedia.org/wiki/Poiseuille_law]. The filament force divided
+law)(https://en.wikipedia.org/wiki/Poiseuille_law). The filament force divided
 by filament cross-section area (nozzle input area) is the pressure in the
 nozzle, so nozzle flow is linear with filament compression distance, or the
 extruder advance distance. See this for some thoughts on these assumptions;
@@ -64,7 +64,7 @@ nozzle as a function of advance `pe`;
 
 ```python
   pe = Kf * dn/dt
-  dn/dt = pe * 1/Kf
+  dn/dt = pe/Kf
 ```
 
 The rate of change in `pe` is `dpe/dt` and is equal to the flow rate in the
@@ -72,7 +72,7 @@ extruder minus the flow rate out the nozzle;
 
 ```python
   dpe/dt = de/dt - dn/dt
-        = de/dt - pe * 1/Kf
+        = de/dt - pe/Kf
 ```
 
 Which gives us the change in `pe` of `dpe` over time `dt`;
@@ -132,19 +132,19 @@ varies with pressure, it becomes pretty clear that what retraction actually
 does is relieve the accumulated advance pressure, and even more importantly,
 restore re-applys that pressure! This means when you print at constant speed,
 the advance pressure initially starts low giving under-extruded lines, but
-builds up over the Kt timeconstant duration to give the right extrusion rate.
-When the printer stops and retracts, it quickly relieves that pressure so it
-can move without extruding, and when it restores, it re-applys that pressure
-so the printer is ready to print at the previous speed without under-extruding
-at the start.
+builds up over the `Kf` timeconstant duration to give the right extrusion
+rate. When the printer stops and retracts, it quickly relieves that pressure
+so it can move without extruding, and when it restores, it re-applys that
+pressure so the printer is ready to print at the previous speed without
+under-extruding at the start.
 
 What this means is the ideal retraction distance is the accumulated pressure
 advance distance. If the printer implements linear advance, and it is
 implemented and tuned perfectly, this means you shouldn't need any retraction
 or restore at all, but perhaps a tiny token amount to compensate for tiny
-miss-calibration errors would be wise. However, if the printer doesn't
-implement linear advance, then the ideal retraction distance depends on the
-previous extrusion speed, and the ideal restore distance depends on the
+miss-calibration errors and backlash would be wise. However, if the printer
+doesn't implement linear advance, then the ideal retraction distance depends
+on the previous extrusion speed, and the ideal restore distance depends on the
 **next** extrusion speed.
 
 If the printer always printed at constant extrusion rates, using a constant
@@ -174,7 +174,7 @@ previous/next extrusion rates. This would probably fix my clip print.
 
 ## Print Layer BackPressure
 
-After playing around with trying to figure out the Kf value for my Adv3
+After playing around with trying to figure out the `Kf` value for my Adv3
 printer, it's become apparent that the simple linear advance model is
 insufficient to accurately reflect the real nozzle flow characteristics. It
 seems the relationship between nozzle flow rate and advance pressure is not
@@ -182,9 +182,9 @@ linear. This is also discussed in various places online like;
 
 https://klipper.discourse.group/t/modification-of-pressure-advance-for-high-speed-bowden-printers/13053/26
 
-The reported experiences vary, with some reporting Kf seems to drop with
+The reported experiences vary, with some reporting `Kf` seems to drop with
 increasing velocity, and others that it increases. In the speed ranges
-possible with the Adv3 it seems Kf drops with increasing velocity.
+possible with the Adv3 it seems `Kf` drops with increasing velocity.
 
 After much fiddling around and experimenting, I've formed a theory that this
 is because extruding against the print surface generates back pressure. The
@@ -206,7 +206,7 @@ increases because the smearing bead has less time to cool and will flow
 better, but i’m not sure how much difference that would make. I don’t think
 the bead cools much under the nozzle at even super slow speeds. that is
 relieved by moving the print head, smearing the bead away. This would explain
-why Kf appears to decrease with velocity.
+why `Kf` appears to decrease with velocity.
 
 At even higher speeds I suspect the linear [Poiseuille's
 equation](https://en.wikipedia.org/wiki/Hagen%E2%80%93Poiseuille_equation)
@@ -259,26 +259,26 @@ Where:
   v is the nozzle velocity in mm/s
 ```
 
-Note for a constant track width at steady state where extruder velocity `ve` equals
-nozzle flow velocity `nv` we get;
+Note for a constant track width at steady state where extruder velocity `ve`
+equals nozzle flow velocity `nv` we get;
 
 ```python
   Pe = Kf*ve + Cf
   Cf = Kb*Db
 ```
 
-This is the Linear Advance model with a constant offset, which so far appears
-to match what I've seen. Note the constant offset will vary as a function of
-the target track-width and probably layer height.
+This is a Linear Advance model with a constant offset that depends on the line
+width (and material, and nozzle temp, and ...), which so far appears to match
+what I've seen.
 
 Note in earlier work on this I included a `Cb` constant offset for the
 backpressure, but I've adbandoned it because it makes no difference to, and is
 impossible to distinguish from, additional `Re` retraction.
 
-To validate and calibrate this model we need to measure Pe to see how it
-varies with other variables. Measuring Pe can be done by pre-applying
-different Pe values with a restore before printing a line, and seeing which Pe
-gives a good consistent line, or applying different retract values after a
+To validate and calibrate this model we need to measure `Pe` to see how it
+varies with other variables. Measuring `Pe` can be done by pre-applying
+different `Pe` values with a restore before printing a line, and seeing which
+Pe gives a good consistent line, or applying different retract values after a
 printed line has stabilized and seeing how much retraction is required to
 relieve the pressure.
 
@@ -296,9 +296,7 @@ We need to measure the `Pb` values to see how they vary with;
   affects. However, it's also very possible that print speeds affect `Pb` in
   ways that cannot just be included with the linear `Kf` affects, and make `Pb`
   not purely dependent on line width.
-
 * layer heights: Try values 0.1,0.2,0.3,0.4?
-
 * track widths: 0.3,0.4.0.5,0.6,0.7,0.8?
 
 Can we measure `Pb` on a single line using the RetractTest technique of doing
@@ -344,7 +342,7 @@ For all 4 tests we should use;
   deceleration is so short it's negilgable.
 
 * Only retract 4mm, making each 10mm of ooze be 1mm of retraction, noting that
-  each 10mm of line is also about 0.6*0.2*10/Fa=0.5mm of fillament, so
+  each 10mm of line is also about `0.6*0.2*10/Fa=0.5mm` of fillament, so
   assuming the average ooze width is half that, each 10mm of ooze is about
   1.25mm of total ooz+retract Pe.
 
@@ -389,6 +387,7 @@ For the 4 tests use;
    * ve=0.2*0.5/Fa*vx = 0.0416*vx giving ve=0.416 to 2.495 mm/s.
    * Expected Pn=0.2 to 1.0, Pb=1.5, Pe=1.7 to 2.5 mm.
 
+The results of this are in [Retracttest2](#RetractTest2) below.
 
 ## Kf Calibration
 
@@ -403,7 +402,7 @@ looks like this.
 ![StartStopTest1 -Kf=1 -Re=1 Result Annotated](StartStopTest1A.jpg "StartStopTest1 Result")
 
 The commented version of gcode output for this is in
-<./StartStopTest1_Kf1_Re1.g>.
+[StartStopTest1_Kf1_Re1.g](./StartStopTest1_Kf1_Re1.g).
 
 Each test line has the following sequence (blue markers);
 
@@ -431,7 +430,7 @@ pressure required for drawing at the fast line speed. It is slightly reduced
 from the full estimated pressure to try and account for the acceleration time.
 This will produce an initial blob, but the line should be at the right
 thickness after the acceleration is finished (about 3.6mm for 60mm/s, or 10mm
-for 100mm/s). If the line is too thin, Kf is too low. Too thick, Kf is too high.
+for 100mm/s). If the line is too thin, `Kf` is too low. Too thick, `Kf` is too high.
 
 3. Retract after drawing fast line. There may be a bit of a blob, particularly
 for fast draw speeds, from leakage before the retraction is done, but there
@@ -442,47 +441,47 @@ might be too high.
 4. Restore for drawing slow line after retracting for fast line. This should
 show if the end of the fast line over-retracted, with some of the retraction
 for relieving pressure actually withdrawing up the nozzle. A thin or missing
-start means the fast-line over-retracted so Kf should be reduced.
+start means the fast-line over-retracted so `Kf` should be reduced.
 
 There are 4 different tests (yellow markers) for seeing how things vary with
-different parameters. The things varied are the Kf values used for estimating
+different parameters. The things varied are the `Kf` values used for estimating
 pressure, the vx fast line speed, and the le amount of extra retraction on top
 of the pressure relief retraction.
 
-1. See how it varies with Kf. Kf goes from 0.0 to 2.0 with each line
+1. See how it varies with Kf. `Kf` goes from 0.0 to 2.0 with each line
 increasing by 0.2. vx is 60mm/s and le is 0mm.
 
 2. See how it varies with speed. vx goes from 20mm/s to 100mm/s with each line
-increasing by 8mm/s. Kf is 1.0 and le is 0.0.
+increasing by 8mm/s. `Kf` is 1.0 and le is 0.0.
 
 3. Same as 2 except with Kf=1.5.
 
 4. See how it varies with additional retraction. le goes from 0.0mm to 4.0mm
-with each line increasing by 0.4mm. Kf is 1.0 and vx is 60mm/s.
+with each line increasing by 0.4mm. `Kf` is 1.0 and vx is 60mm/s.
 
 The results have the following interesting points (red markers).
 
-1. Low Kf shows under-restore before fast line as expected.
+1. Low `Kf` shows under-restore before fast line as expected.
 
-2. High Kf shows over-restore before fast line as expected.
+2. High `Kf` shows over-restore before fast line as expected.
 
-3. Low Kf shows under-retract after fast line as expected.
+3. Low `Kf` shows under-retract after fast line as expected.
 
-4. High Kf shows sufficient retraction for fast line as expected.
+4. High `Kf` shows sufficient retraction for fast line as expected.
 
-5. For the slow line start, low Kf shows no sign of the restore even though
+5. For the slow line start, low `Kf` shows no sign of the restore even though
 drool before it shows there was still residual pressure in the nozzle! This
 suggests there must be some backlash, and it is more than the estimated
 restore pressure, even for Kf=1.0, which was 0.6339mm!
 
-6. At high Kf the slow line doesn't render at all, showing the fast-line
+6. At high `Kf` the slow line doesn't render at all, showing the fast-line
 definitely over-retracted, though the backlash would make this appear worse
 than it probably is.
 
 7. For a fixed Kf=1.0 the fast line start shows increasing over-restore as
 velocity increases. This might be Kf=1.0 is too high and this over-restore
 becomes more visible at higher speeds. It could be pressure as a function of
-extruder speed is actually sub-linear so Kf needs to be reduced at higher
+extruder speed is actually sub-linear so `Kf` needs to be reduced at higher
 speeds. Move likely it is the blob-during-acceleration artifact because the
 line width after acceleration is over is pretty consistent between them all.
 This gets much worse at higher velocities because the pressure, restore time,
@@ -491,13 +490,13 @@ before it, so it would be unaffected by any backlash.
 
 8. For a fixed Kf=1.0 the fast line end shows increasing under-retraction at
 lower speeds that almost goes away at higher speeds. This could be that
-pressure advance might be non-linear and we need lower Kf values at higher
+pressure advance might be non-linear and we need lower `Kf` values at higher
 speeds. It could also be there is a constant offset pressure Kc. This would be
 a minimum pressure to extrude that is needed to overcome
 [friction](https://en.wikipedia.org/wiki/Friction). Note that friction forces
 are normally fixed and independent of velocity like this. That this reduces
 with higher speeds suggests Kf=1.0 is too high and could be lowered after
-adding a Kc offset. Note reducing Kf and adding Kc would also improve the
+adding a Kc offset. Note reducing `Kf` and adding Kc would also improve the
 artifacts in point 7.
 
 9. Adding a bit of extra retraction improves both the fast-line
@@ -540,7 +539,7 @@ Kc + Be = 1.5mm
 
 So it looks like the following settings would be about right;
 
-* Kf = 0.85
+* `Kf` = 0.85
 * Kc + Be = le = 1.5mm
 * Kb = 0.6 -> 1.2mm
 * Kc = 0.3 -> 0.8mm
@@ -550,7 +549,7 @@ So it looks like the following settings would be about right;
 ![StartStopTest2 Result](StartStopTest2.jpg "StartStopTest2 Result")
 
 The commented version of gcode output for this is in
-<./StartStopTest2_Kf085_Re15.g>.
+[StartStopTest2_Kf085_Re15.g](./StartStopTest2_Kf085_Re15.g).
 
 Second test points;
 
@@ -757,7 +756,7 @@ speeds this doesn't tend to happen, as the bead has enough time to reach the
 bed and/or the speeds are slow enough to not snap the strings leaving them to
 settle like a thin trail. At slow speeds the thin drool-trail can even suggest
 pressure long after it has gone as the previously accumulated bead gets
-stretched into a long string. This suggests the real Pe values for this and the
+stretched into a long string. This suggests the real `Pe` values for this and the
 previous test are closer to this;
    ```python
    >>> h = 0.5  # low-speed drool was fatter
@@ -801,7 +800,7 @@ https://docs.google.com/spreadsheets/d/1lqm9OUPRjJmuuPAP1AJQVks3GbTPaaQwL20jl991
 ### RetractTest2
 
 This was a more thorough test to see how pressure varied with different
-parameters as documented under <#backpressure-testing>.
+parameters as documented under [#backpressure-testing](#backpressure-testing).
 
 ![RetractTest2 -Kf=0.4 -Kb=3.0 -Re=1.0 result](RetractTest2.jpg "RetractTest2 result")
 
@@ -831,7 +830,7 @@ And was run with these arguments;
 ```
 
 The verbose commented version of gcode output for this is in
-<./RetractTest2_Kf04_Kb30_Cb00_Re10_Rv.g>
+[RetractTest2_Kf04_Kb30_Cb00_Re10_Rv.g](./RetractTest2_Kf04_Kb30_Cb00_Re10_Rv.g)
 
 Note the test phases are;
 
@@ -877,7 +876,7 @@ Some observations;
   but with Cb=0.5 of constant offset. This contradicts the observation in
   point 2 above that Kb=3.0 looks too high for the @1mm/sec warmup lines. I
   suspect this RetractTest approach to measuring pressure is over-estimating
-  Pe by anywhere between 0.5mm to 1.5mm;
+  `Pe` by anywhere between 0.5mm to 1.5mm;
 
   * w=0.3 l=18mm, Pe=1.8mm, Pb=1.5 (estimated Pe=1.0507, Pb=0.9)
   * w=0.4 l=20mm, Pe=2.0mm, Pb=1.8 (estimated Pe=1.3521, Pb=1.2)
@@ -895,12 +894,12 @@ estimated Pn=0.3, giving Pb=3.2mm compared to the estimated. For some reason
 this is way higher than for test 1. Also note the restores were all about
 1.8mm and the lines all look OK except maybe a bit under-extruded for the
 faster lines (Kf too low). Is the line length highly variable with
-bed-adhesion varying with the glue thickness? I suspect Pe is closer to the
+bed-adhesion varying with the glue thickness? I suspect `Pe` is closer to the
 restore values of about 1.8mm.
 
 These tests do seem to have mostly validated the theory that backpressure is
 just a function of bead diameter (AKA `w`) and independent of `h` and `vx`.
-They haven't given us very good data for estimating Kf or Kb though. The drool
+They haven't given us very good data for estimating `Kf` or Kb though. The drool
 test for measuring pressure doesn't seem to be very accurate.  It does seem to
 show Kf=0.4 is too low and Kb=3.0 is too high.
 
@@ -915,7 +914,7 @@ un-compensated backlash.
 ![StartStopTest3 Result](StartStopTest3.jpg "StartStopTest3 Result")
 
 The commented version of gcode output for this is in
-<./StartStopTest3_Kf08_Kb10_Re10_Lh03_Lw05_Rv.g>.
+[StartStopTest3_Kf08_Kb10_Re10_Lh03_Lw05_Rv.g](./StartStopTest3_Kf08_Kb10_Re10_Lh03_Lw05_Rv.g).
 
 
 # FlashPrint Settings.
