@@ -400,7 +400,7 @@ Kf value, and scales the retract/restore actions to relieve/preapply the
 necessary pressure advance based on the prev/next commands. The printed result
 looks like this.
 
-![StartStopTest -Kf=1 -Re=1 Output Annotated](StartStopTest_Kf1_Re1_A1.jpg "StartStop Test Output")
+![StartStopTest -Kf=1 -Re=1 Result Annotated](StartStopTest1A.jpg "StartStop Test Output")
 
 Each test line has the following sequence (blue markers);
 
