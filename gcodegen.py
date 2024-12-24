@@ -543,9 +543,9 @@ class Move(MoveBase):
 
   def __new__(cls, *args, **kwargs):
     """ Make v0 and v1 default to v for moves and 0.0 for non-moves. """
-    # Round all arguments to 4 decimal places to clean out fp errors.
-    args = tuple(round(a,4) for a in args)
-    kwargs = {k:round(v,4) for k,v in kwargs.items()}
+    # Round all arguments to 6 decimal places to clean out fp errors.
+    args = tuple(round(a,6) for a in args)
+    kwargs = {k:round(v,6) for k,v in kwargs.items()}
     m = super().__new__(cls, *args, **kwargs)
     assert 0 <= m.v <= cls.Vp
     assert m.v0 is None or 0 <= m.v0 <= m.v
@@ -871,7 +871,7 @@ M18
       Vp=None, Vt=None, Vz=None, Ve=None, Vb=None,
       h=None, w=None, r=1.0):
     if n is None: n = self.layer.n + 1 if self.layer else 0
-    if z is None: z = self.layer.z + self.layer.h if self.layer.n else 0.0
+    if z is None: z = self.layer.z + self.layer.h if self.layer and self.layer.n else 0.0
     l = Layer(
         n, z,
         Vp or self.Vp,
@@ -1663,7 +1663,7 @@ def GCodeGenArgs(cmdline):
       help='Bead backpressure offset between -5.0 to 5.0 in mm.')
   cmdline.add_argument('-Re', type=RangeType(0.0,10.0), default=1.0,
       help='Retraction distance between 0.0 to 10.0 in mm.')
-  cmdline.add_argument('-Vp', type=RangeType(5,100), default=50,
+  cmdline.add_argument('-Vp', type=RangeType(5,100), default=60,
       help='Base printing speed in mm/s.')
   cmdline.add_argument('-Vt', type=RangeType(5,100), default=100,
       help='Base travel speed in mm/s.')
@@ -1716,10 +1716,10 @@ if __name__ == '__main__':
     dict(vx=(1,10),vr=1,re=4.0)))
 
   startstopargs=dict(name="StartStop", linefn=gen.testStartStop, tests=(
-    dict(Kf=(0.0,1.0), Kb=1.0, Re=0.5, vx=60, re=0.0),
-    dict(Kf=0.8, Kb=(0.0,2.0), Re=0.5, vx=60, re=0.0),
-    dict(Kf=0.8, Kb=1.0, Re=(0.0,1.0), vx=60, re=0.0),
-    dict(Kf=0.8, Kb=1.0, Re=0.5, vx=(20,100), re=0.0)))
+    dict(Kf=(0.0,2.0), Kb=2.0, Re=1.5, vx=60, re=0.0),
+    dict(Kf=1.0, Kb=(0.0,4.0), Re=1.5, vx=60, re=0.0),
+    dict(Kf=1.0, Kb=2.0, Re=(0.0,3.0), vx=60, re=0.0),
+    dict(Kf=1.0, Kb=2.0, Re=1.5, vx=(20,100), re=0.0)))
 
   gen.startFile()
   gen.doTests(n=args.n, **startstopargs)

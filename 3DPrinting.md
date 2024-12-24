@@ -933,6 +933,67 @@ have lowered retract/restore speeds. We can see in the gcode this test used
 retract/restore distances of `de=1.9671` compared to `de=2.3919` in
 #RetractTest2.
 
+
+### StartStopTestPLA1
+
+I had to switch fillaments to PLA for a different print, and while it was
+there I thought I'd run some of these tests with it.
+
+![StartStopTestPLA1 Result](StartStopTestPLA1.jpg "StartStopTestPLA1 Result")
+
+The commented version of gcode output for this is in
+[StartStopTestPLA1_Kf10_Kb20_Re10_RPv.g](./StartStopTestPLA1_Kf10_Kb20_Re10_RPv.g).
+
+And was run with these arguments;
+
+```bash
+./gcodegen.py -Te 210 -Tp 50 -Fe 1.0 -Fc 1.0 -Kf 1.0 -Kb 2.0 -Re 1.0 -R -P >StartStopTestPLA1_Kf10_Kb20_Re10_RP.g
+```
+
+It's a bit of a mess and mostly shows these settings are not good. In
+particular the `-P` support as it's currently implemented has the following
+problems;
+
+1. It's incompatible with the StartStopTest which includes a slow moving
+  restore at the end to try and determine the amount of over-retraction.
+  Dynamic extrusion interprets as a literal draw request that needs
+  significant Pe adjustment, which messes it up.
+
+1. There is significant over-extrusion at the end-of-acceleration and
+  start-of-deceleration transition, and under-extrusion at the start of
+  acceleration and end of deceleration phases. Part of this is because dynamic
+  extrusion in gcode aproximates the ideal firmware solution, but I think the
+  worst of it is because the model used doesn't include extruder acceleration
+  limits. I believe the extreme extruder velocity changes at these transitions
+  make the printer slow down the nozzle to match the extruder speed while it
+  accelerates at it's limits. This slowdown while Pe is high causes the
+  overextrusion.
+
+### StartStopTestPLA2
+
+This was a quick attempt to do the previous test again with `-P` turned off
+and retraction turned up a bit to try and reduce the stringing.
+
+![StartStopTestPLA2 Result](StartStopTestPLA2.jpg "StartStopTestPLA2 Result")
+
+The commented version of gcode output for this is in
+[StartStopTestPLA2_Kf10_Kb20_Re15_RPv.g](./StartStopTestPLA2_Kf10_Kb20_Re15_RPv.g).
+
+```bash
+./gcodegen.py -Te 210 -Tp 50 -Fe 1.0 -Fc 1.0 -Kf 1.0 -Kb 2.0 -Re 1.5 -R >StartStopTestPLA2_Kf10_Kb20_Re15_R.g
+```
+
+There is still a lot of stringing. The retract and slo restore at the end seem
+to show nearly zero difference between any of the tests. There is long
+stringing with nearly zero sign the slow restore did anything. The only test
+that maybe shows the slow restore kicking in is the first two lines of the
+first test, with Kf=0.0 and Kf=0.2. I believe this is largely that the Re=1.5
+means a big retraction that simply cannot be slow retored at this tests
+restore rate. We only restore 1.5mm in the slow restore which only covers the
+Re=1.5mm, so we only see the slow restore start to make a differene if the
+retraction amount needed was over-estimated.
+
+
 # FlashPrint Settings.
 
 ## FlashPrint v5.8.0
