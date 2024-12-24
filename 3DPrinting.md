@@ -541,7 +541,7 @@ So it looks like the following settings would be about right;
 
 * `Kf` = 0.85
 * Kc + Be = le = 1.5mm
-* Kb = 0.6 -> 1.2mm
+* Be = 0.6 -> 1.2mm
 * Kc = 0.3 -> 0.8mm
 
 ### StartStopTest2
@@ -916,6 +916,22 @@ un-compensated backlash.
 The commented version of gcode output for this is in
 [StartStopTest3_Kf08_Kb10_Re10_Lh03_Lw05_Rv.g](./StartStopTest3_Kf08_Kb10_Re10_Lh03_Lw05_Rv.g).
 
+#### Observations
+
+1. The ruler lines are really messy, particularly when compared to earlier
+tests, suggesting the settings `-Kf-0.8 -Kb=1.0
+-Re=1.0` are not good. The marker lines are missing their ends. Note their
+starts are on the ruler line so they start on top of an existing line with
+effectively zero height, but they seem to fail to draw. They get a bit better
+after the first test, but note these are drawn after the heavily
+over-extruded cooldown draws on the previous test, so they probably have
+higher pressures, and instead exhibit some under-retraction and stringing.
+The big difference between this and the previous #RetractTest2 that had good
+rulers was `Kf` was increased 0.4 to 0.8, and `Kb` was decreased from 2.0 to
+1.0. Note these lines are drawn at a very slow 10mm/s, so this overall would
+have lowered retract/restore speeds. We can see in the gcode this test used
+retract/restore distances of `de=1.9671` compared to `de=2.3919` in
+#RetractTest2.
 
 # FlashPrint Settings.
 
