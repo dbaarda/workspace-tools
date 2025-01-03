@@ -857,6 +857,11 @@ Some observations;
   still oozing afterwards. This large restore is all due to Kb, with
   Pb=Kb*w=3.0*0.3=0.9mm. The line widths are about 3x wider than they should
   be, suggesting Kb=1.0 would be better.
+  **UPDATE:** I think the backpressure changes at very very slow 1mm/s speeds.
+  At these speeds the nozzle is moving slow enough that heat can conduct
+  through to heat the print surface and re-melt the bead, lowering the
+  backpressure. I think 5mm/sec is a minimum for the simple "backpressure
+  linear with bead-diameter" model to be reliable.
 
 1. The 5mm@5mm/s cooldown draws all look mostly OK, though the thin layers
   struggled a bit.
@@ -878,30 +883,40 @@ Some observations;
   suspect this RetractTest approach to measuring pressure is over-estimating
   `Pe` by anywhere between 0.5mm to 1.5mm;
 
-  * w=0.3 l=18mm, Pe=1.8mm, Pb=1.5 (estimated Pe=1.0507, Pb=0.9)
-  * w=0.4 l=20mm, Pe=2.0mm, Pb=1.8 (estimated Pe=1.3521, Pb=1.2)
-  * w=0.5 l=24mm, Pe=2.4mm, Pb=2.1 (estimated Pe=1.6539, Pb=1.6)
-  * w=0.6 l=28mm, Pe=2.8mm, Pb=2.5 (estimated Pe=1.9559, Pb=1.8)
-  * w=0.7 l=30mm, Pe=3.0mm, Pb=2.7 (estimated Pe=2.2580, Pb=2.1)
-  * w=0.8 l=32mm, Pe=3.2mm, Pb=2.9 (estimated Pe=2.5603, Pb=2.4)
+   * w=0.3 l=18mm, Pe=1.8mm, Pb=1.5 (estimated Pe=1.0507, Pb=0.9)
+   * w=0.4 l=20mm, Pe=2.0mm, Pb=1.8 (estimated Pe=1.3521, Pb=1.2)
+   * w=0.5 l=24mm, Pe=2.4mm, Pb=2.1 (estimated Pe=1.6539, Pb=1.6)
+   * w=0.6 l=28mm, Pe=2.8mm, Pb=2.5 (estimated Pe=1.9559, Pb=1.8)
+   * w=0.7 l=30mm, Pe=3.0mm, Pb=2.7 (estimated Pe=2.2580, Pb=2.1)
+   * w=0.8 l=32mm, Pe=3.2mm, Pb=2.9 (estimated Pe=2.5603, Pb=2.4)
 
-1. The test2 retraction lines do seem to show that pressure was pretty constant for
-constant w. However, looking at the gcode logging suggests something was wrong
-with this test as the `ve` values are different for each line. However, looking
-closer this is an artifact of the logged `ve` being for the speed at the end of
-the line after deceleration. The results are about l=35mm or Pe=3.5mm with
-estimated Pn=0.3, giving Pb=3.2mm compared to the estimated. For some reason
-this is way higher than for test 1. Also note the restores were all about
-1.8mm and the lines all look OK except maybe a bit under-extruded for the
-faster lines (Kf too low). Is the line length highly variable with
-bed-adhesion varying with the glue thickness? I suspect `Pe` is closer to the
-restore values of about 1.8mm.
+   **UPDATE:** The BacklashTest1 below suggests reasonable values could be around
+   Kf=0.4, Kb=4.0, with 0.5mm of backlash, which matches pretty closely with
+   these results with backlash explaining the 0.5mm constant offset. Note the
+   `l` lengths don't include the line filament, so the Pe balues should be
+   higher, which makes this an even better match.
+
+1. The test2 retraction lines do seem to show that pressure was pretty
+  constant for constant w. However, looking at the gcode logging suggests
+  something was wrong with this test as the `ve` values are different for each
+  line. However, looking closer this is an artifact of the logged `ve` being
+  for the speed at the end of the line after deceleration. The results are
+  about l=35mm or Pe=3.5mm with estimated Pn=0.3, giving Pb=3.2mm compared to
+  the estimated. For some reason this is way higher than for test 1. Also note
+  the restores were all about 1.8mm and the lines all look OK except maybe a
+  bit under-extruded for the faster lines (Kf too low?). Is the line length
+  highly variable with bed-adhesion varying with the glue thickness? I suspect
+  `Pe` is closer to the restore values of about 1.8mm.
 
 These tests do seem to have mostly validated the theory that backpressure is
 just a function of bead diameter (AKA `w`) and independent of `h` and `vx`.
 They haven't given us very good data for estimating `Kf` or Kb though. The drool
 test for measuring pressure doesn't seem to be very accurate.  It does seem to
 show Kf=0.4 is too low and Kb=3.0 is too high.
+
+**UPDATE:** Actually, the only thing suggesting Kb=3.0 is too high was the
+1mm/s warmup lines, which probably suffer from the backpressure model not
+working for speeds that slow. Possibly Kb=4.0 is a better fit for these results.
 
 Maybe time to just jump to some StartStopTests around the values Kf=0.8, Kb=1.0?
 
@@ -992,6 +1007,147 @@ means a big retraction that simply cannot be slow retored at this tests
 restore rate. We only restore 1.5mm in the slow restore which only covers the
 Re=1.5mm, so we only see the slow restore start to make a differene if the
 retraction amount needed was over-estimated.
+
+### BacklashTest1
+
+This tested retract and restore distances for different speeds. It has the
+following phases;
+
+* 0mm: default drop and restore to pre-apply pressure before draw.
+* 45mm: draw at <vx>mm/s to stabilize pressure at that speed.
+* 20mm: moving retract of <re>mm at 5mm/s to measure required retraction.
+* 20mm: moving restore of <re>mm at 5mm/s to measure required restore.
+* 5mm: draw at 5mm to finalize line and stabilize pressure.
+* 0mm: default retract and raise to relieve any vestigial pressure.
+
+
+```bash
+./gcodegen.py -Kf=0.5 -Kb=2.0 -Re=1.5 -Lh=0.3 -Lw=0.5 -R >BacklashTest1_Kf05_Kb20_Re15_Lh03_Lw05_R.g
+```
+
+![BacklashTest1 Result](BacklashTest1.jpg "BacklashTest1 Result")
+
+The commented version of gcode output for this is in
+[BacklashTest1_Kf05_Kb20_Re15_Lh03_Lw05_Rv.g](./BacklashTest1_Kf05_Kb20_Re15_Lh03_Lw05_Rv.g).
+
+#### Observations
+
+All the lines are beautifully consistent at all speeds, with clean starts and
+ends, suggesting Kf=0.5, Kb=2.0, Re=1.0 is pretty close to optimal. There are
+some mild signs of bubbling, suggesting the filament is starting to get a bit
+wet (it's being left on the spool holder unprotected).
+
+Doing the retract/restore 5mm over 20mm distance is de=0.25mm per 1mm of line.
+The lines themselves also consume filament that would normally have to be
+retracted, and start with a blob about 2mm wide and taper away roughly
+linearly to nothing. Assuming the average width is 1mm, this gives a line
+volume of `h*w/Fa=0.125mm` of filament per mm of line.
+
+The difference between the retraction distance with no line and the restore
+distance with no line is the backlash `Be`. As there is no extruded line for these
+distances there is no line-volume compensation needed. This distance is the
+same as the difference between the retract line length and restore line
+length.
+
+So the required retraction distance and backlash is;
+
+```python
+# lr is the retract line length
+# lb is the restore line length
+
+le = lr * h * w / Fa      # retract-line volume in filament length.
+   = lr * 0.3 * 1.0 / Fa
+   = lr * 0.125
+
+re = lr * 5 / 20          # retract distance.
+   = lr * 0.25
+
+Re = le + re              # total retract distance needed.
+   = l * 0.25 + l * 0.125
+   = l * 0.375
+
+Be = (lr - lb) * 0.25     # extruder backlash distance.
+```
+
+From the test results, measuring lengths for 20mm/s, 60mm/s, and 100mm/s we get;
+
+| vx     | lr    | lb   | Re    | Be     |
+| ------ | ----- | ---- | ----- | ------ |
+| 20mm/s |  10mm |  8mm | 3.8mm | 0.50mm |
+| 60mm/s |  13mm | 11mm | 4.9mm | 0.50mm |
+|100mm/s |  16mm | 13mm | 6.0mm | 0.75mm |
+
+Note the measurements are pretty rough and are all about +-2mm because its
+hard to determine exactly when the retract lines end. The restore lines all
+have a little blob at the start, caused by the slow bead buildup before it
+touches the bed. In general the lines all seem to increase roughly linearly
+with velocity `vx`. The `Re` retract distances all seem to roughly match
+earlier experience. The `Be` backlash distances are very rough and about
++-0.25, but do seem to correspond roughly with what was observed in earlier
+tests.
+
+In theory, `Re - Be = Pe` for the corresponding speeds. However, looking at
+the test gcode logging we can see the "retraction Pe" `rPe` (assuming
+`Be=0.6`) is much higher than the restored pressures `dpe` before drawing the
+lines. This is partly because the restored pressure uses the average velocity
+of the line including acceleration/deceleration, which is less than `vx`.
+However, even the model pressure `mPe` for the target `vx` velocity is less.
+
+| vx     | ve    | rPe   | dpe   | mPe   |
+| ------ | ----- |------ | ----- | ----- |
+| 20mm/s | 1.2mm | 3.2mm | 1.6mm | 1.6mm |
+| 60mm/s | 3.7mm | 4.3mm | 2.6mm | 2.9mm |
+|100mm/s | 6.2mm | 5.4mm | 3.2mm | 4.1mm |
+
+This suggests our `Kf=0.5` and `Kb=2.0` are too low, and should be higher. If you compare
+calculating Kf and Kb for the different speeds it suggests `Kf=0.44` and
+`Kb=5.3` would be better;
+
+```python
+def calc(pe0,ve0,pe1,ve1,w=0.5):
+  dpe,dve=pe1-pe0,ve1-ve0
+  Kf=dpe/dve
+  Kb=(pe1-Kf*ve1)/w
+  return Kf,Kb
+
+>>> calc(5.4,6.2,4.3,3.7)
+(0.4400000000000002, 5.343999999999998)
+>>> calc(4.3,3.7,3.2,1.2)
+(0.43999999999999984, 5.344000000000001)
+>>> calc(5.4,6.2,3.2,1.2)
+(0.44000000000000006, 5.344)
+```
+
+This contradicts the nice looking lines at all speeds we were getting for
+`Kf=0.5`, `Kb=2.0`. One thing I noticed is the lines appear a bit thicker than
+0.5mm, more like 0.7mm. This suggests the bed leveling might be a bit off and
+the layer thickness is actually less. If we use `w=0.7` we get;
+
+```python
+>>> calc(5.4,6.2,3.2,1.2,w=0.7)
+(0.44000000000000006, 3.8171428571428576)
+```
+
+If we also assume our very rough backlash measurment is off and it's actually
+closer to 0.8 we get;
+
+```python
+>>> calc(5.2,6.2,3.0,1.2,w=0.7)
+(0.44000000000000006, 3.5314285714285716)
+```
+
+Note that the nice ruler was actually drawn using `Re=1.5` at speed
+`v=10mm/s`, giving retract/restore distances of about `de=2.8`. This meant it
+had extra retract/restore distance to "normalize" the pressure with. There are
+tiny hints of stringing suggesting it was right on the edge of the right
+amount of retraction. After compensating for backlash it was releaving up to
+`de-Be=2.8-0.6=2.2mm` of pressure. For `Pe=2.2mm` and `Kf=0.44`, then
+`Kb*w=1.9`, sugggesting `Kb=3.8` for `w=0.5` or `Kb=2.7` for `w=0.7`. This is
+closer to the retraction experimental results, but still a bit lower.
+
+As a rough compromise between all of this, and erring on the side of less
+pressure compensation with more `Re` to normalize and compensate for the
+errors, I think I'm going to use `Kf=0.4, Kb=4.0, Re=1.0`.
 
 
 # FlashPrint Settings.

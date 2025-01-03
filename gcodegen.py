@@ -1061,6 +1061,7 @@ M18
       dx=None, dy=None, dz=None, de=None,
       vt=None, vz=None, ve=None, vb=None,
       s=1.0, h=None):
+    """ Do a move, drop, and restore. """
     # default hop down is to layer height.
     if h is None: h = self.layer.h
     if (x, y, dx, dy) != (None, None, None, None):
@@ -1601,6 +1602,32 @@ class ExtrudeTest(GCodeGen):
     self.draw(dx=dx, de=dx*0.1, v=1)
     self.up()
 
+  def testBacklash(self, x0, y0, vx, re):
+    """ Test retract and restore distances.
+
+    This test is to test retraction and restore distances for different vx
+    velocities.
+
+    Test phases are;
+
+      * 0mm: default drop and restore to pre-apply pressure before draw.
+      * 45mm: draw at <vx>mm/s to stabilize pressure at that speed.
+      * 20mm: moving retract of <re>mm at 5mm/s to measure required retraction.
+      * 20mm: moving restore of <re>mm at 5mm/s to measure required restore.
+      * 5mm: draw at 5mm to finalize line and stabilize pressure.
+      * 0mm: default retract and raise to relieve any vestigial pressure.
+
+    Args:
+      vx: movement speed to check against.
+      re: moving retract/restore distance.
+    """
+    self.dn(x0, y0)
+    self.draw(dx=45,v=vx)
+    self.move(dx=20,de=-re, v=5)
+    self.move(dx=20,de=+re, v=5)
+    self.draw(dx=5,v=5)
+    self.up()
+
   def testKf(self, x0, y0, vx0, vx1):
     """ Test linear advance changing speed different speeds.
 
@@ -1655,9 +1682,9 @@ def GCodeGenArgs(cmdline):
       help='Extruder fan speed between 0.0 to 1.0.')
   cmdline.add_argument('-Fc', type=RangeType(0.0,1.0), default=0.0,
       help='Case fan speed between 0.0 to 1.0.')
-  cmdline.add_argument('-Kf', type=RangeType(0.0,4.0), default=0.8,
+  cmdline.add_argument('-Kf', type=RangeType(0.0,4.0), default=0.0,
       help='Linear Advance factor between 0.0 to 4.0 in mm/mm/s.')
-  cmdline.add_argument('-Kb', type=RangeType(0.0,10.0), default=1.0,
+  cmdline.add_argument('-Kb', type=RangeType(0.0,10.0), default=0.0,
       help='Bead backpressure factor between 0.0 to 10.0 in mm/mm.')
   cmdline.add_argument('-Cb', type=RangeType(-5.0,5.0), default=0.0,
       help='Bead backpressure offset between -5.0 to 5.0 in mm.')
@@ -1721,8 +1748,12 @@ if __name__ == '__main__':
     dict(Kf=1.0, Kb=2.0, Re=(0.0,3.0), vx=60, re=0.0),
     dict(Kf=1.0, Kb=2.0, Re=1.5, vx=(20,100), re=0.0)))
 
+  backlashargs=dict(name="Backlash", linefn=gen.testBacklash, tests=(
+    dict(Kf=0.5, Kb=2.0, Re=1.0, vx=(20,100), re=5.0),
+    ))
+
   gen.startFile()
-  gen.doTests(n=args.n, **startstopargs)
+  gen.doTests(n=args.n, **backlashargs)
   gen.endFile()
   data=gen.getCode()
   sys.stdout.buffer.write(data)
