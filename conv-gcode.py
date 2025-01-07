@@ -425,7 +425,8 @@ if __name__ == '__main__':
   import argparse, sys
   from gcodegen import RangeType
 
-  cmdline = argparse.ArgumentParser(description='Postprocess FlashPrint gcode.')
+  cmdline = argparse.ArgumentParser(description='Postprocess FlashPrint gcode.',
+      formatter_class=argparse.ArgumentDefaultsHelpFormatter)
   gcodegen.GCodeGenArgs(cmdline)
   cmdline.add_argument('-Hs', type=RangeType(0.0), default=0.0,
       help='Heat extruded target in mm of filament that is hot.' )

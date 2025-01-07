@@ -783,6 +783,16 @@ M18
     self.vn = self._vn()
     self.db = self._db()
 
+  def inccmd(self, cmd):
+    """ Handle special string gcode commands. """
+    if m := re.match(r'G92(?: X([-+0-9.]+))?(?: Y([-+0-9.]+))?(?: Z([-+0-9.]+))?(?: E([-+0-9.]+))?', cmd):
+      # This is a "set XYZE to ..." cmd, often used to keep E < 1000.
+      x,y,z,e = m.groups()
+      if x is not None: self.x = float(x)
+      if y is not None: self.y = float(y)
+      if z is not None: self.z = float(z)
+      if e is not None: self.e = float(e)
+
   def fstr(self, str):
     """ Format a string as an f-string with attributes of self."""
     try:
@@ -824,19 +834,20 @@ M18
         self.log('{pe=:.4f} {eb=:.4f} {ve=:.4f} {vn=:.4f} {vl=:.3f} {db=:.2f}')
         # We need to fstr() reformat that last log entry...
         self.fadd(self.gcode.pop())
-    elif isinstance(code, str):
-      self.add(self.fstr(code.strip()).encode())
     elif isinstance(code, int):
       # ints are waits.
       self.t += code/1000
       self.l_t += code/1000
       self.fadd(self.fcmd('G4', P=code))
+    elif isinstance(code, str):
+      self.inccmd(code)
+      self.add(self.fstr(code.strip()).encode())
     else:
       # It's probably Flashprint binary header stuff.
       self.add(code)
 
   def add(self, code):
-    """ Add code Layer, Move or format-string instances. """
+    """ Add code Layer, Move, Wait, or format-string instances. """
     if isinstance(code, Layer):
       self.inclayer(code)
     elif isinstance(code, Move):
@@ -845,6 +856,8 @@ M18
       # ints are waits.
       self.t += code/1000
       self.l_t += code/1000
+    elif isinstance(code, str):
+      self.inccmd(code)
     self.gcode.append(code)
 
   def cmd(self, cmd, **kwargs):
@@ -957,7 +970,7 @@ M18
       assert abs(v - v1) < 0.001, f'{m} {v=} != {v1=}'
     else:
       ex = self.eb + self.pe + de
-      pe, eb, el = min(ex, 0), m.eb, max(0, ex - m.eb)
+      pe, eb, el = min(ex, 0), min(m.eb, max(ex, 0)), max(0, ex - m.eb)
     #print(f'{self.Kf=} {self.Kb=} {self.Cb=} {self.pe=} {self.eb=} {m} -> {pe=} {eb=} {el=}')
     assert abs((pe+eb+el)-(self.pe+self.eb+de)) < 0.00001, f'{pe=}+{eb=}+{el=} != {self.pe=}+{self.eb=}+{de=}'
     # Note we return pe,eb,en not pe,eb,el, because "what came out the nozzle"
@@ -1088,8 +1101,8 @@ M18
       # Adjust Move's to include dynamic retraction and extrusion.
       if isinstance(c, Move):
         if c.isretract and self.en_dynret:
-          # Adjust retraction to also relieve advance pressure.
-          c = c.set(de=c.de - self.pe)
+          # Adjust retraction to Re and also relieve advance pressure.
+          c = c.set(de=-self.Re - self.pe)
         elif c.isrestore and self.en_dynret:
           # Find the next move to get the pe and eb it needs.
           m1 = next((m for m in gcode[i+1:] if isinstance(m, Move)), None)
@@ -1117,7 +1130,7 @@ M18
   def layerstats(self):
     h='{layer.h:.2f}'
     w='{layer.w:.2f}'
-    r='{(Fa * l_e) / (layer.h * layer.w * l_l):.2f}'
+    r='{(Fa * l_e) / (layer.h * layer.w * l_l) if l_l else 1.0:.2f}'
     v='{l_l/l_t if l_t else 0.0:.1f}'
     ve='{l_e/l_t if l_t else 0.0:.3f}'
     self.log('layer={layer.n} finished.')
@@ -1527,7 +1540,7 @@ class ExtrudeTest(GCodeGen):
     self.draw(dx=self.t0x,v=self.vx0)     # cooldown draw.
     self.up()
 
-  def testStartStop(self, x0, y0, vx, re):
+  def testStartStop(self, x0, y0, vx):
     """ Test starting and stopping extrusion for different settings.
 
     This test is to check dynamic retracting for different Kf/Kb/Cb/Re
@@ -1535,28 +1548,26 @@ class ExtrudeTest(GCodeGen):
 
     Test phases are;
 
-      * 5mm: warmup draw at 1mm/s to prime nozzle with fillament.
+      * 0mm: default drop and restore.
+      * 5mm: warmup draw at 5mm/s to prime nozzle with fillament.
       * 10mm: move at 1mm/s to drain actual and estimated pressure.
-      * 0mm: restore <Re>mm to pre-apply pressure before draw.
+      * 0mm: default restore to pre-apply pressure before draw.
       * 50mm: draw at <vx>mm/s to check pre-applied pressure and build pressure.
-      * 0mm: retract -<Re>mm to relieve pressure.
+      * 0mm: default retract to relieve pressure.
       * 10mm: move at 1mm/s to check and drain any vestigial pressure.
-      * 1mm: draw at 1mm/s while restoring bead+re pressure.
-      * 14mm: draw at 1mm/s while building pressure
-
+      * 0mm: default restore.
+      * 15mm: draw at 5mm/s to check slow draw after retract/restore.
+      * 0mm: default retract and raise.
 
     Args:
       vx: movement speed to check against.
-      re: extra restore distance to add before final slow restore.
     """
     # Set different line-phase lengths.
-    d0x,d1x = self.t0x, 4*self.t1x
-    dx = (d0x, d1x*1/8, d1x*5/8, d1x*1/8, d1x*1/8+d0x)
-    # A printer with a=500mm/s^2 can go from 0 to 100mm/s in 0.2s over 10mm.
+    dx = (5, 10, 50, 10, 15)
     self.dn(x0, y0)
     # This slow draw then move is to ensure the nozzle is primed and wiped, and
     # any advance pressure, actual and estimated, has decayed away.
-    self.draw(dx=dx[0],v=1)
+    self.draw(dx=dx[0],v=5)
     self.move(dx=dx[1],v=1)
     # This restore pre-loads advance pressure for drawing the line. If the
     # start of the line is too thin, there was not enough pressure, and Kf
@@ -1567,12 +1578,11 @@ class ExtrudeTest(GCodeGen):
     self.draw(dx=dx[2],v=vx)
     # This retract and slow move is to relieve the advance pressure, and see
     # if any remaining pressure drools off. If there is any trailing drool,
-    # the amount of pressure was underestimated and Kf probably needs to be
-    # increased. If there is still stringing when otherwise Kf seems right,
-    # adding some additional retraction with Re could help.
+    # the amount of pressure was underestimated and Kf or Kb probably needs
+    # to be increased. If there is still stringing when otherwise Kf/Kb seems
+    # right, adding some additional retraction with Re could help.
     self.retract()
     self.move(dx=dx[3],v=1)
-
     # This restore applies advance pressure for a final slow line after
     # the earlier retraction. It should be the same width as all the other
     # lines. If it starts too thin, it suggests the earlier retraction
@@ -1580,26 +1590,8 @@ class ExtrudeTest(GCodeGen):
     # If it starts too thick it suggests the earlier retraction under
     # estimated the pressure and extra retraction was actually relieving
     # pressure, so Kf should be increased and Re could possibly be reduced.
-    #self.restore()
-    #self.draw(dx=dx[4],v=5)
-
-    # All together this restores the bead + re + 0.1mm per mm of travel over
-    # 15mm. Assuming the previous retraction+move drained all the vestigial
-    # pressure, this tells you that `re + (mm to full line width * 0.1)` is
-    # the total restore needed to undo any previous over-retraction + apply
-    # enough pressure to draw.  We add re because 0.1mm*15 is usually not enough
-    # restore before drawing because of bead-backpressure.
-
-    # This restores enough for a starting bead + re + 0.1mm of pressure over a
-    # 1mm draw at 1mm/s. We do this as a draw not restore to prevent dynamic
-    # retraction from changing it.
-    eb = Move._eb(self.layer.h,self.layer.w,self.layer.r)
-    self.draw(dx=1,v=1,de=eb+re+0.1)
-    # This continues drawing at 1mm/sec extruding at 0.1mm/sec for 14mm to see
-    # how much over-retraction there was. Every mm with the line narrower
-    # than the target w*r is an extra 0.1mm of over-retraction more than re.
-    dx = dx[4]-1
-    self.draw(dx=dx, de=dx*0.1, v=1)
+    self.restore()
+    self.draw(dx=dx[4],v=5)
     self.up()
 
   def testBacklash(self, x0, y0, vx, re):
@@ -1719,7 +1711,8 @@ def GCodeGenArgs(cmdline):
 if __name__ == '__main__':
   import argparse, sys
 
-  cmdline = argparse.ArgumentParser(description='Generate test gcode.')
+  cmdline = argparse.ArgumentParser(description='Generate test gcode.',
+    formatter_class=argparse.ArgumentDefaultsHelpFormatter)
   GCodeGenArgs(cmdline)
   cmdline.add_argument('-n', type=RangeType(0,4), default=None,
       help='Test number when running individual tests.')
@@ -1743,17 +1736,17 @@ if __name__ == '__main__':
     dict(vx=(1,10),vr=1,re=4.0)))
 
   startstopargs=dict(name="StartStop", linefn=gen.testStartStop, tests=(
-    dict(Kf=(0.0,2.0), Kb=2.0, Re=1.5, vx=60, re=0.0),
-    dict(Kf=1.0, Kb=(0.0,4.0), Re=1.5, vx=60, re=0.0),
-    dict(Kf=1.0, Kb=2.0, Re=(0.0,3.0), vx=60, re=0.0),
-    dict(Kf=1.0, Kb=2.0, Re=1.5, vx=(20,100), re=0.0)))
+    dict(Kf=(0.0,1.0), Kb=4.0, Re=1.0, vx=60),
+    dict(Kf=0.4, Kb=(2.0,6.0), Re=1.0, vx=60),
+    dict(Kf=0.4, Kb=4.0, Re=(0.0,2.0), vx=60),
+    dict(Kf=0.4, Kb=4.0, Re=1.0, vx=(20,100))))
 
   backlashargs=dict(name="Backlash", linefn=gen.testBacklash, tests=(
     dict(Kf=0.5, Kb=2.0, Re=1.0, vx=(20,100), re=5.0),
     ))
 
   gen.startFile()
-  gen.doTests(n=args.n, **backlashargs)
+  gen.doTests(n=args.n, **startstopargs)
   gen.endFile()
   data=gen.getCode()
   sys.stdout.buffer.write(data)
