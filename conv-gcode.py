@@ -53,9 +53,9 @@ Heat is energy and Temp is roughly heat divided by volume;
 
 T = H/V
 
-heat/temp cooling through convection decays at a rate proportional to temp and
-surface area, multiplied by a `hc` convection constant that depends on air
-velocity;
+heat/temp cooling through convection decays at a rate proportional to temp
+difference to ambient and surface area, multiplied by a `hc` convection
+constant that depends on air velocity;
 
 dHc = hc * A * T * dt
     = hc * A * H/V * dt
@@ -244,6 +244,7 @@ def fbool(b):
 
 def hc(v):
   """ Get hc as a function of air velocity v in m/s."""
+  assert v>= 0
   return 10.45 - v + 10*(v**0.5)
 
 
@@ -265,9 +266,13 @@ class Printer(gcodegen.GCodeGen):
   Fk = (1-Fc)/fve1
 
   def _Th(self, fo):
+    """Get Th temperature decay rate for fo fan output."""
+    assert fo >= 0
     return self.KTh / hc(self.fva1 * fo)
 
   def _fo(self, fd, de_dt):
+    # Get fo fan output for autofan if enabled, else fo = fd fan drive.
+    assert de_dt >=0.0
     return fd*min(1.0, self.Fk*de_dt + self.Fc) if self.en_autofan else fd
 
   def __init__(self, Hs=0.0, Lp=0.0, en_pwmfan=False, en_autofan=True, **kwargs):
@@ -345,6 +350,7 @@ class Printer(gcodegen.GCodeGen):
     self.log(f'  ho={self.ho:.1f} fo={self.fo:.2f}')
 
   def runline(self,line):
+    """ Parse, execute, and add a line of gcode. """
     #print(line)
     dt=de=0.0
     if line.startswith(';start gcode'):
@@ -369,7 +375,7 @@ class Printer(gcodegen.GCodeGen):
       dt, de = self.G1(line)
     else:
       self.add(line)
-    self.dofan(de, dt)
+    self.dofan(max(de, 0.0), dt)
 
   def Layer(self, line):
     """ Start a new layer. """

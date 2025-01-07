@@ -140,6 +140,7 @@ de=+5mm seems about right advance for vl=100mm/s ve=7.5mm/s
 Suggests roughly Kf=0.4 with Cf=Pb=Kb*0.6+Cb=2.0.
 
 """
+import argparse
 import re
 from math import e, pi, inf, sqrt
 import vtext
@@ -1709,7 +1710,7 @@ def GCodeGenArgs(cmdline):
 
 
 if __name__ == '__main__':
-  import argparse, sys
+  import sys
 
   cmdline = argparse.ArgumentParser(description='Generate test gcode.',
     formatter_class=argparse.ArgumentDefaultsHelpFormatter)
