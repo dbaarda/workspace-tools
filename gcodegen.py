@@ -204,6 +204,7 @@ class MoveBase(NamedTuple):
   v: float  # target velocity in mm/s.
   v0: float = None # start velocity in mm/s.
   v1: float = None # end velocity in mm/s.
+  vm: float = None # mid velocity in mm/s.
   h: float = None  # The line or end of move height above the current layer.
   w: float = None  # The line width.
   # Note the extrusion ratio r is calculated as a property.
@@ -219,11 +220,11 @@ class MoveBase(NamedTuple):
   log = None  # optional log(msg) function to use.
 
   def __str__(self):
-    dx,dy,dz,de,v,v0,v1,h,w = self
+    dx,dy,dz,de,v,v0,v1,vm,h,w = self
     dl, r = self.dl, self.r
-    v,v0,v1 = round(v),round(v0),round(v1)
+    v,v0,v1,vm = round(v),round(v0),round(v1),round(vm)
     if self.isdraw:
-      return f'draw {dl=:.2f}@{v0}<{v}>{v1} l={h:.2f}x{w:.2f}x{r:.2f}'
+      return f'draw {dl=:.2f}@{v}({v0}<{vm}>{v1}) l={h:.2f}x{w:.2f}x{r:.2f}'
     elif self.isup:
       return f'hopup {dz=:.2f}@{v} {h=}'
     elif self.isdn:
@@ -233,7 +234,7 @@ class MoveBase(NamedTuple):
     elif self.isrestore:
       return f'restore {de=:.4f}@{v}'
     else:
-      return f'move {dl=:.2f}@{v0}<{v}>{v1} {de=:.4f} {h=:.2f}'
+      return f'move {dl=:.2f}@{v}({v0}<{vm}>{v1}) {de=:.4f} {h=:.2f}'
     #return f'{self.__class__.__name__}({dx=:.2f}, {dy=:.2f}, {dz=:.2f}, {de=:.4f}, {v=:.2f}, {v0=:.2f}, {v1=:.2f}, {h=:.2f}, {w=:.2f})'
 
   def set(self, *args, s=None, **kwargs):
@@ -258,6 +259,7 @@ class MoveBase(NamedTuple):
 
   @classmethod
   def _eb(cls, h, w, r=1.0):
+    """ Volume in filament length of bead."""
     return h * acircle(w*r) / cls.Fa
 
   @property
@@ -274,29 +276,35 @@ class MoveBase(NamedTuple):
 
   @property
   def dl0(self):
-    return min(self._dvdl(self.v0, self.v), self.dl) if self.isgo else 0.0
+    """Horizontal length of acceleration phase."""
+    return min(self._dvdl(self.v0, self.vm), self.dl) if self.isgo else 0.0
 
   @property
   def dl1(self):
-    return min(self._dvdl(self.v, self.v1), self.dl) if self.isgo else 0.0
+    """Horizontal length of deceleration phase."""
+    return min(self._dvdl(self.vm, self.v1), self.dl) if self.isgo else 0.0
 
   @property
   def dlm(self):
+    """Horizontal length of middle phase."""
     dlm = self.dl - self.dl0 - self.dl1
     assert 0 <= dlm <= self.dl
     return dlm
 
   @property
   def dt0(self):
-    return 2*self.dl0/(self.v0 + self.v) if self.isgo else 0.0
+    """Duration of acceleration phase."""
+    return 2*self.dl0/(self.v0 + self.vm) if self.isgo else 0.0
 
   @property
   def dt1(self):
-     return 2*self.dl1/(self.v + self.v1) if self.isgo else 0.0
+    """Duration of deceleration phase."""
+    return 2*self.dl1/(self.vm + self.v1) if self.isgo else 0.0
 
   @property
   def dtm(self):
-    dtm =  abs(self.dlm if self.isgo else self.dz if self.dz else self.de)/self.v
+    """Duration of middle phase."""
+    dtm =  abs(self.dlm/self.vm if self.isgo else (self.dz if self.dz else self.de)/self.v)
     assert 0 <= dtm
     return dtm
 
@@ -309,13 +317,13 @@ class MoveBase(NamedTuple):
   def a0(self):
     """ The acceleration at the start of a move. """
     dt0 = self.dt0
-    return (self.v - self.v0)/dt0 if dt0 else 0.0
+    return (self.vm - self.v0)/dt0 if dt0 else 0.0
 
   @property
   def a1(self):
     """ The acceleration at the start of a move. """
     dt1 = self.dt1
-    return (self.v1 - self.v)/dt1 if dt1 else 0.0
+    return (self.v1 - self.vm)/dt1 if dt1 else 0.0
 
   @property
   def ve(self):
@@ -481,46 +489,47 @@ class MoveBase(NamedTuple):
     dl = self.dl
     if not dl:
       # A stop move, v0 and v1 are zero.
-      m = self.set(v=v, v0=0, v1=0)
+      m = self.set(v=v, v0=0, v1=0, vm=0)
     else:
       if self.log and self._dvdl(v0, v1) > dl:
-        self.log(f'WARNING:cannot accelerate {v0}mm/s to {v1}mm/s over {dl}mm with a={self.Ap}mm/s^2.')
+        self.log(f'WARNING:cannot accelerate from {v0}mm/s to {v1}mm/s over {dl}mm with a={self.Ap}mm/s^2.')
       #assert self._dvdl(v0, v1) <= dl, f'Cannot accelerate {v0=}mm/s to {v1=}mm/s over {dl=}mm.'
       # This is the limit velocity assuming constant acceleration at a/2.
       # This implements smoothed look-ahead to reduce spikey velocity.
-      vlim = sqrt((dl*self.Ap + v0**2 + v1**2)/2)
+      vm = sqrt((dl*self.Ap + v0**2 + v1**2)/2)
       # If vlim is less than v0 or v1, we don't need acceleration at both ends.
-      vlim = max(v0, v1, vlim)
-      v = min(v, vlim)  # don't set v higher than requested.
-      assert 0 <= v0 <= v <= self.Vp
-      assert 0 <= v1 <= v <= self.Vp
-      m = self.set(v=v,v0=v0,v1=v1)
+      vm = max(v0, v1, vm)
+      vm = min(v, vm)  # don't set vm higher than requested.
+      assert 0 <= v0 <= vm <= self.Vp
+      assert 0 <= v1 <= vm <= self.Vp
+      m = self.set(v=v,v0=v0,v1=v1,vm=vm)
     return m
 
   def join(self, m):
     """ Add two moves together. """
     return self._replace(dx=self.dx+m.dx, dy=self.dy+m.dy, dz=self.dz+m.dz,
-        de=self.de+m.de, v=max(self.v, m.v), v1=m.v1)
+        de=self.de+m.de, v=min(self.v, m.v),v0=min(self.v0, m.v0), v1=min(m.v1, m.v1), vm=min(self.vm, m.vm))
 
   def split(self):
     """ Partition a move into a list of moves for the acceleration phases. """
-    v,v0,v1,dl = self.v, self.v0, self.v1, self.dl
-    if not dl or v0 == v == v1 or self.de <= 0:
+    v0,v1,vm,dl = self.v0, self.v1, self.vm, self.dl
+    if not dl or v0 == vm == v1 or self.de <= 0:
       # A non-moving, constant speed, or non-extruding move, don't partition it.
       return [self]
     # Get distances for acceleration phases.
     dl0, dl1 = self.dl0, self.dl1
-    # initialize middle phase v0 and v1 to just v.
-    vm0, vm1 = v, v
+    # initialize middle phase v0 and v1 to just vm.
+    vm0, vm1 = vm, vm
     # if acceleration distances are small don't bother partitioning them.
     if dl0 < 1.0: dl0, vm0 = 0.0, v0
     if dl1 < 1.0: dl1, vm1 = 0.0, v1
     # Get the middle phase distance.
     dlm = dl - dl0 - dl1
+    assert 0 <= dlm <= dl
     # Make a list of the s,v0,v1 values for each phase.
-    phases = [(dl0/dl, v0, v), (dlm/dl, vm0, vm1), (dl1/dl, v, v1)]
+    phases = [(dl0/dl, v0, vm), (dlm/dl, vm0, vm1), (dl1/dl, vm, v1)]
     # Return a list moves for the non-zero phases.
-    l=[self.set(v=v, v0=v0, v1=v1, s=s) for s,v0,v1 in phases if s]
+    l=[self.set(v0=v0, v1=v1, s=s) for s,v0,v1 in phases if s]
     return l
 
   def canjoin(self,m):
@@ -532,6 +541,7 @@ class MoveBase(NamedTuple):
       (self.h,self.w,self.r) == (self.h,self.w,self.r) and
       # The path deviation from joining them is less than Gp.
       self.joind(m) < self.Gp))
+
 
 class Move(MoveBase):
   __slots__ = ()
@@ -551,13 +561,15 @@ class Move(MoveBase):
     assert 0 <= m.v <= cls.Vp
     assert m.v0 is None or 0 <= m.v0 <= m.v
     assert m.v1 is None or 0 <= m.v1 <= m.v
-    if m.v0 is None or m.v1 is None:
+    assert m.vm is None or 0 <= m.vm <= m.v
+    if m.v0 is None or m.v1 is None or m.vm is None:
       v0 = m.v if m.v0 is None else m.v0
       v1 = m.v if m.v1 is None else m.v1
+      vm = m.v if m.vm is None else m.vm
       if m.isgo:
-        return m._replace(v0=v0, v1=v1)
+        return m._replace(v0=v0, v1=v1, vm=vm)
       else:
-        return m._replace(v0=0.0, v1=0.0)
+        return m._replace(v0=0.0, v1=0.0, vm=0.0)
     return m
 
 
