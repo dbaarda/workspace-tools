@@ -850,10 +850,7 @@ M18
       out = self.fmove(code)
       self.incmove(code)
       self.fadd(out)
-      if self.en_verb:
-        self.log('{pe=:.4f} {eb=:.4f} {ve=:.4f} {vn=:.4f} {vl=:.3f} {db=:.2f}')
-        # We need to fstr() reformat that last log entry...
-        self.fadd(self.gcode.pop())
+      self.flog('{pe=:.4f} {eb=:.4f} {ve=:.4f} {vn=:.4f} {vl=:.3f} {db=:.2f}')
     elif isinstance(code, int):
       # ints are waits.
       self.f_t += code/1000
@@ -890,6 +887,13 @@ M18
     #print(self.fstr(txt))
     if self.en_verb:
       self.cmt('{ftime(f_t)}: ' + txt)
+
+  def flog(self, txt):
+    """Add a formatted log entry."""
+    if self.en_verb:
+      self.log(txt)
+      # We need to fstr() reformat that last log entry...
+      self.fadd(self.gcode.pop())
 
   def startFile(self):
     self.add(self.fstr(self.startcode))
@@ -1137,8 +1141,10 @@ M18
         if c.isretract and self.en_dynret:
           # Adjust retraction to Re and also relieve advance pressure.
           c = c.set(de=-self.Re - self.pe)
+          # If de is zero, skip adding this.
           if not c.de:
-            c = ';{ftime(f_t)}: skipping empty retract.'
+            self.flog('skipping empty retract.')
+            continue
         elif c.isrestore and self.en_dynret:
           # Find the next move to get the pe and eb it needs.
           m1 = next((m for m in gcode[i+1:] if isinstance(m, Move)), None)
@@ -1150,9 +1156,10 @@ M18
             eb, pe = 0.0, self._calc_pe(0.0, 0.0)
           # Adjust existing retraction and add the starting bead.
           c = c.set(de=pe - self.pe + eb)
-          # If de is zero, skip adding this
+          # If de is zero, skip adding this.
           if not c.de:
-            c = ';{ftime(f_t)}: skipping empty restore.'
+            self.flog('skipping empty restore.')
+            continue
         elif c.isdraw and self.en_dynext:
           # For calculating the pressure pe needed, use the ending ve1.
           pe = self._calc_pe(c.db, c.ve1)
