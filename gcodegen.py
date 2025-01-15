@@ -304,9 +304,7 @@ class MoveBase(NamedTuple):
   @property
   def dtm(self):
     """Duration of middle phase."""
-    dtm =  abs(self.dlm/self.vm if self.isgo else (self.dz if self.dz else self.de)/self.v)
-    assert 0 <= dtm
-    return dtm
+    return abs(self.dlm/self.vm if self.isgo else (self.dz if self.dz else self.de)/self.v)
 
   @property
   def dt(self):
@@ -659,16 +657,17 @@ class GCodeGen(object):
     Vz: Speed when raising/lowering (mm/s).
     Ve: Speed when retracting (mm/s).
     Vb: Speed when restoring (mm/s).
-    r: Extrusion ratio (0.1 -> 10.0).
-    h: Line height (0.1->0.4mm).
-    w: Line width (0.2->0.8mm).
+    Lr: Default extrusion ratio (0.1 -> 10.0).
+    Lh: Default line height (0.1->0.4mm).
+    Lw: Default line width (0.2->0.8mm).
     en_dynret: linear advance dynamic retraction enabled.
     en_dynext: linear advance dynamic extrusion enabled.
     en_optmov: path optimizing enabled.
     pe: current advance/retract length for extruder pressure.
     eb: current extruded bead volume for nozzle backpressure.
-    t: current total execution time.
-    l: current total printed line length.
+    f_t: current file execution time.
+    f_l: current file printed line length.
+    f_e: current file extruded filament length.
     l_t: current layer execution time.
     l_l: current layer printed line length.
     l_e: current layer extruded filament length.
@@ -676,6 +675,8 @@ class GCodeGen(object):
     ve: extruder velocity at the end of the last move.
     vn: nozzle flow velocity at the end of the last move.
     db: extruded bead diameter at the end of the last move.
+    x,y,z,e,f: Current x,y,z,e,f position values.
+    h: current height above layer base (property).
   """
 
   Fd = 1.75  # Fillament diameter.
@@ -697,9 +698,9 @@ class GCodeGen(object):
 ;vertical_speed: {round(Vz)}
 ;retract_speed: {round(Ve)}
 ;restore_speed: {round(Vb)}
-;layer_height: {h:.2f}
-;line_width: {w:.2f}
-;extrusion_ratio: {r:.2f}
+;layer_height: {Lh:.2f}
+;line_width: {Lw:.2f}
+;extrusion_ratio: {Lr:.2f}
 ;start gcode
 M118 X{75.0:.2f} Y{75.0:.2f} Z{150.0:.2f} T0
 M140 S{round(Tp)} T0
@@ -740,7 +741,7 @@ M18
   def __init__(self,
       Te=210, Tp=50, Fe=1.0, Fc=1.0, Kf=0.0, Kb=0.0, Cb=0.0, Re=5,
       Vp=60, Vt=100, Vz=7, Ve=40, Vb=30,
-      h=0.2, w=Nd, r=1.0,
+      Lh=0.2, Lw=Nd, Lr=1.0,
       en_dynret=False, en_dynext=False, en_optmov=False, en_verb=False):
     # Temp and Fan settings.
     self.Te, self.Tp, self.Fe, self.Fc = Te, Tp, Fe, Fc
@@ -749,18 +750,23 @@ M18
     # Default velocities.
     self.Vp, self.Vt, self.Vz, self.Ve, self.Vb = Vp, Vt, Vz, Ve, Vb
     # Default line height, width, and extrusion ratio.
-    self.h, self.w, self.r = h, w, r
+    self.Lh, self.Lw, self.Lr = Lh, Lw, Lr
     # Processing mode options.
     self.en_dynret, self.en_dynext, self.en_optmov, self.en_verb = en_dynret, en_dynext, en_optmov, en_verb
     class GMove(Move, Fd=self.Fd, Nd=self.Nd, log=self.log): pass
     self.GMove = GMove
     self.resetfile()
 
+  @property
+  def h(self):
+    """ Get the current height above the layer base."""
+    return self.z - (self.layer.z if self.layer else 0.0)
+
   def resetfile(self):
     """ Reset all state variables. """
     # Zero all positions so the first move's deltas are actually absolute.
     self.x, self.y, self.z, self.e, self.f = 0.0, 0.0, 0.0, 0.0, 0
-    self.t = self.l = 0.0
+    self.f_t = self.f_l = self.f_e = 0.0
     self.pe = 0.0  # current extruder linear advance pressure or retracted length mm.
     self.eb = 0.0  # current extruded bead volume in mm of fillament.
     self.gcode = []
@@ -786,8 +792,9 @@ M18
     self.e += de
     self.f = round(v*60)
     self.pe, self.eb, en = self._calc_pe_eb_en(m)
-    self.t += dt
-    self.l += dl if en else 0.0
+    self.f_t += dt
+    self.f_l += dl if en else 0.0
+    self.f_e += en
     self.l_t += dt
     self.l_l += dl if en else 0.0
     self.l_e += en
@@ -849,7 +856,7 @@ M18
         self.fadd(self.gcode.pop())
     elif isinstance(code, int):
       # ints are waits.
-      self.t += code/1000
+      self.f_t += code/1000
       self.l_t += code/1000
       self.fadd(self.fcmd('G4', P=code))
     elif isinstance(code, str):
@@ -867,7 +874,7 @@ M18
       self.incmove(code)
     elif isinstance(code, int):
       # ints are waits.
-      self.t += code/1000
+      self.f_t += code/1000
       self.l_t += code/1000
     elif isinstance(code, str):
       self.inccmd(code)
@@ -882,7 +889,7 @@ M18
   def log(self, txt):
     #print(self.fstr(txt))
     if self.en_verb:
-      self.cmt('{ftime(t)}: ' + txt)
+      self.cmt('{ftime(f_t)}: ' + txt)
 
   def startFile(self):
     self.add(self.fstr(self.startcode))
@@ -891,6 +898,7 @@ M18
   def endFile(self):
     # Retract to -2.5mm for the next print.
     self.retract(de=-2.5)
+    self.filestats()
     self.add(self.fstr(self.endcode))
 
   def startLayer(self, n=None, z=None,
@@ -905,9 +913,9 @@ M18
         Vz or self.Vz,
         Ve or self.Ve,
         Vb or self.Vb,
-        h or self.h,
-        w or self.w,
-        r*self.r)
+        h or self.Lh,
+        w or self.Lw,
+        r*self.Lr)
     self.add(l)
     if l.n:
       self.cmt('layer:{layer.h:.2f}')
@@ -926,11 +934,11 @@ M18
 
   def _db(self, eb=None, h=None):
     """ Get bead diameter from bead volume."""
-    if h is None: h = self.z - self.layer.z
-    # h=0 can happen for moves at the start of a new layer before a hop.
-    # Assume h is the current layer height.
-    if h < 0.01: h = self.layer.h
     if eb is None: eb = self.eb
+    if h is None: h = self.h
+    # h=0 can happen for moves at the start of a new layer before a hop.
+    # When this happens, assume h is the current layer height.
+    if h < 0.01: h = self.layer.h
     assert eb >= 0.0
     return 2*sqrt(eb*self.Fa/(h*pi)) if eb else 0.0
 
@@ -945,33 +953,41 @@ M18
 
   def _calc_pe_eb_en(self, m):
     """ Calculate updated pe, eb, and en values after a move."""
-    de, h = m.de, m.h
-    if (self.Kf or self.Kb or self.Cb) and (self.eb>0 or self.pe>0 or de>0):
+    if (self.Kf or self.Kb or self.Cb) and (self.pe>0 or self.eb>0 or m.de>0):
       # Calculate change in pressure advance 'pe' and bead volume `eb` by
       # iterating over the time interval with a dt that is small relative to
       # the Kf timeconstant.
-      dt, dl, v0, v1 = m.dt, m.dl, m.v0, m.v1
+      dt, dl = m.dt, m.dl
+      assert dt >= 0.0
       if not dl:
         # A hop, drop, retract, restore, or set speed.
-        assert v0 == v1
-        v, ve, de_dl = 0.0, de/dt if dt else 0.0, None
+        assert m.v0 == m.v1 == m.vm
+        v, vz, ve = 0.0, m.dz/dt if dt else 0.0, m.de/dt if dt else 0.0
         # There is only one phase.
         phases =((dt,0),)
       else:
-        v, ve, de_dl = v0, None, de/dl
+        v, dz_dl, de_dl = m.v0, m.dz/dl, m.de/dl
         # Calculate accelerate, move, decelerate phases.
         phases = (m.dt0, m.a0),(m.dtm, m.am),(m.dt1, m.a1)
-      pe, eb, el = self.pe, self.eb, 0.0
+      pe, eb, el, h = self.pe, self.eb, 0.0, self.h
       for t,a in phases:
         while t>0:
           dt = min(0.001, t)  # Use this iteration time interval.
-          dv = a*dt           # Do trapezoidal integration for dl.
-          dl = (v + dv/2)*dt
+          dv = a*dt
+          dl = (v + dv/2)*dt  # Do trapezoidal integration for dl.
+          assert dl >= 0.0
           v += dv
+          assert v >= -0.001
           # Note filament doesn't get sucked back into the nozzle if the pressure
           # advance is negative, and the bead cannot give negative backpressure.
-          pe += de_dl * dl if dl else ve*dt   # Add filament extruded into the nozzle.
-          db = self._db(eb, h)                # diameter of bead
+          # Get filament extruded into the nozzle and height.
+          if dl:
+            pe += de_dl * dl
+            h += dz_dl * dl
+          else:
+            pe += ve * dt
+            h += vz * dt
+          db = self._db(eb, h)                # diameter of bead.
           pb = max(0, self.Kb*db + self.Cb)   # bead backpressure.
           pn = max(0, pe - pb)                # nozzle pressure.
           nde = pn*dt/(self.Kf+dt)            # Get filament extruded out the nozzle.
@@ -980,16 +996,21 @@ M18
           eb = max(0.0, eb + nde - lde)
           el += lde
           t -= dt
-      assert abs(v - v1) < 0.001, f'{m} {v=} != {v1=}'
+      assert abs(v - m.v1) < 0.001, f'{m} {v=} != {m.v1=}'
     else:
-      ex = self.eb + self.pe + de
+      # With Kf and Kb zero, there is no nozzle or bead pressure, so all
+      # filament gets extruded and pe<=0 (can be retracted). The bead size is
+      # max the target move bead size, but can be less if insuficient filament
+      # is extruded. The filament added to the line is all the filament extruded
+      # minus the bead.
+      ex = self.eb + self.pe + m.de
       pe, eb, el = min(ex, 0), min(m.eb, max(ex, 0)), max(0, ex - m.eb)
     #print(f'{self.Kf=} {self.Kb=} {self.Cb=} {self.pe=} {self.eb=} {m} -> {pe=} {eb=} {el=}')
-    assert abs((pe+eb+el)-(self.pe+self.eb+de)) < 0.00001, f'{pe=}+{eb=}+{el=} != {self.pe=}+{self.eb=}+{de=}'
+    assert abs((pe + eb + el)-(self.pe + self.eb + m.de)) < 0.00001, f'{pe=}+{eb=}+{el=} != {self.pe=}+{self.eb=}+{m.de=}'
     # Note we return pe,eb,en not pe,eb,el, because "what came out the nozzle"
     # is more useful than "what came out the nozzle not including the bead".
     # We also recalculate en from the raw inputs to avoid accumulated integration errors.
-    return pe, eb, self.pe + de - pe
+    return pe, eb, self.pe + m.de - pe
 
   def draw(self,
       x=None, y=None, z=None, e=None,
@@ -1116,24 +1137,25 @@ M18
         if c.isretract and self.en_dynret:
           # Adjust retraction to Re and also relieve advance pressure.
           c = c.set(de=-self.Re - self.pe)
+          if not c.de:
+            c = ';{ftime(f_t)}: skipping empty retract.'
         elif c.isrestore and self.en_dynret:
           # Find the next move to get the pe and eb it needs.
           m1 = next((m for m in gcode[i+1:] if isinstance(m, Move)), None)
-          # For calculating the pressure pe needed, use the starting ve0 for
-          # dynamic extrusion accelerations, otherwise use average ve.
           if m1 and m1.isdraw:
-            ve = m1.ve0 if self.en_dynext and m1.isaccel else m1.ve
-            eb, pe = m1.eb, self._calc_pe(m1.db, ve)
+            # For calculating the pressure pe needed, use average ve.
+            eb, pe = m1.eb, self._calc_pe(m1.db, m1.ve)
             #self.log(f'adjusting {c} for next {m1}, {m1.ve=:.4f}({m1.ve0:.4f}<{m1.vem:.4f}>{m1.ve1:.4f}) {m1.isaccel=}')
           else:
             eb, pe = 0.0, self._calc_pe(0.0, 0.0)
           # Adjust existing retraction and add the starting bead.
           c = c.set(de=pe - self.pe + eb)
+          # If de is zero, skip adding this
+          if not c.de:
+            c = ';{ftime(f_t)}: skipping empty restore.'
         elif c.isdraw and self.en_dynext:
-          # For calculating the pressure pe needed, use the ending ve1 for
-          # accelerations, otherwise use average ve.
-          ve = c.ve1 if c.isaccel else c.ve
-          pe = self._calc_pe(c.db, ve)
+          # For calculating the pressure pe needed, use the ending ve1.
+          pe = self._calc_pe(c.db, c.ve1)
           # Adjust de to include required change in pe over the move.
           #self.log(f'adjusting {c} {c.ve=:.4f}({c.ve0:.4f}<{c.vem:.4f}>{c.ve1:.4f}) {c.isaccel=}')
           c = c.set(de=c.de + pe - self.pe)
@@ -1143,12 +1165,23 @@ M18
   def layerstats(self):
     h='{layer.h:.2f}'
     w='{layer.w:.2f}'
-    r='{(Fa * l_e) / (layer.h * layer.w * l_l) if l_l else 1.0:.2f}'
+    r='{(Fa * l_e) / (layer.h * layer.w * l_l) if l_l else layer.r:.2f}'
     v='{l_l/l_t if l_t else 0.0:.1f}'
     ve='{l_e/l_t if l_t else 0.0:.3f}'
     self.log('layer={layer.n} finished.')
     self.log(f'  avg:{h}x{w}x{r}@{v} ve={ve}')
-    self.log('  t={l_t:.1f} l={l_l:.1f} e={l_e:.1f}')
+    self.log('  t={ftime(l_t)} l={l_l:.1f} e={l_e:.1f}')
+
+  def filestats(self):
+    h='{(layer.z+layer.h)/layer.n:.2f}'
+    w='{Lw:.2f}'
+    r='{(Fa * f_e) / ((layer.z+layer.h)/(layer.n or 1) * Lw * f_l) if f_l else Lr:.2f}'
+    v='{f_l/f_t if f_t else 0.0:.1f}'
+    ve='{f_e/f_t if f_t else 0.0:.3f}'
+    lt='{ftime(f_t/(layer.n or 1))}'
+    self.log('file finished with {layer.n} layers.')
+    self.log(f'  avg:{h}x{w}x{r}@{v} ve={ve} lt={lt}')
+    self.log('  t={ftime(f_t)} l={f_l:.1f} e={f_e:.1f}')
 
   def preExt(self,x0,y0,x1,y1,le=120.0, lw=100.0, m=10.0, ve=20.0, vw=10, r=4):
     """Preextrude around a box with margin m.
@@ -1734,7 +1767,7 @@ if __name__ == '__main__':
   gen=ExtrudeTest(Te=args.Te, Tp=args.Tp, Fe=args.Fe, Fc=args.Fc,
       Kf=args.Kf, Kb=args.Kb, Cb=args.Cb, Re=args.Re,
       Vp=args.Vp, Vt=args.Vt, Vz=args.Vz, Ve=args.Ve, Vb=args.Vb,
-      h=args.Lh, w=args.Lw, r=args.Lr,
+      Lh=args.Lh, Lw=args.Lw, Lr=args.Lr,
       en_dynret=args.R, en_dynext=args.P, en_optmov=args.O, en_verb=args.v)
 
   backpressureargs=dict(name="Backpressure", linefn=gen.testRetract, tests=(
