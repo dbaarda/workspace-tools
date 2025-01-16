@@ -449,7 +449,7 @@ if __name__ == '__main__':
   data = args.infile.read()
   p=Printer(
       Te=args.Te, Tp=args.Tp, Fe=args.Fe, Fc=args.Fc,
-      Kf=args.Kf, Kb=args.Kb, Cb=args.Cb, Re=args.Re,
+      Kf=args.Kf, Kb=args.Kb, Re=args.Re,
       Vp=args.Vp, Vt=args.Vt, Vz=args.Vz, Ve=args.Ve, Vb=args.Vb,
       Lh=args.Lh, Lw=args.Lw, Lr=args.Lr,
       en_dynret=args.R, en_dynext=args.P, en_optmov=args.O, en_verb=args.v,

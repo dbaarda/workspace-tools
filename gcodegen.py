@@ -44,7 +44,7 @@ This gives us;
 
   Pe = Pn + Pb      # (1)
   Pn = Kf*vn        # (2)
-  Pb = Kb*Db + Cb   # (3)
+  Pb = Kb*Db        # (3)
   vn = v*Db*h/Af    # (4)
   Db = r*w          # (5)
   Af = pi*(Df/2)^2  # (6)
@@ -56,7 +56,6 @@ Where:
   Pb is the bead back-pressure in mm of filament advance.
   Kf is the nozzle pressure factor.
   Kb is the bead backpressure factor.
-  Cb is the bead backpressure constant.
   vn is the nozzle outflow velocity in mm/s of filament.
   ve is the extruder velocity in mm/s of filament.
   Df is the filament diameter in mm.
@@ -71,7 +70,7 @@ For a constant track width at steady state where extruder velocity `ve` equals
 nozzle flow velocity `nv` this can be simplified to;
 
   Pe = Kf*ve + Cf
-  Cf = Kb*Db + Cb
+  Cf = Kb*Db
 
 Where
 
@@ -80,42 +79,42 @@ Where
 We can calculate outflow vn as a function of extruder pressure and nozzle
 velocity like this;
 
-  Db = vn/v*Af/h                  # (7) from re-arranging (5)
-  Pe = Kf*vn + Kb*Db + Cb         # from (1) substituting in (2), (3), and (4)
-     = Kf*vn + Kb*vn/v*Af/h + Cb   # substituting in (7)
-     = (Kf + Kb/v*Af/h)*vn + Cb
-  (Kf + Kb/v*Af/h)*vn = Pe - Cb
-     vn = (Pe - Cb) /(Kf + Kb/v*Af/h)
-     vn = (Pe - Cb) * v/(Kf*v + Kb*Af/h) # (8)
+  Db = vn/v*Af/h                   # (7) from re-arranging (5)
+  Pe = Kf*vn + Kb*Db               # from (1) substituting in (2), (3), and (4)
+     = Kf*vn + Kb*vn/v*Af/h        # substituting in (7)
+     = (Kf + Kb/v*Af/h)*vn
+  (Kf + Kb/v*Af/h)*vn = Pe
+     vn = Pe /(Kf + Kb/v*Af/h)
+     vn = Pe * v/(Kf*v + Kb*Af/h) # (8)
 
-This means we only get nozzle outflow when `Pe > Cb` and `v > 0`. As nozzle
-velocity v approaches infinity the outflow approaches `(Pe-Cb)/Kf`. The outflow
+This means we only get nozzle outflow when `Pe > 0` and `v > 0`. As nozzle
+velocity v approaches infinity the outflow approaches `Pe/Kf`. The outflow
 is half that max rate when `v = Kb/Kf*Af/h`.
 
 Note the bead diameter as a function of extruder pressure Pe and nozzle velocity v is;
 
   Db = vn/v*Af/h                                # from (4) substituting (7)
-     = ((Pe - Cb) * v/(Kf*v + Kb*Af/h))/v * Af/h  # substituting in (8)
-     = (Pe - Cb)/(Kf*v + Kb*Af/h) * Af/h
-     = (Pe - Cb)/(Kf/Af*h*v + Kb))
+     = (Pe * v/(Kf*v + Kb*Af/h))/v * Af/h  # substituting in (8)
+     = Pe/(Kf*v + Kb*Af/h) * Af/h
+     = Pe/(Kf/Af*h*v + Kb))
 
-This means at nozzle velocity v=0 the bead diameter is `(Pe-Cb)/Kb`, and as
+This means at nozzle velocity `v=0` the bead diameter is `Pe/Kb`, and as
 the nozzle velocity approaches infinity it tends towards zero. The bead
-diameter is half the v=0 max when `v = Kb/Kf*Af/h`.
+diameter is half the `v=0` max when `v = Kb/Kf*Af/h`.
 
 The rate of change in extruder pressure is;
 
 dPe/dt = ve - vn
        = de/dt - vn
    dPe = de - dt * vn
-       = de - dt * (Pe - Cb) * v/(Kf*v + Kb*Af/h)
-       = de - (Pe - Cb) * dt/(Kf + Kb*Af/(v*h))
+       = de - dt * Pe * v/(Kf*v + Kb*Af/h)
+       = de - Pe * dt/(Kf + Kb*Af/(v*h))
 
-This is an exponentially decaying process with time-constant `T = = Kf +
-Kb*Af/(v*h)`. This means with no additional extrusion ve=0,
-extruder pressure Pe will decay towards Cb over a time roughly of `Kf +
-Kb*Af/(h*v)`. Note that for v=0 that time is infinity, which means it will not
-decay at all.
+This is an exponentially decaying process with time-constant `T = Kf +
+Kb*Af/(v*h)`. This means with no additional extrusion `ve=0`, extruder
+pressure `Pe` will decay towards 0 over a time roughly of `Kf + Kb*Af/(h*v)`.
+Note that for `v=0` that time is infinity, which means it will not decay at
+all.
 
 However, that assumes there is already a bead with backflow pressure Pb to
 match Pe. When you first start extruding after a restore, there is no bead and
@@ -130,15 +129,36 @@ de=+2mm seems to be the minimum for a normal starting dot.
 de=+1mm barely seems to register a dot at all.
 de=+0.5mm doesn't seem to show any difference from minimum drool.
 
-Suggests roughly Cb=0.8, Kb=2.0
+This suggests roughly Re>0.8 to account for backlash, and Kb=2.0.
 
 de=+2.3mm? for vl=10mm/s, ve=0.75mm/s
 de=+3mm for vl=30mm/s, ve=2.25mm/s
 de=+4mm for vl=60mm/s, ve=4.5mm/s
 de=+5mm seems about right advance for vl=100mm/s ve=7.5mm/s
 
-Suggests roughly Kf=0.4 with Cf=Pb=Kb*0.6+Cb=2.0.
+Suggests roughly Kf=0.4 with Cf=Pb=Kb*0.6+Re=2.0.
 
+Testing suggests you need extra retraction on top of this to avoid drool and
+stringing. I suspect this drool is "heat creep expansion", where heat travels
+up the filament feed causing expansion. For 0.5x0.2x1.0 at about 60mm/s print
+speeds giving `ve=2.5mm/s`, retraction needs to be at least 5mm to avoid this
+drool. This suggests settings should be about;
+
+Kf=0.4
+Kb=2.0
+Re=3.2
+
+However, other testing suggests Kb=4.0 might be more accurate, giving;
+
+Kf=0.4
+Kb=4.0
+Re=2.4
+
+Adding in a bit of extra retraction headroom would give;
+
+Kf=0.4
+Kb=4.0
+Re=3.0
 """
 import argparse
 import re
@@ -650,7 +670,6 @@ class GCodeGen(object):
     Fc: Case fan speed (0.0->1.0).
     Kf: Linear Advance factor (0.0->4.0 mm/mm/s).
     Kb: Bead backpressure factor (??? mm/mm).
-    Cb: Bead backpressure constant (??? mm).
     Re: Retraction distance (0.0->10.0 mm).
     Vp: Speed when printing (mm/s).
     Vt: Speed when traveling (mm/s).
@@ -739,14 +758,14 @@ M18
     return f'M106' if fe == 1.0 else f'M106 S{round(fe*255)}' if fe else 'M107'
 
   def __init__(self,
-      Te=210, Tp=50, Fe=1.0, Fc=1.0, Kf=0.0, Kb=0.0, Cb=0.0, Re=5,
+      Te=210, Tp=50, Fe=1.0, Fc=1.0, Kf=0.0, Kb=0.0, Re=5,
       Vp=60, Vt=100, Vz=7, Ve=40, Vb=30,
       Lh=0.2, Lw=Nd, Lr=1.0,
       en_dynret=False, en_dynext=False, en_optmov=False, en_verb=False):
     # Temp and Fan settings.
     self.Te, self.Tp, self.Fe, self.Fc = Te, Tp, Fe, Fc
-    # Linear advance settings.
-    self.Kf, self.Kb, self.Cb, self.Re = Kf, Kb, Cb, Re
+    # Linear advance and retraction settings.
+    self.Kf, self.Kb, self.Re = Kf, Kb, Re
     # Default velocities.
     self.Vp, self.Vt, self.Vz, self.Ve, self.Vb = Vp, Vt, Vz, Ve, Vb
     # Default line height, width, and extrusion ratio.
@@ -931,7 +950,7 @@ M18
 
   def _calc_pe(self, db, ve):
     """ Get steady-state pressure advance pe needed for target db and ve. """
-    pb = max(0, self.Kb*db + self.Cb)
+    pb = max(0, self.Kb*db)
     pn = max(0, self.Kf*ve)
     #pn = self.Kf*ve * e**(-dt/self.Kf)
     return pn+pb
@@ -951,13 +970,13 @@ M18
     if pe is None: pe = self.pe
     if ve is None: ve = self.ve
     db = self._db(eb,h)                # diameter of bead
-    pb = max(0, self.Kb*db + self.Cb)  # bead backpressure.
+    pb = max(0, self.Kb*db)            # bead backpressure.
     pn = max(0, pe - pb)               # nozzle pressure.
     return pn/self.Kf if self.Kf else ve if pe>=pb else 0.0
 
   def _calc_pe_eb_en(self, m):
     """ Calculate updated pe, eb, and en values after a move."""
-    if (self.Kf or self.Kb or self.Cb) and (self.pe>0 or self.eb>0 or m.de>0):
+    if (self.Kf or self.Kb) and (self.pe>0 or self.eb>0 or m.de>=0):
       # Calculate change in pressure advance 'pe' and bead volume `eb` by
       # iterating over the time interval with a dt that is small relative to
       # the Kf timeconstant.
@@ -992,7 +1011,7 @@ M18
             pe += ve * dt
             h += vz * dt
           db = self._db(eb, h)                # diameter of bead.
-          pb = max(0, self.Kb*db + self.Cb)   # bead backpressure.
+          pb = max(0, self.Kb*db)             # bead backpressure.
           pn = max(0, pe - pb)                # nozzle pressure.
           nde = pn*dt/(self.Kf+dt)            # Get filament extruded out the nozzle.
           lde = min(db*h*dl/self.Fa, eb+nde)  # Get volume removed from bead to line,
@@ -1009,7 +1028,7 @@ M18
       # minus the bead.
       ex = self.eb + self.pe + m.de
       pe, eb, el = min(ex, 0), min(m.eb, max(ex, 0)), max(0, ex - m.eb)
-    #print(f'{self.Kf=} {self.Kb=} {self.Cb=} {self.pe=} {self.eb=} {m} -> {pe=} {eb=} {el=}')
+    #print(f'{self.Kf=} {self.Kb=} {self.Re=} {self.pe=} {self.eb=} {m} -> {pe=} {eb=} {el=}')
     assert abs((pe + eb + el)-(self.pe + self.eb + m.de)) < 0.00001, f'{pe=}+{eb=}+{el=} != {self.pe=}+{self.eb=}+{m.de=}'
     # Note we return pe,eb,en not pe,eb,el, because "what came out the nozzle"
     # is more useful than "what came out the nozzle not including the bead".
@@ -1519,7 +1538,7 @@ class ExtrudeTest(GCodeGen):
     e=0.00001
     while all(v <= v1+e for (v,v1,dv) in testargs.values()):
       lineargs={k:v for k,(v,_,_) in testargs.items()}
-      confargs={k:v for k,v in lineargs.items() if k in ('Kf','Kb','Cb','Re')}
+      confargs={k:v for k,v in lineargs.items() if k in ('Kf','Kb','Re')}
       funcargs={k:v for k,v in lineargs.items() if k not in confargs}
       self.log(f'Test Line {name} {self._fset(**lineargs)}')
       self.pushconf(**confargs)
@@ -1596,7 +1615,7 @@ class ExtrudeTest(GCodeGen):
   def testStartStop(self, x0, y0, vx):
     """ Test starting and stopping extrusion for different settings.
 
-    This test is to check dynamic retracting for different Kf/Kb/Cb/Re
+    This test is to check dynamic retracting for different Kf/Kb/Re
     settings.
 
     Test phases are;
@@ -1676,7 +1695,7 @@ class ExtrudeTest(GCodeGen):
   def testKf(self, x0, y0, vx0, vx1):
     """ Test linear advance changing speed different speeds.
 
-    This is to test that dynamic extrusion for different Kf/Kb/Cb settings for
+    This is to test that dynamic extrusion for different Kf/Kb/Re settings for
     different speed changes is right.
 
     The test phases are;
@@ -1731,8 +1750,6 @@ def GCodeGenArgs(cmdline):
       help='Linear Advance factor between 0.0 to 4.0 in mm/mm/s.')
   cmdline.add_argument('-Kb', type=RangeType(0.0,10.0), default=0.0,
       help='Bead backpressure factor between 0.0 to 10.0 in mm/mm.')
-  cmdline.add_argument('-Cb', type=RangeType(-5.0,5.0), default=0.0,
-      help='Bead backpressure offset between -5.0 to 5.0 in mm.')
   cmdline.add_argument('-Re', type=RangeType(0.0,10.0), default=1.0,
       help='Retraction distance between 0.0 to 10.0 in mm.')
   cmdline.add_argument('-Vp', type=RangeType(5,100), default=60,
@@ -1772,7 +1789,7 @@ if __name__ == '__main__':
   args=cmdline.parse_args()
 
   gen=ExtrudeTest(Te=args.Te, Tp=args.Tp, Fe=args.Fe, Fc=args.Fc,
-      Kf=args.Kf, Kb=args.Kb, Cb=args.Cb, Re=args.Re,
+      Kf=args.Kf, Kb=args.Kb, Re=args.Re,
       Vp=args.Vp, Vt=args.Vt, Vz=args.Vz, Ve=args.Ve, Vb=args.Vb,
       Lh=args.Lh, Lw=args.Lw, Lr=args.Lr,
       en_dynret=args.R, en_dynext=args.P, en_optmov=args.O, en_verb=args.v)
