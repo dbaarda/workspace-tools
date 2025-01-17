@@ -539,7 +539,7 @@ class MoveBase(NamedTuple):
   def split(self, dlmin=1.0):
     """ Partition a move into a list of moves for the acceleration phases. """
     v0,v1,vm,dl = self.v0, self.v1, self.vm, self.dl
-    if v0 == vm == v1 or not m.isdraw:
+    if v0 == vm == v1 or not self.isdraw:
       # A non-moving, constant speed, or non-extruding move, don't partition it.
       return [self]
     # Get distances for move phases.
@@ -781,7 +781,7 @@ M18
       Te=210, Tp=50, Fe=1.0, Fc=1.0, Kf=0.0, Kb=0.0, Re=5,
       Vp=60, Vt=100, Vz=7, Ve=40, Vb=30,
       Lh=0.2, Lw=Nd, Lr=1.0,
-      en_relext=False, en_dynret=False, en_dynext=False, en_optmov=False, en_verb=False):
+      en_relext=False, en_dynret=False, en_dynext=False, en_optmov=False, en_fixvel=False, en_verb=False):
     # Temp and Fan settings.
     self.Te, self.Tp, self.Fe, self.Fc = Te, Tp, Fe, Fc
     # Linear advance and retraction settings.
@@ -792,7 +792,7 @@ M18
     self.Lh, self.Lw, self.Lr = Lh, Lw, Lr
     # Processing mode options.
     self.en_relext = en_relext
-    self.en_dynret, self.en_dynext, self.en_optmov, self.en_verb = en_dynret, en_dynext, en_optmov, en_verb
+    self.en_dynret, self.en_dynext, self.en_optmov, self.en_fixvel, self.en_verb = en_dynret, en_dynext, en_optmov, en_fixvel, en_verb
     class GMove(Move, Fd=self.Fd, Nd=self.Nd): pass
     self.GMove = GMove
     self.resetfile()
@@ -1173,6 +1173,9 @@ M18
       ljoin(self.gcode)
     # Fix all the velocities.
     lfixv(self.gcode)
+    if self.en_fixvel:
+      # set velocity to vm for decelerating moves.
+      self.gcode = [m.set(v=m.vm) if isinstance(m,Move) and m.v>m.v0==m.vm>m.v1 else m for m in self.gcode]
     if self.en_dynext:
       # Partition all the moves into phases
       self.gcode = lsplit(self.gcode)
@@ -1802,6 +1805,8 @@ def GCodeGenArgs(cmdline):
       help='Enable Linear Advance dynamic extrusion rates.')
   cmdline.add_argument('-O', action='store_true',
       help='Enable optimize, merging draw/move cmds where possible.')
+  cmdline.add_argument('-V', action='store_true',
+      help='Enable fix velocities for acceleration limits.')
   cmdline.add_argument('-v', action='store_true',
       help='Enable verbose logging output.')
 
@@ -1821,7 +1826,8 @@ if __name__ == '__main__':
       Vp=args.Vp, Vt=args.Vt, Vz=args.Vz, Ve=args.Ve, Vb=args.Vb,
       Lh=args.Lh, Lw=args.Lw, Lr=args.Lr,
       en_relext=args.E,
-      en_dynret=args.R, en_dynext=args.P, en_optmov=args.O, en_verb=args.v)
+      en_dynret=args.R, en_dynext=args.P, en_optmov=args.O,
+      en_fixvel=args.V, en_verb=args.v)
 
   backpressureargs=dict(name="Backpressure", linefn=gen.testRetract, tests=(
     dict(w=(0.3, 0.8), vx=10, ve=0.3*0.3*10/Move.Fa),

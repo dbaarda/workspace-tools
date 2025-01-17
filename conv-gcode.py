@@ -453,7 +453,7 @@ if __name__ == '__main__':
       Vp=args.Vp, Vt=args.Vt, Vz=args.Vz, Ve=args.Ve, Vb=args.Vb,
       Lh=args.Lh, Lw=args.Lw, Lr=args.Lr,
       en_relext=args.E,
-      en_dynret=args.R, en_dynext=args.P, en_optmov=args.O, en_verb=args.v,
+      en_dynret=args.R, en_dynext=args.P, en_optmov=args.O, en_fixvel=args.V, en_verb=args.v,
       Hs=args.Hs, Lp=args.Lp, en_pwmfan=args.F, en_autofan=args.A)
   p.runCode(data)
   data=p.getCode()
