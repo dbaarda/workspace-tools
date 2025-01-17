@@ -237,7 +237,6 @@ class MoveBase(NamedTuple):
   Fa = acircle(Fd)  # Fillament area in mm^2.
   Na = acircle(Nd)  # Nozzle area in mm^2.
   am = 0.0 # acceleration for mid phase of movements.
-  log = None  # optional log(msg) function to use.
 
   def __str__(self):
     dx,dy,dz,de,v,v0,v1,vm,h,w = self
@@ -493,34 +492,38 @@ class MoveBase(NamedTuple):
     # R = g * sin(th/2)/(1-sin(th/2))
     R = self.Gp*sinth2/(1-sinth2)
     # v = sqrt(a*R)
-    return min(sqrt(self.Ap*R), self.v, m.v)
+    return min(sqrt(self.Ap*R), self.v1, m.v0)
 
   def fixv(self, v=None, v0=0.0, v1=0.0, m0=None, m1=None):
     """ Update move velocities for moves before/after.
 
-    This updates a move's velocities to what the printer will do based on
-    on the moves before and after.
+    This updates a move's velocities to what the printer will do based on on
+    the moves before and after. The v0 or v1 values will be set less than the
+    provided velocities or moves if necessary to fit within the Ap
+    acceleration and deceleration limits.
 
     if v is not set it uses m.v.
-    if m0 is set the v0 start velocity is set to the m0.v1 end velocity.
+    if m0 is set the v0 start velocity is set to the corner velocity.
     If m1 is set the v1 end velocity is set to the corner velocity.
     If v0, or v1 are still not set they default to 0.0.
     """
     if v is None: v = self.v
-    if m0 is not None: v0 = m0.v1
+    if m0 is not None: v0 = m0.cornerv(self)
     if m1 is not None: v1 = self.cornerv(m1)
     dl = self.dl
     if not dl:
-      # A stop move, v0 and v1 are zero.
+      # A stop move, v0, v1, and vm are zero.
       m = self.set(v=v, v0=0, v1=0, vm=0)
     else:
-      if self.log and self._dvdl(v0, v1) > dl:
-        self.log(f'WARNING:cannot accelerate from {v0}mm/s to {v1}mm/s over {dl}mm with a={self.Ap}mm/s^2.')
-      #assert self._dvdl(v0, v1) <= dl, f'Cannot accelerate {v0=}mm/s to {v1=}mm/s over {dl=}mm.'
+      # limit v0 and v1 with acceleration limits.
+      if v0 < v1:
+        v1 = min(v1, sqrt(v0**2 + 2*dl*self.Ap))
+      elif v0 > v1:
+        v0 = min(v0, sqrt(v1**2 + 2*dl*self.Ap))
       # This is the limit velocity assuming constant acceleration at a/2.
       # This implements smoothed look-ahead to reduce spikey velocity.
       vm = sqrt((dl*self.Ap + v0**2 + v1**2)/2)
-      # If vlim is less than v0 or v1, we don't need acceleration at both ends.
+      # If vm is less than v0 or v1, we don't need acceleration at both ends.
       vm = max(v0, v1, vm)
       vm = min(v, vm)  # don't set vm higher than requested.
       assert 0 <= v0 <= vm <= self.Vp
@@ -533,24 +536,23 @@ class MoveBase(NamedTuple):
     return self._replace(dx=self.dx+m.dx, dy=self.dy+m.dy, dz=self.dz+m.dz,
         de=self.de+m.de, v=min(self.v, m.v),v0=min(self.v0, m.v0), v1=min(m.v1, m.v1), vm=min(self.vm, m.vm))
 
-  def split(self):
+  def split(self, dlmin=1.0):
     """ Partition a move into a list of moves for the acceleration phases. """
     v0,v1,vm,dl = self.v0, self.v1, self.vm, self.dl
-    if not dl or v0 == vm == v1 or self.de <= 0:
+    if v0 == vm == v1 or not m.isdraw:
       # A non-moving, constant speed, or non-extruding move, don't partition it.
       return [self]
-    # Get distances for acceleration phases.
-    dl0, dl1 = self.dl0, self.dl1
+    # Get distances for move phases.
+    dl0, dlm, dl1 = self.dl0, self.dlm, self.dl1
     # initialize middle phase v0 and v1 to just vm.
-    vm0, vm1 = vm, vm
-    # if acceleration distances are small don't bother partitioning them.
-    if dl0 < 1.0: dl0, vm0 = 0.0, v0
-    if dl1 < 1.0: dl1, vm1 = 0.0, v1
-    # Get the middle phase distance.
-    dlm = dl - dl0 - dl1
-    assert 0 <= dlm <= dl
+    mv0 = mv1 = vm
+    # if phase distances are small don't bother partitioning them.
+    if dl0 < dlmin or dlm < dlmin:
+      dl0, dlm, mv0 = 0.0, dl0+dlm, v0
+    if dl1 < dlmin:
+      dl1, dlm, mv1 = 0.0, dlm+dl1, v1
     # Make a list of the s,v0,v1 values for each phase.
-    phases = [(dl0/dl, v0, vm), (dlm/dl, vm0, vm1), (dl1/dl, vm, v1)]
+    phases = [(dl0/dl, v0, vm), (dlm/dl, mv0, mv1), (dl1/dl, vm, v1)]
     # Return a list moves for the non-zero phases.
     l=[self.set(v0=v0, v1=v1, s=s) for s,v0,v1 in phases if s]
     return l
@@ -569,14 +571,14 @@ class MoveBase(NamedTuple):
 class Move(MoveBase):
   __slots__ = ()
 
-  def __init_subclass__(cls, Fd=1.75, Nd=0.4, Ap=500, Vp=100, Gp=0.1, log=None):
+  def __init_subclass__(cls, Fd=1.75, Nd=0.4, Ap=500, Vp=100, Gp=0.1):
     super().__init_subclass__()
-    cls.Fd, cls.Nd, cls.Ap, cls.Vp, cls.Gp, cls.log = Fd, Nd, Ap, Vp, Gp, log
+    cls.Fd, cls.Nd, cls.Ap, cls.Vp, cls.Gp = Fd, Nd, Ap, Vp, Gp
     cls.Fa = acircle(Fd)
     cls.Na = acircle(Nd)
 
   def __new__(cls, *args, **kwargs):
-    """ Make v0 and v1 default to v for moves and 0.0 for non-moves. """
+    """ Make v0, v1, and vm default to v for moves and 0.0 for non-moves. """
     # Round all arguments to 6 decimal places to clean out fp errors.
     args = tuple(round(a,6) for a in args)
     kwargs = {k:round(v,6) for k,v in kwargs.items()}
@@ -598,7 +600,7 @@ class Move(MoveBase):
 
 def ljoin(l):
   # TODO: make this and lfixv methods of GCodeGen and make ljoin not optimze
-  # pre-extrudes.
+  # pre-extrudes or non-hopped moves (moves not crossing edges).
   i = m = None
   i1 = 0
   while i1<len(l):
@@ -621,6 +623,16 @@ def ljoin(l):
   return l
 
 
+def _rfixv(l,i,m,v0):
+  """ Reverse fix velocities for deceleration limits. """
+  rl=((j,l[j]) for j in range(i-1,-1,-1) if isinstance(l[j], Move))
+  while m.v0 != v0:
+    i0, m0 = next(rl)
+    v0 = m0.v0
+    l[i0] = m0 = m0.fixv(v0=v0, v1=m.v0)
+    i, m = i0, m0
+
+
 def lfixv(l, v=None, v0=0.0, v1=0.0):
   """ Fix velocities in a list of moves/comments/commands. """
   i = m = None
@@ -632,6 +644,8 @@ def lfixv(l, v=None, v0=0.0, v1=0.0):
       else:
         # We have the next move m1, fix m in the list.
         l[i] = m = m.fixv(v=v, v0=v0, m1=m1)
+        # Reverse fix velocities for acceleration limits.
+        _rfixv(l,i,m,v0)
         # v0 is the last m.v1, m1 is the next m to fix,
         v0, i, m = m.v1, i1, m1
   if m is not None:
@@ -779,7 +793,7 @@ M18
     # Processing mode options.
     self.en_relext = en_relext
     self.en_dynret, self.en_dynext, self.en_optmov, self.en_verb = en_dynret, en_dynext, en_optmov, en_verb
-    class GMove(Move, Fd=self.Fd, Nd=self.Nd, log=self.log): pass
+    class GMove(Move, Fd=self.Fd, Nd=self.Nd): pass
     self.GMove = GMove
     self.resetfile()
 
