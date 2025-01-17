@@ -1179,8 +1179,8 @@ M18
           # Find the next move to get the pe and eb it needs.
           m1 = next((m for m in gcode[i+1:] if isinstance(m, Move)), None)
           if m1 and m1.isdraw:
-            # For calculating the pressure pe needed, use average ve.
-            eb, pe = m1.eb, self._calc_pe(m1.db, m1.ve)
+            # For calculating the pressure pe needed, use middle phase ve.
+            eb, pe = m1.eb, self._calc_pe(m1.db, m1.vem)
             #self.log(f'adjusting {c} for next {m1}, {m1.ve=:.4f}({m1.ve0:.4f}<{m1.vem:.4f}>{m1.ve1:.4f}) {m1.isaccel=}')
           else:
             eb, pe = 0.0, self._calc_pe(0.0, 0.0)
@@ -1195,6 +1195,7 @@ M18
           pe = self._calc_pe(c.db, c.ve1)
           # Adjust de to include required change in pe over the move.
           #self.log(f'adjusting {c} {c.ve=:.4f}({c.ve0:.4f}<{c.vem:.4f}>{c.ve1:.4f}) {c.isaccel=}')
+          # TODO: This tends to oscillate, change to a PID or PD controller.
           c = c.set(de=c.de + pe - self.pe)
       self.fadd(c)
     return b'\n'.join(self.gcode) + b'\n'
