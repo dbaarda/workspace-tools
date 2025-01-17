@@ -384,6 +384,11 @@ class MoveBase(NamedTuple):
     return self._eb(self.h, self.w, self.r)
 
   @property
+  def el(self):
+    """ The line volume not including r under/over extrusion. """
+    return self.h*self.w*self.dl/self.Fa
+
+  @property
   def isdraw(self):
     return self.isgo and self.de > 0
 
@@ -679,6 +684,7 @@ class GCodeGen(object):
     Lr: Default extrusion ratio (0.1 -> 10.0).
     Lh: Default line height (0.1->0.4mm).
     Lw: Default line width (0.2->0.8mm).
+    en_relext: relative extrusion enabled.
     en_dynret: linear advance dynamic retraction enabled.
     en_dynext: linear advance dynamic extrusion enabled.
     en_optmov: path optimizing enabled.
@@ -761,7 +767,7 @@ M18
       Te=210, Tp=50, Fe=1.0, Fc=1.0, Kf=0.0, Kb=0.0, Re=5,
       Vp=60, Vt=100, Vz=7, Ve=40, Vb=30,
       Lh=0.2, Lw=Nd, Lr=1.0,
-      en_dynret=False, en_dynext=False, en_optmov=False, en_verb=False):
+      en_relext=False, en_dynret=False, en_dynext=False, en_optmov=False, en_verb=False):
     # Temp and Fan settings.
     self.Te, self.Tp, self.Fe, self.Fc = Te, Tp, Fe, Fc
     # Linear advance and retraction settings.
@@ -771,6 +777,7 @@ M18
     # Default line height, width, and extrusion ratio.
     self.Lh, self.Lw, self.Lr = Lh, Lw, Lr
     # Processing mode options.
+    self.en_relext = en_relext
     self.en_dynret, self.en_dynext, self.en_optmov, self.en_verb = en_dynret, en_dynext, en_optmov, en_verb
     class GMove(Move, Fd=self.Fd, Nd=self.Nd, log=self.log): pass
     self.GMove = GMove
@@ -821,6 +828,7 @@ M18
     self.ve = de/dl*v1 if dl else de/dt if dt else 0.0
     self.vn = self._vn()
     self.db = self._db()
+    self.dn = en
 
   def inccmd(self, cmd):
     """ Handle special string gcode commands. """
@@ -847,18 +855,21 @@ M18
 
   def fmove(self, m):
     """ Format a Move as a gcode command. """
-    dx,dy,dz,de,v,v0,v1,*_ = m
+    dx,dy,dz,de,v = m[:5]
     # Don't include args in cmd if they are unchanged.
     # Include both x and y if either are changed.
     x = self.x + dx if dx or dy else None
     y = self.y + dy if dy or dx else None
     z = self.z + dz if dz else None
-    e = self.e + de if de else None
+    if self.en_relext:
+      e = de if de else None
+    else:
+      e = self.e + de if de else None
     f = round(60 * v)
     if f == self.f: f = None
     cmd = self.fcmd('G1', X=x, Y=y, Z=z, E=e, F=f)
     if self.en_verb:
-      cmd = f'{cmd:40s}; {m}'
+      cmd = f'{cmd:40s}; {m} r={{dn/{m.el} if {m.dl} else db/{m.w}:.2f}}'
     return cmd
 
   def fadd(self, code):
@@ -1768,6 +1779,8 @@ def GCodeGenArgs(cmdline):
       help='Line width in mm.')
   cmdline.add_argument('-Lr', type=RangeType(0.0,10.0), default=1.0,
       help='Line extrusion ratio between 0.0 to 10.0.')
+  cmdline.add_argument('-E', action='store_true',
+      help='Enable relative extrusion.')
   cmdline.add_argument('-R', action='store_true',
       help='Enable Linear Advance dynamic retract/restore.')
   cmdline.add_argument('-P', action='store_true',
@@ -1792,6 +1805,7 @@ if __name__ == '__main__':
       Kf=args.Kf, Kb=args.Kb, Re=args.Re,
       Vp=args.Vp, Vt=args.Vt, Vz=args.Vz, Ve=args.Ve, Vb=args.Vb,
       Lh=args.Lh, Lw=args.Lw, Lr=args.Lr,
+      en_relext=args.E,
       en_dynret=args.R, en_dynext=args.P, en_optmov=args.O, en_verb=args.v)
 
   backpressureargs=dict(name="Backpressure", linefn=gen.testRetract, tests=(
