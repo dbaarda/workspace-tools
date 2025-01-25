@@ -221,6 +221,7 @@ before and after.
 
 import re
 import gcodegen
+from math import log
 
 def RelativeToAbsoluteE(data):
   lines=[]
@@ -338,6 +339,7 @@ class Printer(gcodegen.GCodeGen):
     # Get and filter fan output fo.
     fo = self._fo(self.fd, self.de_dt)
     self.fo = (dt*fo + self.Tf*self.fo)/(self.Tf + dt)
+    #self.fo = (self.fo - fo)*e**(-dt/self.Tf) + fo
     # Get Th and calculate extruded heat ho.
     Th = self._Th(fo)
     self.ho = (de + self.ho)*Th/(Th + dt)
@@ -364,6 +366,7 @@ class Printer(gcodegen.GCodeGen):
       self.Layer(line)
     elif line.startswith(';end gcode'):
       self.layerstats()
+      self.filestats()
       self.add(line)
     elif line.startswith('M106'):
       dt = self.M106(line)
@@ -420,6 +423,8 @@ class Printer(gcodegen.GCodeGen):
     if self.Lp:
       # Change all layer waits to wait for Lp duration.
       dt = self.Lp
+      if self.Hs and self.ho>self.Hs:
+        dt += self._Th(0)*log(self.ho/self.Hs)
     else:
       m = re.match(r'G4 P([0-9]+)', line)
       dt = float(m[1])/1000.0

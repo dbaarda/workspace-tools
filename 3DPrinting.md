@@ -354,28 +354,28 @@ For the 4 tests use;
 1. Constant `vx`, constant `ve`, to test how `Pe` varies with `w` and `h`. We
   expect `Pe` to vary linearly with `w`;
 
-  * w=(0.3,0.8) for 10 steps every 0.05mm width.
-  * h=0.09/w giving h=0.3 to 0.1125.
-  * vx=10mm/s
-  * ve=0.3*0.3*10/Fa = 0.3742mm/s.
+  * `w=(0.3, 0.8)` for 10 steps every 0.05mm width.
+  * `h=0.09/w` giving h=0.3 to 0.1125.
+  * `vx=10`
+  * `ve=0.3*0.3*10/Fa` = 0.3742mm/s.
   * Expected Pn=0.1, Pb=0.9 to 2.4, Pe=1.0 to 2.5.
 
 1. Constant `w`, constant `ve` to test that `Pe` doesn't vary with `h` and
   `vx`. We expect that `Pe` should be the same for all these lines;
 
-   * w=0.5
-   * h=(0.1,0.35) for 10 steps every 0.025mm.
-   * vx=3.5/h giving vx=10 to 35mm/s.
-   * ve=0.5*0.35*10/Fa = 0.7276mm/s.
+   * `w=0.5`
+   * `h=(0.1, 0.35)` for 10 steps every 0.025mm.
+   * `vx=3.5/h` giving vx=10 to 35mm/s.
+   * `ve=0.5*0.35*10/Fa` = 0.7276mm/s.
    * Expected Pn=0.3, Pb=1.5, Pe=1.8 mm for all tests.
 
 1. Constant `h`, constant `ve` to test how `Pe` varies with `w` and `vx`. We
   expect `Pe` to vary linearly with `w`;
 
-   * w=(0.3,0.8) for 10 steps every 0.05mm width.
-   * h=0.2
-   * vx=8/w giving vx=26.7 to 10mm/s.
-   * ve=0.2*0.8*10/Fa = 0.6652mm/s
+   * `w=(0.3, 0.8)` for 10 steps every 0.05mm width.
+   * `h=0.2`
+   * `vx=8/w` giving vx=26.7 to 10mm/s.
+   * `ve=0.2*0.8*10/Fa` = 0.6652mm/s
    * Expected Pn=0.3, Pb=0.9 to 2.4, Pe=1.2 to 2.7 mm.
 
 1. Constant 'h', constant 'w' to test how `Pe` varies with `vx` and `ve`. We
@@ -1149,6 +1149,126 @@ As a rough compromise between all of this, and erring on the side of less
 pressure compensation with more `Re` to normalize and compensate for the
 errors, I think I'm going to use `Kf=0.4, Kb=4.0, Re=1.0`.
 
+### BacklashTest2
+
+Doing some prints using `conv-gcode.py -Kf=0.4 -Kb=2.0 -Re=3.0` as a
+post-processor for FlashPrint, I noticed that the initial line after the
+pre-extrude was very under-extruded. This appears to be caused by excessive
+retraction after the pre-extrude, which uses a draw @20mm/sec of a line with
+`l=0.20x0.40x4.16`, which is 4.16 times over-extruded for a bead diameter of
+about 1.66mm and ve=2.77mm/s. This gives an estimated pressure for `Kf=0.4
+Kb=2.0` of `Pe=Pn+Pb=1.1+3.3=4.4`, which must be be too high. Note
+over-extrusion this high are not typical and creates a bead that flows past
+the edge of the nozzle and bulges up around it. This almost certainly will
+have pressure characteristics that defy any simple "pressure linearly
+proportional to bead diameter" model, but we still need to figure out how it
+behaves so we can get roughly correct retractions after the pre-extrude.
+
+The previous backlash test showed promise as a way of measuring this, but had
+a few faults. Things that were changed;
+
+1. Reinstate the initial priming draw 5mm@1mm, move 10mm@1mm always with h=0.3
+   to ensure the nozzle is consistently primed or at least show how close the
+   initial pressures are.
+   
+2. Always do the final cooldown draw 5mm@1mm with h=0.3 for consistency. Also
+   do an up and dn action before it to preset the pressure and cancel any
+   backlash.
+
+3. Do the moving retract and restore @10mm/sec with h=0.2 to get a more
+   accurate measure of when the flow stops to measure the pressure.
+
+The test phases are now;
+
+* 0mm: dn and restore to h=0.3.
+* 5mm@1mm/s: draw to prime nozzle.
+* 10mm@1mm/s: move to drain nozzle.
+* 0mm: dn and restore to test height `h=h` with pre-applied pressure.
+* 30mm@vx: draw to stabilize pressure at that speed.
+* 0mm: move to h=0.2mm for start of pressure measurement.
+* 20mm@10mm/s: moving retract `de=-re` to measure required retract.
+* 20mm@10mm/s: moving restore `de=re` to measure required restore.
+* 0mm: default retract and up then dn and restore to h=0.3mm.
+* 5mm@1mm/s: cooldown draw to finalize line and stabilize pressure.
+* 0mm: default retract and up.
+
+The tests were run with;
+
+* common args: Kf=0.6, Kb=3.0, Re=2.5
+* test1: ve=1.0, h=0.3, w=(0.3,0.8), re=4.0
+* test2: ve=1.0, h=0.3, w=(0.8,1.8), re=4.0
+* test3: ve=1.0, h=0.2, w=(0.3,0.8), re=4.0
+* test4: ve=1.0, h=0.2, w=(0.8,1.8), re=4.0
+
+The cmdline run was;
+
+```bash
+./gcodegen.py -Fe=0.0 -Kf=0.6 -Kb=3.0 -Re=2.5 -R -V -E -v >BacklashTest2_Fe00Kf06Kb30Re25RVEv.g
+```
+
+![BacklashTest2 Result](BacklashTest2.jpg "BacklashTest2 Result")
+
+The commented version of gcode output for this is in
+[BacklashTest2_Fe00Kf06Kb30Re25RVEv.g](./BacklashTest2_Fe00Kf06Kb30Re25RVEv.g).
+
+#### Observations
+
+The first warmup 5mm@1mm/s l=0.3x0.5x1.0 line for each test is rather
+over-extruded, but they get better after that. The first line is the first
+thing drawn after drawing the ruler and writing the summary text, which is all
+done @10mm/s with l=0.3x0.5x1.0 lines, looks good, and has lots of time to
+stabilize to the right pressure for that speed and line. The only difference
+between the ruler and summary and the warmup line is the print speed, so the
+only thing giving different pressure is `Kf`. I'd noticed this in earlier
+attempts at this test and had increased `Kf` from 0.4 to 0.6 which made it
+better, but it looks like it still needs to be higher. Note that this assumes
+`Kf` is linear, which it might not be, so it's possible this only applies for
+the transition from @10mm/s to @1mm/s, and needs to be different for higher
+speeds. Earlier attempts also had over and under extrusion problems which lead
+to using `Kb=3.0` for this test, which seems pretty close.
+
+The other warmup lines are all also a bit over-extruded, except for the very
+last line of test4. The next 10mm@1mm/s drain move all look pretty consistent
+and appear to get the pressure down to roughly the same and low for all tests.
+
+The 5mm@1mm/s l=0.3x0.5x1.0 cooldown lines are all even more over-extruded
+except for the last lines of test4. Note that the warmup lines are done
+immediately after the previous cooldown line with exactly the same speed and
+line settings, so the warmup over-extrusion is just a continuation of the
+cooldown over-extrusion, which must come from the restore after the
+retract/restore measurement lines are done.
+
+The test4 results are different from the others, with the over-extrusion for
+the warmup/cooldown lines slowly fading with each test line. I measured the
+scraped-off line thicknesses and for test1, test2, and test3 the 0.3mm thick
+test-edge brim lines measured as 0.25mm thick, but for test4 they measured as
+0.30. So the test4 improvement is probably at least partially a bed-leveling
+artifact. The test1-3 5mm@1mm/s warmup/cooldown lines are more over-extruded
+than the same l=0.3x0.5x1.0 but @10mm/s ruler, brim, and text lines because
+the faster lines had time to stabilize, but the warmup/cooldown lines didn't
+and had the excess accumulated pressure from the thinner than estimated test
+lines, retained by the retract/restore operations, and exagerated by the slow
+@1mm speeds.
+
+For lines thicker than about 0.9 the test lines don't necessarily get wider,
+but they do get thicker, showing that the bead doesn't get wider, but it
+starts to bulge up around the nozzle.
+
+The test1 test lines start a little under-extruded, particularly for the
+thinner lines. In test2 the line starts seem to get a little over-extruded for
+the thickest lines. For test3 and test4 we see the same under-extruded for
+thin, over-extruded for thick thing, but maybe less visible.  The test line
+ends all look good, so the pressure did stabilize well, so the the
+retract/restore measurements should all be good.
+
+The retraction measurement lines all look about the same, with shorter lines
+looking exactly like the ends of the longer lines. The all start at about
+0.5mm wide and taper away nicely, making their volume about lx0.2x0.25xFa or
+0.02mm per mm of length, which added to the `4/20 = 0.2mm` retracted per mm
+gives 0.22mm of pressure relieved per mm of line.
+
+Sadly, for lines with w>0.7 re=4.0 is not enough retraction to get a final
+retraction measurement. I need to do this again with a larger `re=6.0` value.
 
 # FlashPrint Settings.
 
