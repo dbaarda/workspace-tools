@@ -11,10 +11,13 @@
 # the filename.
 
 infile="${@:$#}"
-argstr=$(echo "${@:1:$#-1}" | sed -e 's:[- =]::g')
-outfile="${infile%.gx}_${argstr}.gx"
+argstr=$(echo "${@:1:$#-1}" | sed -e 's:[- =.]::g')
+# Strip any existing conv-gcode.py args from the name.
+outfile="${infile/_*./.}"
+# Add the new conv-gcode.py args from the name.
+outfile="${outfile/./_${argstr}.}"
 
-echo "Processing ${infile} into ${outfile}."
+echo "Processing '${infile}' into '${outfile}'."
 ./conv-gcode.py "$@" > $outfile
 
 ./gxsum $outfile
