@@ -1229,7 +1229,7 @@ M18
           # Get the pe and eb for the next draws.
           pe, eb = self._calc_pe(db, ve), Move._eb(h,w,r)
           # Adjust existing retraction and add the starting bead.
-          self.flog(f'adjusting {c} for {ve=:.4f} {db=:.4f} l={h}x{w}x{round(r,4)} for {pe=:.4f} {eb=:.4f}')
+          #self.flog(f'adjusting {c} for {ve=:.4f} {db=:.4f} l={h}x{w}x{round(r,4)} for {pe=:.4f} {eb=:.4f}')
           c = c.set(de=pe - self.pe + eb,h=h,w=w)
           # If de is zero, skip adding this.
           if not c.de:
@@ -1239,7 +1239,7 @@ M18
           # For calculating the pressure pe needed, use the ending ve1.
           pe = self._calc_pe(c.db, c.ve1)
           # Adjust de to include required change in pe over the move.
-          #self.log(f'adjusting {c} {c.ve=:.4f}({c.ve0:.4f}<{c.vem:.4f}>{c.ve1:.4f}) {c.isaccel=}')
+          #self.flog(f'adjusting {c} {c.ve=:.4f}({c.ve0:.4f}<{c.vem:.4f}>{c.ve1:.4f}) {c.isaccel=}')
           # TODO: This tends to oscillate, change to a PID or PD controller.
           c = c.set(de=c.de + pe - self.pe)
       self.fadd(c)
@@ -1734,7 +1734,7 @@ class ExtrudeTest(GCodeGen):
     self.draw(dx=dx[4],v=5)
     self.up()
 
-  def testBacklash(self, x0, y0, vx=None, ve=None, h=None, w=None, r=1.0, re=5.0):
+  def testBacklash(self, x0, y0, vx=None, ve=None, h=None, w=None, r=1.0, re=5.0, r0=None):
     """ Test retract and restore distances.
 
     This test is to test retraction and restore distances for different vx
@@ -1749,6 +1749,7 @@ class ExtrudeTest(GCodeGen):
       * 30mm: draw at <vx>mm/s to stabilize pressure at that speed.
       * 0mm: move to h=0.2mm for start of pressure measurement.
       * 20mm: moving retract of <re>mm at 10mm/s to measure required retract.
+        if r0 is set, an additional r0mm will be retracted over the first 1mm.
       * 20mm: moving restore of <re>mm at 10mm/s to measure required restore.
       * 0mm: default retract and up, then dn and restore to h=0.3mm to remove backlash.
       * 5mm: draw at 1mm/s to finalize line and stabilize pressure.
@@ -1773,7 +1774,11 @@ class ExtrudeTest(GCodeGen):
     self.dn(h=h)
     self.draw(dx=30,v=vx,w=w)
     self.move(h=0.2)
-    self.move(dx=20,de=-re, v=10)
+    if r0:
+      self.move(dx=1,de=-re*1/20-r0, v=10)
+      self.move(dx=19,de=-re*19/20, v=10)
+    else:
+      self.move(dx=20,de=-re, v=10)
     self.move(dx=20,de=+re, v=10)
     self.up()
     self.dn(h=0.3)
@@ -1908,10 +1913,10 @@ if __name__ == '__main__':
   backlashargs=dict(name="Backlash", linefn=gen.testBacklash,
     Kf=args.Kf, Kb=args.Kb, Re=args.Re,
     tests=(
-      dict(ve=1.0, h=0.3, w=(0.3,0.8), re=4.0),
-      dict(ve=1.0, h=0.3, w=(0.8,1.8), re=4.0),
-      dict(ve=1.0, h=0.2, w=(0.3,0.8), re=4.0),
-      dict(ve=1.0, h=0.2, w=(0.8,1.8), re=4.0),
+      dict(ve=1.0, h=0.3, w=(0.3,0.8), r0=2.0, re=3.0),
+      dict(ve=1.0, h=0.3, w=(0.8,1.8), r0=4.0, re=2.0),
+      dict(ve=1.0, h=0.2, w=(0.3,0.8), r0=2.0, re=3.0),
+      dict(ve=1.0, h=0.2, w=(0.8,1.8), r0=4.0, re=2.0),
       ))
 
   gen.startFile()
