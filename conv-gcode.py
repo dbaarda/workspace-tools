@@ -344,7 +344,7 @@ class Printer(gcodegen.GCodeGen):
     Th = self._Th(fo)
     self.ho = (de + self.ho)*Th/(Th + dt)
     # Turn on if there is excess heat extruded.
-    on = self.fan_on and self.ho > self.Hs
+    on = self.fan_on and self.ho >= self.Hs
     self.setfan(self.Fe if on else 0.0)
 
   def layerstats(self):
