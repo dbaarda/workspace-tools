@@ -1170,7 +1170,7 @@ a few faults. Things that were changed;
 1. Reinstate the initial priming draw 5mm@1mm, move 10mm@1mm always with h=0.3
    to ensure the nozzle is consistently primed or at least show how close the
    initial pressures are.
-   
+
 2. Always do the final cooldown draw 5mm@1mm with h=0.3 for consistency. Also
    do an up and dn action before it to preset the pressure and cancel any
    backlash.
@@ -1262,13 +1262,43 @@ ends all look good, so the pressure did stabilize well, so the the
 retract/restore measurements should all be good.
 
 The retraction measurement lines all look about the same, with shorter lines
-looking exactly like the ends of the longer lines. The all start at about
+looking exactly like the ends of the longer lines. They all start at about
 0.5mm wide and taper away nicely, making their volume about lx0.2x0.25xFa or
 0.02mm per mm of length, which added to the `4/20 = 0.2mm` retracted per mm
 gives 0.22mm of pressure relieved per mm of line.
 
 Sadly, for lines with w>0.7 re=4.0 is not enough retraction to get a final
 retraction measurement. I need to do this again with a larger `re=6.0` value.
+
+### BacklashTest3
+
+I attempted to modify BacklashTest2 to do additional retraction so we could
+see the retraction required for the wider lines. It added an optional `r0`
+initial retraction to apply that would be executed over the first 1mm of the
+moving retract. The results are WTF!
+
+![BacklashTest3 Result](BacklashTest3.jpg "BacklashTest3 Result")
+
+I'm not going to bother including details.
+
+#### Observations
+
+This contradicts the BacklashTests2 results so much it throws into question
+the whole testing methodology. The test1 retraction results kind of match for
+the first couple of lines, but then the lines start to look exactly the same
+even though they have effectively and extra 1mm of retraction. The other tests
+are an ambiguous mess but mostly look like the lines are exactly the same
+length as for BacklashTest2. For test2 the retraction lines a smeared so thin
+they are barely readable, and for test4 they look like stringing that barely
+touched the bed.
+
+I think this test is heavily influenced by how well the bed is leveled and
+largely measures how far the bead at the end of the drawn line can be smeared
+or stringed. In between BacklashTest2 and BacklashTest3 I attempted to level
+the bed and it looks like I made it worse.
+
+So back to the drawing board, and throw out all the results and assumptions so
+far.
 
 # FlashPrint Settings.
 
