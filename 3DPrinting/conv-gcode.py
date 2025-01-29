@@ -447,7 +447,7 @@ def GCodeGenArgs(cmdline):
       help='Printer automatically adjusts fan speed when on.')
 
 
-def GCodeGenArgs(args):
+def GCodeGetArgs(args):
   return dict(gcodegen.GCodeGetArgs(args),
     Hs=args.Hs, Lp=args.Lp, pwmfan=args.F, autofan=args.A)
 
