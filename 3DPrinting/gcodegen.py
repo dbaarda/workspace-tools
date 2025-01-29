@@ -698,10 +698,10 @@ class GCodeGen(object):
     Lr: Default extrusion ratio (0.1 -> 10.0).
     Lh: Default line height (0.1->0.4mm).
     Lw: Default line width (0.2->0.8mm).
-    en_relext: relative extrusion enabled.
-    en_dynret: linear advance dynamic retraction enabled.
-    en_dynext: linear advance dynamic extrusion enabled.
-    en_optmov: path optimizing enabled.
+    relext: relative extrusion enabled.
+    dynret: linear advance dynamic retraction enabled.
+    dynext: linear advance dynamic extrusion enabled.
+    optmov: path optimizing enabled.
     pe: current advance/retract length for extruder pressure.
     eb: current extruded bead volume for nozzle backpressure.
     f_t: current file execution time.
@@ -781,7 +781,7 @@ M18
       Te=210, Tp=50, Fe=1.0, Fc=1.0, Kf=0.0, Kb=0.0, Re=5,
       Vp=60, Vt=100, Vz=7, Ve=40, Vb=30,
       Lh=0.2, Lw=Nd, Lr=1.0,
-      en_relext=False, en_dynret=False, en_dynext=False, en_optmov=False, en_fixvel=False, en_verb=False):
+      relext=False, dynret=False, dynext=False, optmov=False, fixvel=False, verb=False):
     # Temp and Fan settings.
     self.Te, self.Tp, self.Fe, self.Fc = Te, Tp, Fe, Fc
     # Linear advance and retraction settings.
@@ -791,8 +791,8 @@ M18
     # Default line height, width, and extrusion ratio.
     self.Lh, self.Lw, self.Lr = Lh, Lw, Lr
     # Processing mode options.
-    self.en_relext = en_relext
-    self.en_dynret, self.en_dynext, self.en_optmov, self.en_fixvel, self.en_verb = en_dynret, en_dynext, en_optmov, en_fixvel, en_verb
+    self.relext = relext
+    self.dynret, self.dynext, self.optmov, self.fixvel, self.verb = dynret, dynext, optmov, fixvel, verb
     class GMove(Move, Fd=self.Fd, Nd=self.Nd): pass
     self.GMove = GMove
     self.resetfile()
@@ -887,14 +887,14 @@ M18
     x = self.x + dx if dx or dy else None
     y = self.y + dy if dy or dx else None
     z = self.z + dz if dz else None
-    if self.en_relext:
+    if self.relext:
       e = de if de else None
     else:
       e = self.e + de if de else None
     f = round(60 * v)
     if f == self.f: f = None
     cmd = self.fcmd('G1', X=x, Y=y, Z=z, E=e, F=f)
-    if self.en_verb:
+    if self.verb:
       cmd = f'{cmd:40s}; {m} r={{en/{m.el} if {m.el} else db/{m.w}:.2f}}'
     return cmd
 
@@ -944,12 +944,12 @@ M18
 
   def log(self, txt):
     #print(self.fstr(txt))
-    if self.en_verb:
+    if self.verb:
       self.cmt('{ftime(f_t)}: ' + txt)
 
   def flog(self, txt):
     """Add a formatted log entry."""
-    if self.en_verb:
+    if self.verb:
       self.log(txt)
       # We need to fstr() reformat that last log entry...
       self.fadd(self.gcode.pop())
@@ -1139,7 +1139,7 @@ M18
     # If dynamic retraction is enabled and de is zero, set de to a tiny
     # retraction so that it doesn't get optimized away and can be dynamically
     # adjusted later.
-    if self.en_dynret and not de: de = -0.00001
+    if self.dynret and not de: de = -0.00001
     self.move(e=e, de=de, v=ve, s=s)
 
   def restore(self, e=None, de=None, vb=None, s=1.0):
@@ -1153,7 +1153,7 @@ M18
     # If dynamic retraction is enabled and de is zero, set de to a tiny
     # restore so that it doesn't get optimized away and can be dynamically
     # adjusted later.
-    if self.en_dynret and not de: de = 0.00001
+    if self.dynret and not de: de = 0.00001
     self.move(e=e, de=de, v=vb, s=s)
 
   def up(self,
@@ -1199,15 +1199,15 @@ M18
     return 0.0, 0.0, self.h, self.w, 0.0
 
   def getCode(self):
-    if self.en_optmov:
+    if self.optmov:
       # Join together any moves that can be joined.
       ljoin(self.gcode)
     # Fix all the velocities.
     lfixv(self.gcode)
-    if self.en_fixvel:
+    if self.fixvel:
       # set velocity to vm for decelerating moves.
       self.gcode = [m.set(v=m.vm) if isinstance(m,Move) and m.v>m.v0==m.vm>m.v1 else m for m in self.gcode]
-    if self.en_dynext:
+    if self.dynext:
       # Partition all the moves into phases
       self.gcode = lsplit(self.gcode)
     # finalize and return the resulting gcode.
@@ -1216,14 +1216,14 @@ M18
     for i,c in enumerate(gcode):
       # Adjust Move's to include dynamic retraction and extrusion.
       if isinstance(c, Move):
-        if c.isretract and self.en_dynret:
+        if c.isretract and self.dynret:
           # Adjust retraction to Re and also relieve advance pressure.
           c = c.set(de=-self.Re - self.pe)
           # If de is zero, skip adding this.
           if not c.de:
             self.flog('skipping empty retract.')
             continue
-        elif c.isrestore and self.en_dynret:
+        elif c.isrestore and self.dynret:
           # Get the next draws ve,db,h,w,r.
           ve,db,h,w,r = self._getNextVeDbhwr(gcode[i+1:])
           # Get the pe and eb for the next draws.
@@ -1235,7 +1235,7 @@ M18
           if not c.de:
             self.flog('skipping empty restore.')
             continue
-        elif c.isdraw and self.en_dynext:
+        elif c.isdraw and self.dynext:
           # For calculating the pressure pe needed, use the ending ve1.
           pe = self._calc_pe(c.db, c.ve1)
           # Adjust de to include required change in pe over the move.
@@ -1875,6 +1875,17 @@ def GCodeGenArgs(cmdline):
       help='Enable verbose logging output.')
 
 
+def GCodeGetArgs(args):
+  """ Get the dict of standard GCode arguments. """
+  return dict (
+      Te=args.Te, Tp=args.Tp, Fe=args.Fe, Fc=args.Fc,
+      Kf=args.Kf, Kb=args.Kb, Re=args.Re,
+      Vp=args.Vp, Vt=args.Vt, Vz=args.Vz, Ve=args.Ve, Vb=args.Vb,
+      Lh=args.Lh, Lw=args.Lw, Lr=args.Lr,
+      dynret=args.R, dynext=args.P, optmov=args.O, fixvel=args.V,
+      relext=args.E, verb=args.v)
+
+
 if __name__ == '__main__':
   import sys
 
@@ -1885,13 +1896,7 @@ if __name__ == '__main__':
       help='Test number when running individual tests.')
   args=cmdline.parse_args()
 
-  gen=ExtrudeTest(Te=args.Te, Tp=args.Tp, Fe=args.Fe, Fc=args.Fc,
-      Kf=args.Kf, Kb=args.Kb, Re=args.Re,
-      Vp=args.Vp, Vt=args.Vt, Vz=args.Vz, Ve=args.Ve, Vb=args.Vb,
-      Lh=args.Lh, Lw=args.Lw, Lr=args.Lr,
-      en_relext=args.E,
-      en_dynret=args.R, en_dynext=args.P, en_optmov=args.O,
-      en_fixvel=args.V, en_verb=args.v)
+  gen=ExtrudeTest(**GCodeGetArgs(args))
 
   backpressureargs=dict(name="Backpressure", linefn=gen.testRetract, tests=(
     dict(w=(0.3, 0.8), vx=10, ve=0.3*0.3*10/Move.Fa),

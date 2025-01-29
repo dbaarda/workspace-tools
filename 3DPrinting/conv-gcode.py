@@ -223,6 +223,7 @@ import re
 import gcodegen
 from math import log
 
+
 def RelativeToAbsoluteE(data):
   lines=[]
   E=0.0
@@ -234,14 +235,17 @@ def RelativeToAbsoluteE(data):
     lines.append(line)
   return ''.join(lines)
 
+
 def FixFlashPrintLayerStartHop(data):
   """ At the start of each layer move the z-hop or layer-step immediately after the retract."""
   data=re.sub(r'(\n;layer:.*\n(?:M.*\n)*G1 E.*\n)((?:.*\n)*?)(G1 Z.*\n)'.encode(),r'\1\3\2'.encode(),data)
   return data
 
+
 def fbool(b):
   """ Format a boolean as 'Y', 'N', or '?' for True, False, None (unknown). """
   return '?' if b is None else 'Y' if b else 'N'
+
 
 def hc(v):
   """ Get hc as a function of air velocity v in m/s."""
@@ -274,14 +278,14 @@ class Printer(gcodegen.GCodeGen):
   def _fo(self, fd, de_dt):
     # Get fo fan output for autofan if enabled, else fo = fd fan drive.
     assert de_dt >=0.0
-    return fd*min(1.0, self.Fk*de_dt + self.Fc) if self.en_autofan else fd
+    return fd*min(1.0, self.Fk*de_dt + self.Fc) if self.autofan else fd
 
-  def __init__(self, Hs=0.0, Lp=0.0, en_pwmfan=False, en_autofan=True, **kwargs):
+  def __init__(self, Hs=0.0, Lp=0.0, pwmfan=False, autofan=True, **kwargs):
     super().__init__(**kwargs)
     self.Hs = Hs  # heat extruded setting.
     self.Lp=Lp # duration to pause after each layer.
-    self.en_pwmfan=en_pwmfan  # whether to control fanspeed with gcode pwm.
-    self.en_autofan=en_autofan  # whether the printer autocontrols fan speed.
+    self.pwmfan=pwmfan  # whether to control fanspeed with gcode pwm.
+    self.autofan=autofan  # whether the printer autocontrols fan speed.
 
   def resetfile(self):
     """ Reset all state variables. """
@@ -318,7 +322,7 @@ class Printer(gcodegen.GCodeGen):
     de, dt = self.fe, self.ft
     if self.ft > self.Tp and fs > 0.0:
       self.ft = self.fe = 0.0
-    if self.en_pwmfan:
+    if self.pwmfan:
       fd = 1.0 if self.ft < fs*self.Tp else 0.0
     else:
       fd = fs
@@ -431,35 +435,35 @@ class Printer(gcodegen.GCodeGen):
     self.wait(dt)
     return dt
 
-
-if __name__ == '__main__':
-  import argparse, sys
-  from gcodegen import RangeType
-
-  cmdline = argparse.ArgumentParser(description='Postprocess FlashPrint gcode.',
-      formatter_class=argparse.ArgumentDefaultsHelpFormatter)
+def GCodeGenArgs(cmdline):
   gcodegen.GCodeGenArgs(cmdline)
-  cmdline.add_argument('-Hs', type=RangeType(0.0), default=0.0,
+  cmdline.add_argument('-Hs', type=gcodegen.RangeType(0.0), default=0.0,
       help='Heat extruded target in mm of filament that is hot.' )
-  cmdline.add_argument('-Lp', type=RangeType(0.0), default=0.0,
+  cmdline.add_argument('-Lp', type=gcodegen.RangeType(0.0), default=0.0,
       help='Seconds to pause between each layer.')
   cmdline.add_argument('-F', action='store_true',
       help='Control fan speed by pulsing it on/off.')
   cmdline.add_argument('-A', action='store_true',
       help='Printer automatically adjusts fan speed when on.')
+
+
+def GCodeGenArgs(args):
+  return dict(gcodegen.GCodeGetArgs(args),
+    Hs=args.Hs, Lp=args.Lp, pwmfan=args.F, autofan=args.A)
+
+
+if __name__ == '__main__':
+  import argparse, sys
+
+  cmdline = argparse.ArgumentParser(description='Postprocess FlashPrint gcode.',
+      formatter_class=argparse.ArgumentDefaultsHelpFormatter)
+  GCodeGenArgs(cmdline)
   cmdline.add_argument('infile', nargs='?', type=argparse.FileType('rb'), default=sys.stdin.buffer,
       help='Input gcode file to postprocess.')
   args=cmdline.parse_args()
 
   data = args.infile.read()
-  p=Printer(
-      Te=args.Te, Tp=args.Tp, Fe=args.Fe, Fc=args.Fc,
-      Kf=args.Kf, Kb=args.Kb, Re=args.Re,
-      Vp=args.Vp, Vt=args.Vt, Vz=args.Vz, Ve=args.Ve, Vb=args.Vb,
-      Lh=args.Lh, Lw=args.Lw, Lr=args.Lr,
-      en_relext=args.E,
-      en_dynret=args.R, en_dynext=args.P, en_optmov=args.O, en_fixvel=args.V, en_verb=args.v,
-      Hs=args.Hs, Lp=args.Lp, en_pwmfan=args.F, en_autofan=args.A)
+  p=Printer(**GCodeGetArgs(args))
   p.runCode(data)
   data=p.getCode()
   sys.stdout.buffer.write(data)
