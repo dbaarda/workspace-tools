@@ -275,7 +275,7 @@ class MoveBase(NamedTuple):
   @classmethod
   def _dvdt(cls, v0, v1, a=None):
     """ The time taken accelerating between two velocities. """
-    if a is None: a = cls.Ap if v1>=v0 else - cls.Ap
+    if a is None: a = cls.Ap if v1>=v0 else -cls.Ap
     return (v1-v0)/a
 
   @classmethod
@@ -360,7 +360,7 @@ class MoveBase(NamedTuple):
   def vem(self):
     """ The extrusion rate at the middle of a move. """
     dl = self.dl
-    return self.de/dl * self.v if dl else self.ve
+    return self.de/dl * self.vm if dl else self.ve
 
   @property
   def ve1(self):
