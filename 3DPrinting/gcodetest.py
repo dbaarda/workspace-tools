@@ -94,16 +94,16 @@ class ExtrudeTest(gcodegen.GCodeGen):
   def brim(self, x0, y0, x1, y1):
     w = self.w
     self.cmt("structure:brim")
-    self.dn(x0,y0+5)
+    self.hopdn(x0,y0+5)
     self.draw(y=y1-5)
     self.draw(dx=-w)
     self.draw(y=y0+5)
-    self.up()
-    self.dn(x1,y0+5)
+    self.hopup()
+    self.hopdn(x1,y0+5)
     self.draw(y=y1-5)
     self.draw(dx=w)
     self.draw(y=y0+5)
-    self.up()
+    self.hopup()
 
   def ruler(self, x0, y0, rl=rdx, rs=t0x):
     """ Draw a ruler rl long and 3mm high with tics offset rs from each end."""
@@ -114,9 +114,9 @@ class ExtrudeTest(gcodegen.GCodeGen):
     self.move(x=x0+rs-2, y=y0)
     for d in range(0,rl - 2*rs + 1,2):
       l = tl if d % 10 else ml
-      self.dn(dx=2,y=y0)
+      self.hopdn(dx=2,y=y0)
       self.draw(dy=-l)
-      self.up()
+      self.hopup()
 
   def settings(self, x0, y0, **kwargs):
     """ Draw the test arguments at (x0,y0)."""
@@ -224,7 +224,7 @@ class ExtrudeTest(gcodegen.GCodeGen):
     # A printer with a=500mm/s^2 can go from 0 to 100mm/s in 0.2s over 10mm.
     # Retracting de=10mm at vr=100mm/s over 40mm means retracting at ve=25mm/s
     # which is probably fine.
-    self.dn(x0, y0, h=h)
+    self.hopdn(x0, y0, h=h)
     # This slow draw then move is to ensure the nozzle is primed and wiped, and
     # any advance pressure, actual and estimated, has decayed away.
     self.draw(dx=5,v=1,w=w)
@@ -239,7 +239,7 @@ class ExtrudeTest(gcodegen.GCodeGen):
     self.move(dx=40,v=vr,de=-re)          # retract while moving at v=vr.
     self.restore(de=re)                   # restore to recover from retract.
     self.draw(dx=self.t0x,v=self.vx0)     # cooldown draw.
-    self.up()
+    self.hopup()
 
   def testStartStop(self, x0, y0, vx):
     """ Test starting and stopping extrusion for different settings.
@@ -265,7 +265,7 @@ class ExtrudeTest(gcodegen.GCodeGen):
     """
     # Set different line-phase lengths.
     dx = (5, 10, 50, 10, 15)
-    self.dn(x0, y0)
+    self.hopdn(x0, y0)
     # This slow draw then move is to ensure the nozzle is primed and wiped, and
     # any advance pressure, actual and estimated, has decayed away.
     self.draw(dx=dx[0],v=5)
@@ -293,7 +293,7 @@ class ExtrudeTest(gcodegen.GCodeGen):
     # pressure, so Kf should be increased and Re could possibly be reduced.
     self.restore()
     self.draw(dx=dx[4],v=5)
-    self.up()
+    self.hopup()
 
   def testBacklash(self, x0, y0, vx=None, ve=None, h=None, w=None, r=1.0, re=5.0, r0=None):
     """ Test retract and restore distances.
@@ -303,18 +303,18 @@ class ExtrudeTest(gcodegen.GCodeGen):
 
     Test phases are;
 
-      * 0mm: dn and restore to h=0.3.
+      * 0mm: hopdn and restore to h=0.3.
       * 5mm: draw at 1mm/s to prime nozzle.
       * 10mm: move at 1mm/s to drain nozzle.
-      * 0mm: dn and restore to h=h.
+      * 0mm: hopdn and restore to h=h.
       * 30mm: draw at <vx>mm/s to stabilize pressure at that speed.
       * 0mm: move to h=0.2mm for start of pressure measurement.
       * 20mm: moving retract of <re>mm at 10mm/s to measure required retract.
         if r0 is set, an additional r0mm will be retracted over the first 1mm.
       * 20mm: moving restore of <re>mm at 10mm/s to measure required restore.
-      * 0mm: default retract and up, then dn and restore to h=0.3mm to remove backlash.
+      * 0mm: default retract and hopup, then hopdn and restore to h=0.3mm to remove backlash.
       * 5mm: draw at 1mm/s to finalize line and stabilize pressure.
-      * 0mm: default retract and up to relieve any vestigial pressure.
+      * 0mm: default retract and hopup to relieve any vestigial pressure.
 
     Args:
       vx: movement speed to check against.
@@ -329,10 +329,10 @@ class ExtrudeTest(gcodegen.GCodeGen):
     # le = 0.008 -> 0.25 mm/mm (l=0.2x0.1x1.0 -> 0.3x2.0x1.0) or 0.05 for l=0.2x0.6x1.0.
     # For v=10mm/s, we need at least ve=0.2*0.1*10/Fa=0.08mm/s for a w=0.1mm line, or Pe=0.44mm for Kf=0.5,Kb=4.0.
     vx,ve,h,w,r = self._getVxVehwr(vx,ve,h,w,r)
-    self.dn(x0, y0, h=0.3)
+    self.hopdn(x0, y0, h=0.3)
     self.draw(dx=5,v=1)
     self.move(dx=10,v=1)
-    self.dn(h=h)
+    self.hopdn(h=h)
     self.draw(dx=30,v=vx,w=w)
     self.move(h=0.2)
     if r0:
@@ -341,10 +341,10 @@ class ExtrudeTest(gcodegen.GCodeGen):
     else:
       self.move(dx=20,de=-re, v=10)
     self.move(dx=20,de=+re, v=10)
-    self.up()
-    self.dn(h=0.3)
+    self.hopup()
+    self.hopdn(h=0.3)
     self.draw(dx=5,v=1)
-    self.up()
+    self.hopup()
 
   def testKf(self, x0, y0, vx0, vx1):
     """ Test linear advance changing speed different speeds.
@@ -365,13 +365,13 @@ class ExtrudeTest(gcodegen.GCodeGen):
       vx1: the fast speed to use.
     """
     self.log(f'testKfline vx0={vx0} vx1={vx1}')
-    self.dn(x0, y0)
+    self.hopdn(x0, y0)
     self.draw(dx=self.t0x,v=self.vx0)
     self.draw(dx=self.t1x,v=vx0)
     self.draw(dx=2*self.t1x,v=vx1)
     self.draw(dx=self.t1x,v=vx0)
     self.draw(dx=self.t0x,v=self.vx0)
-    self.up()
+    self.hopup()
 
 
 class TextTest(gcodegen.GCodeGen):

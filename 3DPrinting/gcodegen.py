@@ -241,21 +241,22 @@ class MoveBase(NamedTuple):
   am = 0.0 # acceleration for mid phase of movements.
 
   def __str__(self):
-    dx,dy,dz,de,v,v0,v1,vm,h,w = self
-    dl, r = self.dl, self.r
-    v,v0,v1,vm = round(v),round(v0),round(v1),round(vm)
+    dz, dl, de, h, w, r = self.dz, self.dl, self.de, self.h, self.w, self.r
+    v, v0, v1, vm = round(self.v), round(self.v0), round(self.v1), round(self.vm)
+    ve, ve0, ve1, vem = round(self.ve, 2), round(self.ve0, 2), round(self.ve1, 2), round(self.vem, 2)
+    gostr=f'{dl=:.1f}@{v}({v0}<{vm}>{v1}) {de=:.3f}@{ve}({ve0}<{vem}>{ve1}) l={h:.2f}x{w:.2f}x{r:.2f}'
     if self.isdraw:
-      return f'draw {dl=:.2f}@{v}({v0}<{vm}>{v1}) l={h:.2f}x{w:.2f}x{r:.2f}'
-    elif self.isup:
+      return f'draw {gostr}'
+    elif self.ishopup:
       return f'hopup {dz=:.2f}@{v} {h=}'
-    elif self.isdn:
+    elif self.ishopdn:
       return f'hopdn {dz=:.2f}@{v} {h=}'
     elif self.isretract:
-      return f'retract {de=:.4f}@{v}'
+      return f'retract {de=:.4f}@{ve}'
     elif self.isrestore:
-      return f'restore {de=:.4f}@{v}'
+      return f'restore {de=:.4f}@{ve}'
     else:
-      return f'move {dl=:.2f}@{v}({v0}<{vm}>{v1}) {de=:.4f} {h=:.2f}'
+      return f'move {gostr}'
     #return f'{self.__class__.__name__}({dx=:.2f}, {dy=:.2f}, {dz=:.2f}, {de=:.4f}, {v=:.2f}, {v0=:.2f}, {v1=:.2f}, {h=:.2f}, {w=:.2f})'
 
   def set(self, *args, s=None, **kwargs):
@@ -406,11 +407,11 @@ class MoveBase(NamedTuple):
     return self.de > 0 and not self.isgo
 
   @property
-  def isup(self):
+  def ishopup(self):
     return self.dz > 0 and not self.isgo
 
   @property
-  def isdn(self):
+  def ishopdn(self):
     return self.dz < 0 and not self.isgo
 
   @property
@@ -724,7 +725,7 @@ class GCodeGen(object):
   Nd = 0.4   # Nozzle diameter.
   Fa = acircle(Fd)  # Fillament area.
   Na = acircle(Nd)  # Nozzle area.
-  Zh = Nd    # z-hop height.
+  Zh = Nd/2  # z-hop height.
 
   startcode = """\
 ;gcode_flavor: flashforge
@@ -989,7 +990,7 @@ M18
       self.log('layer={layer.n} h={layer.h:.2f} w={layer.w:.2f} r={layer.r:.2f}')
 
   def endLayer(self, **upargs):
-    self.up(**upargs)
+    self.hopup(**upargs)
     self.layerstats()
 
   def _calc_pe(self, db, ve):
@@ -1159,18 +1160,18 @@ M18
     if self.dynret and not de: de = 0.00001
     self.move(e=e, de=de, v=vb, s=s)
 
-  def up(self,
+  def hopup(self,
       x=None, y=None, z=None, e=None,
       dx=None, dy=None, dz=None, de=None,
       vt=None, vz=None, ve=None, vb=None,
       s=1.0, h=None):
     """ Do a retract, raise, and move. """
-    # default hop up is to Zh above layer height.
+    # default hopup is to Zh above layer height.
     if h is None: h = self.layer.h + self.Zh
     self.retract(e=e, de=de, ve=ve, s=s)
     self.move(z=z, dz=dz, v=vz, s=s, h=h)
 
-  def dn(self,
+  def hopdn(self,
       x=None, y=None, z=None, e=None,
       dx=None, dy=None, dz=None, de=None,
       vt=None, vz=None, ve=None, vb=None,
@@ -1292,7 +1293,7 @@ M18
     y1+=m
     x, y = x0, y0
     l, v = le, ve
-    self.dn(x=x,y=y,h=h)
+    self.hopdn(x=x,y=y,h=h)
     while l:
       if self.x == x0 and self.y<y1:
         dy = min(y1 - self.y, l)
@@ -1326,7 +1327,7 @@ M18
         # We have finished the wipe, go another 10mm at 1mm/s to stick the
         # final drool to the plate.
         l, v, r = 10,1,0
-    self.up()
+    self.hopup()
 
   def fbox(self,x0,y0,x1,y1,shells=None,**kwargs):
     """ Fill a box with frame lines. """
@@ -1340,7 +1341,7 @@ M18
     y0+=w/2
     y1-=w/2
     s=0
-    self.dn(x0,y0)
+    self.hopdn(x0,y0)
     while x1-x0>2*w and y1-y0>2*w and s<shells:
       if shells==0:
         self.cmt('structure:shell-outer')
@@ -1363,7 +1364,7 @@ M18
       fw=y1-y0
       self.move(x=x0+(fw-w)/2,y=(y1+y0)/2)
       self.draw(x=x1-(fw-w)/2, w=fw)
-    self.up()
+    self.hopup()
 
   def dbox(self,x0,y0,x1,y1,shells=3,**kwargs):
     """ fill a box with diagonal lines. """
@@ -1385,7 +1386,7 @@ M18
       # initialize left and right diagonal ends at bottom left corner.
       lx,ly=rx,ry=x0,y0
       dy = dx
-    self.dn(rx,ry)
+    self.hopdn(rx,ry)
     while lx<x1:
       if rx<x1:
         # right diagonal end is following top or bottom edge right.
@@ -1425,14 +1426,14 @@ M18
         # starting diagonal from left point.
         self.draw(x=lx,y=ly,**kwargs)
         self.draw(x=rx,y=ry,**kwargs)
-    self.up()
+    self.hopup()
 
   def dot(self, x, y, r=1.0, **kwargs):
     # Note this doesn't seem to render anything in FlashPrint.
-    self.dn(x,y)
+    self.hopdn(x,y)
     # Draw a tiny line so FlashPrint renders something.
     self.draw(dy=-0.2,r=r, **kwargs)
-    self.up()
+    self.hopup()
 
   def line(self, l, r=1.0, **kwargs):
     """Draw a line from a sequence of points."""
@@ -1440,10 +1441,10 @@ M18
     # If there is only one point, draw a dot instead.
     if len(l) == 1 or (len(l) == 2 and l[0] == l[1]):
       return self.dot(x0, y0, r, **kwargs)
-    self.dn(x0,y0)
+    self.hopdn(x0,y0)
     for x,y in l[1:]:
       self.draw(x,y,**kwargs)
-    self.up()
+    self.hopup()
 
   def text(self, t, x0, y0, x1=None, y1=None, fsize=5, angle=0, **kwargs):
     self.cmt('structure:shell-outer')
