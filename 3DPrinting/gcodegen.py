@@ -557,7 +557,7 @@ class MoveBase(NamedTuple):
     # if phase distances are small don't bother partitioning them.
     if dl0 < dlmin or dlm < dlmin:
       dl0, dlm, mv0 = 0.0, dl0+dlm, v0
-    if dl1 < dlmin:
+    if dlm < dlmin or dl1 < dlmin:
       dl1, dlm, mv1 = 0.0, dlm+dl1, v1
     # Make a list of the s,v0,v1 values for each phase.
     phases = [(dl0/dl, v0, vm), (dlm/dl, mv0, mv1), (dl1/dl, vm, v1)]
