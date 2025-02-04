@@ -285,10 +285,15 @@ class MoveBase(NamedTuple):
     return h * acircle(w*r) / cls.Fa
 
   @property
+  def f(self):
+    """ The 'f' mm/min speed of a move. """
+    return round(self.v * 60)
+
+  @property
   def r(self):
     """ The extrusion ratio of a move. """
     if self.isdraw:
-      return round((self.de * self.Fa) / (self.h * self.w * self.dl), 6)
+      return round(self.de/self.el, 6)
     return 0.0
 
   @property
@@ -719,6 +724,7 @@ class GCodeGen(object):
     db: extruded bead diameter at the end of the last move.
     x,y,z,e,f: Current x,y,z,e,f position values.
     h: current height above layer base (property).
+    _log_t: time of last logging output for diff mode output.
   """
 
   Fd = 1.75  # Fillament diameter.
@@ -751,6 +757,7 @@ M104 S0 T1
 M107
 M900 K{Kf:.3f} T0
 G90
+{"M82"+nl if relext else ""}\
 G28
 M132 X Y Z A B
 G1 Z50.000 F420
@@ -784,7 +791,7 @@ M18
       Te=210, Tp=50, Fe=1.0, Fc=1.0, Kf=0.0, Kb=0.0, Re=5,
       Vp=60, Vt=100, Vz=7, Ve=40, Vb=30,
       Lh=0.2, Lw=Nd, Lr=1.0,
-      relext=False, dynret=False, dynext=False, optmov=False, fixvel=False, verb=False):
+      relext=False, dynret=False, dynext=False, optmov=False, fixvel=False, diff=False, verb=False):
     # Temp and Fan settings.
     self.Te, self.Tp, self.Fe, self.Fc = Te, Tp, Fe, Fc
     # Linear advance and retraction settings.
@@ -795,7 +802,7 @@ M18
     self.Lh, self.Lw, self.Lr = Lh, Lw, Lr
     # Processing mode options.
     self.relext = relext
-    self.dynret, self.dynext, self.optmov, self.fixvel, self.verb = dynret, dynext, optmov, fixvel, verb
+    self.dynret, self.dynext, self.optmov, self.fixvel, self.diff, self.verb = dynret, dynext, optmov, fixvel, diff, verb
     class GMove(Move, Fd=self.Fd, Nd=self.Nd): pass
     self.GMove = GMove
     self.resetfile()
@@ -819,7 +826,7 @@ M18
     """ Reset all state variables. """
     # Zero all positions so the first move's deltas are actually absolute.
     self.x, self.y, self.z, self.e, self.f = 0.0, 0.0, 0.0, 0.0, 0
-    self.f_t = self.f_l = self.f_e = 0.0
+    self.f_t = self.f_l = self.f_e = self._log_t = 0.0
     self.pe = 0.0  # current extruder linear advance pressure or retracted length mm.
     self.eb = 0.0  # current extruded bead volume in mm of fillament.
     self.gcode = []
@@ -836,6 +843,11 @@ M18
     self.resetlayer()
     self.layer = l
 
+  def inct(self, dt):
+    """ Increment time. """
+    self.f_t += dt
+    self.l_t += dt
+
   def incmove(self, m):
     """ Increment state for executing a Move. """
     dx,dy,dz,de,v,v0,v1,*_ = m
@@ -845,12 +857,10 @@ M18
     self.y = round(self.y+dy, 6)
     self.z = round(self.z+dz, 6)
     self.e = round(self.e+de, 6)
-    self.f = round(v*60)
+    self.f = m.f
     self.pe, self.eb, en = self._calc_pe_eb_en(m)
-    self.f_t += dt
     self.f_l += dl if en else 0.0
     self.f_e += en
-    self.l_t += dt
     self.l_l += dl if en else 0.0
     self.l_e += en
     self.vl = v1
@@ -858,6 +868,7 @@ M18
     self.vn = self._vn()
     self.db = self._db()
     self.en = en
+    self.inct(dt)
     if m.isdraw: self.last_draw = m
 
   def inccmd(self, cmd):
@@ -891,11 +902,12 @@ M18
     x = self.x + dx if dx or dy else None
     y = self.y + dy if dy or dx else None
     z = self.z + dz if dz else None
-    if self.relext:
+    # If relext or diff mode is on, use relative extrusion.
+    if self.relext or self.diff:
       e = de if de else None
     else:
       e = self.e + de if de else None
-    f = round(60 * v)
+    f = m.f
     if f == self.f: f = None
     cmd = self.fcmd('G1', X=x, Y=y, Z=z, E=e, F=f)
     if self.verb:
@@ -916,8 +928,7 @@ M18
       self.flog('{pe=:.4f} {eb=:.4f} {ve=:.4f} {vn=:.4f} {vl=:.3f} {db=:.2f}')
     elif isinstance(code, int):
       # ints are waits.
-      self.f_t += code/1000
-      self.l_t += code/1000
+      self.inct(code/1000)
       self.fadd(self.fcmd('G4', P=code))
     elif isinstance(code, str):
       self.inccmd(code)
@@ -934,8 +945,7 @@ M18
       self.incmove(code)
     elif isinstance(code, int):
       # ints are waits.
-      self.f_t += code/1000
-      self.l_t += code/1000
+      self.inct(code/1000)
     elif isinstance(code, str):
       self.inccmd(code)
     self.gcode.append(code)
@@ -949,7 +959,10 @@ M18
   def log(self, txt):
     #print(self.fstr(txt))
     if self.verb:
-      self.cmt('{ftime(f_t)}: ' + txt)
+      if self.diff:
+        self.cmt('{f_t - _log_t:.3f}: ' + txt)
+      else:
+        self.cmt('{ftime(f_t)}: ' + txt)
 
   def flog(self, txt):
     """Add a formatted log entry."""
@@ -957,6 +970,8 @@ M18
       self.log(txt)
       # We need to fstr() reformat that last log entry...
       self.fadd(self.gcode.pop())
+      # Update the log time.
+      self._log_t = self.f_t
 
   def startFile(self):
     self.add(self.fstr(self.startcode))
@@ -1004,11 +1019,11 @@ M18
     """ Get bead diameter from bead volume."""
     if eb is None: eb = self.eb
     if h is None: h = self.h
-    # h=0 can happen for moves at the start of a new layer before a hop.
-    # When this happens, assume h is the current layer height.
-    if h < 0.01: h = self.layer.h
     assert eb >= 0.0
-    return 2*sqrt(eb*self.Fa/(h*pi)) if eb else 0.0
+    h=round(h,6) # remove accumulating floating point errors.
+    # h<=0 can happen for initializing moves or moves at the start of a new
+    # layer before a hop.
+    return 2*sqrt(eb*self.Fa/(h*pi)) if h > 0.0 else 0.0
 
   def _vn(self,pe=None,eb=None,h=None,ve=None):
     """Get nozzle flow velocity from pe, eb, h, and ve."""
@@ -1067,12 +1082,15 @@ M18
       assert abs(v - m.v1) < 0.001, f'{m} {v=} != {m.v1=}'
     else:
       # With Kf and Kb zero, there is no nozzle or bead pressure, so all
-      # filament gets extruded and pe<=0 (can be retracted). The bead size is
-      # max the target move bead size, but can be less if insuficient filament
-      # is extruded. The filament added to the line is all the filament extruded
-      # minus the bead.
-      ex = self.eb + self.pe + m.de
-      pe, eb, el = min(ex, 0), min(m.eb, max(ex, 0)), max(0, ex - m.eb)
+      # filament gets extruded and pe<=0 (can be negative when retracted). The
+      # bead size is max the target move bead size, but can be less if
+      # insuficient filament is extruded. The filament added to the line is
+      # all the filament extruded minus the bead.
+      ex = self.pe + m.de
+      pe = min(0.0, ex)
+      en = max(0.0, ex)
+      eb = min(m.eb, self.eb + en)
+      el = en + self.eb - eb
     #print(f'{self.Kf=} {self.Kb=} {self.Re=} {self.pe=} {self.eb=} {m} -> {pe=} {eb=} {el=}')
     assert abs((pe + eb + el)-(self.pe + self.eb + m.de)) < 0.00001, f'{pe=}+{eb=}+{el=} != {self.pe=}+{self.eb=}+{m.de=}'
     # Note we return pe,eb,en not pe,eb,el, because "what came out the nozzle"
@@ -1417,7 +1435,7 @@ M18
         # left diagonal end is following the top.
         lx+=dx
         if lx>x1: lx=x1
-      self.log(f'pos=({{x}},{{y}}) l=({lx},{ly}) r=({rx},{ry})')
+      #self.log(f'pos=({{x}},{{y}}) l=({lx},{ly}) r=({rx},{ry})')
       if self.y==ry or self.x==rx :
         # starting diagonal from right point.
         self.draw(x=rx,y=ry,**kwargs)
@@ -1455,7 +1473,6 @@ M18
       self.line(l,**kwargs)
 
 
-inf=float('inf')
 def RangeType(min=-inf, max=inf):
   def init(s):
     v=type(min)(s)
@@ -1507,6 +1524,8 @@ def GCodeGenArgs(cmdline):
       help='Enable optimize, merging draw/move cmds where possible.')
   cmdline.add_argument('-V', action='store_true',
       help='Enable fix velocities for acceleration limits.')
+  cmdline.add_argument('-d', action='store_true',
+      help='Enable diff mode output.')
   cmdline.add_argument('-v', action='store_true',
       help='Enable verbose logging output.')
 
@@ -1519,7 +1538,7 @@ def GCodeGetArgs(args):
       Vp=args.Vp, Vt=args.Vt, Vz=args.Vz, Ve=args.Ve, Vb=args.Vb,
       Lh=args.Lh, Lw=args.Lw, Lr=args.Lr,
       dynret=args.R, dynext=args.P, optmov=args.O, fixvel=args.V,
-      relext=args.E, verb=args.v)
+      relext=args.E, diff=args.d, verb=args.v)
 
 
 if __name__ == '__main__':
