@@ -224,9 +224,9 @@ class MoveBase(NamedTuple):
   dz: float
   de: float
   v: float  # target velocity in mm/s.
-  v0: float = None # start velocity in mm/s.
-  v1: float = None # end velocity in mm/s.
-  vm: float = None # mid velocity in mm/s.
+  #v0: float = None # start velocity in mm/s.
+  #v1: float = None # end velocity in mm/s.
+  #vm: float = None # mid velocity in mm/s.
   h: float = None  # The line or end of move height above the current layer.
   w: float = None  # The line width.
   # Note the extrusion ratio r is calculated as a property.
@@ -502,43 +502,6 @@ class MoveBase(NamedTuple):
     # v = sqrt(a*R)
     return min(sqrt(self.Ap*R), self.v1, m.v0)
 
-  def fixv(self, v=None, v0=0.0, v1=0.0, m0=None, m1=None):
-    """ Update move velocities for moves before/after.
-
-    This updates a move's velocities to what the printer will do based on on
-    the moves before and after. The v0 or v1 values will be set less than the
-    provided velocities or moves if necessary to fit within the Ap
-    acceleration and deceleration limits.
-
-    if v is not set it uses m.v.
-    if m0 is set the v0 start velocity is set to the corner velocity.
-    If m1 is set the v1 end velocity is set to the corner velocity.
-    If v0, or v1 are still not set they default to 0.0.
-    """
-    if v is None: v = self.v
-    if m0 is not None: v0 = m0.cornerv(self)
-    if m1 is not None: v1 = self.cornerv(m1)
-    dl = self.dl
-    if not dl:
-      # A stop move, v0, v1, and vm are zero.
-      m = self.set(v=v, v0=0, v1=0, vm=0)
-    else:
-      # limit v0 and v1 with acceleration limits.
-      if v0 < v1:
-        v1 = min(v1, sqrt(v0**2 + 2*dl*self.Ap))
-      elif v0 > v1:
-        v0 = min(v0, sqrt(v1**2 + 2*dl*self.Ap))
-      # This is the limit velocity assuming constant acceleration at a/2.
-      # This implements smoothed look-ahead to reduce spikey velocity.
-      vm = sqrt((dl*self.Ap + v0**2 + v1**2)/2)
-      # If vm is less than v0 or v1, we don't need acceleration at both ends.
-      vm = max(v0, v1, vm)
-      vm = min(v, vm)  # don't set vm higher than requested.
-      assert 0 <= v0 <= vm <= self.Vp
-      assert 0 <= v1 <= vm <= self.Vp
-      m = self.set(v=v,v0=v0,v1=v1,vm=vm)
-    return m
-
   def join(self, m):
     """ Add two moves together. """
     return self._replace(dx=self.dx+m.dx, dy=self.dy+m.dy, dz=self.dz+m.dz,
@@ -577,7 +540,7 @@ class MoveBase(NamedTuple):
 
 
 class Move(MoveBase):
-  __slots__ = ()
+  #__slots__ = ()
 
   def __init_subclass__(cls, Fd=1.75, Nd=0.4, Ap=500, Vp=100, Gp=0.1):
     super().__init_subclass__()
@@ -585,25 +548,70 @@ class Move(MoveBase):
     cls.Fa = acircle(Fd)
     cls.Na = acircle(Nd)
 
-  def __new__(cls, *args, **kwargs):
+  def __new__(cls, *args, v0=None, v1=None, vm=None, **kwargs):
     """ Make v0, v1, and vm default to v for moves and 0.0 for non-moves. """
-    # Round all arguments to 6 decimal places to clean out fp errors.
-    args = tuple(round(a,6) for a in args)
-    kwargs = {k:round(v,6) for k,v in kwargs.items()}
+    # Round arguments to 6 decimal places and replace -0.0 with 0.0 to clean out fp errors.
+    args = tuple(round(a,6) or 0.0 for a in args)
+    kwargs = {k:(round(v,6) or 0.0) for k,v in kwargs.items()}
     m = super().__new__(cls, *args, **kwargs)
     assert 0 <= m.v <= cls.Vp
-    assert m.v0 is None or 0 <= m.v0 <= m.v
-    assert m.v1 is None or 0 <= m.v1 <= m.v
-    assert m.vm is None or 0 <= m.vm <= m.v
-    if m.v0 is None or m.v1 is None or m.vm is None:
-      v0 = m.v if m.v0 is None else m.v0
-      v1 = m.v if m.v1 is None else m.v1
-      vm = m.v if m.vm is None else m.vm
-      if m.isgo:
-        return m._replace(v0=v0, v1=v1, vm=vm)
-      else:
-        return m._replace(v0=0.0, v1=0.0, vm=0.0)
+    assert v0 is None or 0 <= v0 <= m.v
+    assert v1 is None or 0 <= v1 <= m.v
+    assert vm is None or 0 <= vm <= m.v
+    if m.isgo:
+      v0 = m.v if v0 is None else round(v0,6)
+      v1 = m.v if v1 is None else round(v1,6)
+      vm = m.v if vm is None else round(vm,6)
+    else:
+      v0 = v1 = vm = 0.0
+    m.v0, m.v1, m.vm = v0,v1,vm
     return m
+
+  def _replace(self, *args, v0=None, v1=None, vm=None, **kwargs):
+    """ Change or scale a move. """
+    # Round arguments to 6 decimal places and replace -0.0 with 0.0 to clean out fp errors.
+    args = tuple(round(a,6) or 0.0 for a in args)
+    kwargs = {k:(round(v,6) or 0.0) for k,v in kwargs.items()}
+    m = super()._replace(*args,**kwargs)
+    m.v0 = self.v0 if v0 is None else round(v0,6)
+    m.v1 = self.v1 if v1 is None else round(v1,6)
+    m.vm = self.vm if vm is None else round(vm,6)
+    return m
+
+  def fixv(self, v0=0.0, v1=0.0, m0=None, m1=None):
+    """ Update move velocities for moves before/after.
+
+    This updates a move's velocities to what the printer will do based on on
+    the moves before and after. The v0 or v1 values will be set less than the
+    provided velocities or moves if necessary to fit within the Ap
+    acceleration and deceleration limits.
+
+    if m0 is set the v0 start velocity is set to the corner velocity.
+    If m1 is set the v1 end velocity is set to the corner velocity.
+    If v0, or v1 are still not set they default to 0.0.
+    """
+    v = self.v
+    if m0 is not None: v0 = m0.cornerv(self)
+    if m1 is not None: v1 = self.cornerv(m1)
+    dl = self.dl
+    if not dl:
+      # A stop move, v0, v1, and vm are zero.
+      self.v0 = self.v1 = self.vm = 0.0
+    else:
+      # limit v0 and v1 with acceleration limits.
+      if v0 < v1:
+        v1 = min(v1, sqrt(v0**2 + 2*dl*self.Ap))
+      elif v0 > v1:
+        v0 = min(v0, sqrt(v1**2 + 2*dl*self.Ap))
+      # This is the limit velocity assuming constant acceleration at a/2.
+      # This implements smoothed look-ahead to reduce spikey velocity.
+      vm = sqrt((dl*self.Ap + v0**2 + v1**2)/2)
+      # If vm is less than v0 or v1, we don't need acceleration at both ends.
+      vm = max(v0, v1, vm)
+      vm = min(v, vm)  # don't set vm higher than requested.
+      assert 0 <= v0 <= vm <= v <= self.Vp
+      assert 0 <= v1 <= vm <= v <= self.Vp
+      self.v0, self.v1, self.vm = round(v0,6), round(v1,6), round(vm,6)
 
 
 def ljoin(l):
@@ -631,17 +639,18 @@ def ljoin(l):
   return l
 
 
-def _rfixv(l,i,m,v0):
+def _rfixv(l, v1):
   """ Reverse fix velocities for deceleration limits. """
-  rl=((j,l[j]) for j in range(i-1,-1,-1) if isinstance(l[j], Move))
-  while m.v0 != v0:
-    i0, m0 = next(rl)
-    v0 = m0.v0
-    l[i0] = m0 = m0.fixv(v0=v0, v1=m.v0)
-    i, m = i0, m0
+  for m in reversed(l):
+    if isinstance(m, Move):
+      # if v1 is already set to the target, stop.
+      if m.v1 == v1:
+        break
+      m.fixv(v0=m.v0, v1=v1)
+      v1 = m.v0
 
 
-def lfixv(l, v=None, v0=0.0, v1=0.0):
+def lfixv(l, v0=0.0, v1=0.0):
   """ Fix velocities in a list of moves/comments/commands. """
   i = m = None
   for i1,m1 in enumerate(l):
@@ -650,15 +659,16 @@ def lfixv(l, v=None, v0=0.0, v1=0.0):
         # This is the first m to fix.
         i, m = i1, m1
       else:
-        # We have the next move m1, fix m in the list.
-        l[i] = m = m.fixv(v=v, v0=v0, m1=m1)
-        # Reverse fix velocities for acceleration limits.
-        _rfixv(l,i,m,v0)
+        # We have the next move m1, fixv m.
+        m.fixv(v0=v0, m1=m1)
+        # if v0 changed, reverse fix velocities for acceleration limits.
+        if m.v0 != v0:
+          _rfixv(l[:i], m.v0)
         # v0 is the last m.v1, m1 is the next m to fix,
         v0, i, m = m.v1, i1, m1
   if m is not None:
     # Fix the last move.
-    l[i] = m.fixv(v=v, v0=v0, v1=v1)
+    m.fixv(v0=v0, v1=v1)
   return l
 
 
@@ -850,7 +860,8 @@ M18
 
   def incmove(self, m):
     """ Increment state for executing a Move. """
-    dx,dy,dz,de,v,v0,v1,*_ = m
+    dx,dy,dz,de,v = m[:5]
+    v0, v1 = m.v0, m.v1
     dt, dl = m.dt, m.dl
     # Round positions to 6 decimal places to remove floating point errors.
     self.x = round(self.x+dx, 6)
