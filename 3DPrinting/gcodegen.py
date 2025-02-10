@@ -165,6 +165,7 @@ import re
 from math import e, pi, inf, sqrt
 import vtext
 from typing import NamedTuple
+from functools import cached_property
 from pprint import *
 
 nl = '\n'  # for use inside fstrings.
@@ -192,6 +193,16 @@ def fstr(s, globals=None, locals=None):
   return eval(f'rf"""{s}"""',globals,locals)
 
 
+def isneq(a,b,e=1e-6):
+  """ Is a nearly equal to b."""
+  return abs(a-b) < e
+
+
+def islne(a,b,e=1e-6):
+  """ Is a less than or nearly equal to b."""
+  return a <= b+e
+
+
 def acircle(d):
   """ Get the area of a circle from it's diameter. """
   return pi*(d/2)**2
@@ -206,7 +217,22 @@ def solveqe(a,b,c):
 
 
 class MoveBase(NamedTuple):
-  """ Move instructions.
+  """ Move instructions base type.
+
+  This includes the immutable base attributes of a move instruction from which
+  all other attributes can be derived.
+  """
+  dx: float
+  dy: float
+  dz: float
+  de: float
+  v: float  # target velocity in mm/s.
+  h: float = None  # The line or end of move height above the current layer.
+  w: float = None  # The line width.
+
+
+class Move(MoveBase):
+  """Move instructions.
 
   These represent gcode moves enhanced to include the start and end
   velocities. They can partition a basic gcode "intent" move command into
@@ -217,20 +243,8 @@ class MoveBase(NamedTuple):
   https://mmone.github.io/klipper/Kinematics.html
 
   Note for printers with different specs this can be subclassed with the `Ap`,
-  `Vp`, and `Gp` overridden.
+  `Vp`, and `Gp` overridden by setting them as arguments when subclassing.
   """
-  dx: float
-  dy: float
-  dz: float
-  de: float
-  v: float  # target velocity in mm/s.
-  #v0: float = None # start velocity in mm/s.
-  #v1: float = None # end velocity in mm/s.
-  #vm: float = None # mid velocity in mm/s.
-  h: float = None  # The line or end of move height above the current layer.
-  w: float = None  # The line width.
-  # Note the extrusion ratio r is calculated as a property.
-
   Fd = 1.75  # Fillament diameter.
   Nd = 0.4   # Nozzle diameter.
   Ap = 500  # printer acceleration in mm/s^2.
@@ -238,7 +252,45 @@ class MoveBase(NamedTuple):
   Gp = 0.1  # printer cornering deviation distance in mm.
   Fa = acircle(Fd)  # Fillament area in mm^2.
   Na = acircle(Nd)  # Nozzle area in mm^2.
-  am = 0.0 # acceleration for mid phase of movements.
+
+  def __init_subclass__(cls, Fd=Fd, Nd=Nd, Ap=Ap, Vp=Vp, Gp=Gp):
+    super().__init_subclass__()
+    cls.Fd, cls.Nd, cls.Ap, cls.Vp, cls.Gp = Fd, Nd, Ap, Vp, Gp
+    cls.Fa = acircle(Fd)
+    cls.Na = acircle(Nd)
+    cls.a0, cls.a1, cls.am = Ap, -Ap, 0.0
+
+  def __new__(cls, *args, v0=None, v1=None, vm=None, **kwargs):
+    """ Make v0, v1, and vm default to v for moves and 0.0 for non-moves. """
+    # Round arguments to 6 decimal places and replace -0.0 with 0.0 to clean out fp errors.
+    args = tuple(round(a,6) or 0.0 for a in args)
+    kwargs = {k:(round(v,6) or 0.0) for k,v in kwargs.items()}
+    m = super().__new__(cls, *args, **kwargs)
+    assert 0 <= m.v <= cls.Vp
+    assert v0 is None or 0 <= v0 <= m.v
+    assert v1 is None or 0 <= v1 <= m.v
+    assert vm is None or 0 <= vm <= m.v
+    if m.isgo:
+      m.v0 = m.v if v0 is None else round(v0,6)
+      m.v1 = m.v if v1 is None else round(v1,6)
+      m.vm = m.v if vm is None else round(vm,6)
+    else:
+      m.v0 = m.v1 = m.vm = 0.0
+    return m
+
+  def _replace(self, *args, v0=None, v1=None, vm=None, **kwargs):
+    """ Change or scale a move. """
+    # Round arguments to 6 decimal places and replace -0.0 with 0.0 to clean out fp errors.
+    args = tuple(round(a,6) or 0.0 for a in args)
+    kwargs = {k:(round(v,6) or 0.0) for k,v in kwargs.items()}
+    m = super()._replace(*args,**kwargs)
+    m.v0 = self.v0 if v0 is None else round(v0,6)
+    m.v1 = self.v1 if v1 is None else round(v1,6)
+    m.vm = self.vm if vm is None else round(vm,6)
+    return m
+
+  def __repr__(self):
+    return super().__repr__()[:-1] + f', v0={self.v0}, vm={self.vm}, v1={self.v1})'
 
   def __str__(self):
     dz, dl, de, h, w, r = self.dz, self.dl, self.de, self.h, self.w, self.r
@@ -268,18 +320,6 @@ class MoveBase(NamedTuple):
     return self._replace(*args,**kwargs)
 
   @classmethod
-  def _dvdl(cls, v0, v1, a=None):
-    """ The distance travelled accelerating between two velocities. """
-    if a is None: a = cls.Ap if v1>=v0 else -cls.Ap
-    return (v1**2 - v0**2)/(2*a)
-
-  @classmethod
-  def _dvdt(cls, v0, v1, a=None):
-    """ The time taken accelerating between two velocities. """
-    if a is None: a = cls.Ap if v1>=v0 else -cls.Ap
-    return (v1-v0)/a
-
-  @classmethod
   def _eb(cls, h, w, r=1.0):
     """ Volume in filament length of bead."""
     return h * acircle(w*r) / cls.Fa
@@ -289,66 +329,58 @@ class MoveBase(NamedTuple):
     """ The 'f' mm/min speed of a move. """
     return round(self.v * 60)
 
-  @property
+  @cached_property
   def r(self):
     """ The extrusion ratio of a move. """
     if self.isdraw:
       return round(self.de/self.el, 6)
     return 0.0
 
-  @property
+  @cached_property
   def dl(self):
     """ The horizontal length of a move. """
     return sqrt(self.dx*self.dx + self.dy*self.dy)
 
-  @property
+  @cached_property
   def dl0(self):
     """Horizontal length of acceleration phase."""
-    return min(self._dvdl(self.v0, self.vm), self.dl) if self.isgo else 0.0
+    dl0 = 0.5*(self.v0+self.vm)*self.dt0
+    assert dl0 <= self.dl, f'{dl0=} <= {self.dl=}, {self.dt0=} {self!r}'
+    return dl0
 
-  @property
+  @cached_property
   def dl1(self):
     """Horizontal length of deceleration phase."""
-    return min(self._dvdl(self.vm, self.v1), self.dl) if self.isgo else 0.0
+    dl1 = 0.5*(self.vm + self.v1)*self.dt1
+    assert dl1 <= self.dl, f'{dl1=} <= {self.dl=}, {self.dt1=} {self!r}'
+    return dl1
 
-  @property
+  @cached_property
   def dlm(self):
     """Horizontal length of middle phase."""
     dlm = self.dl - self.dl0 - self.dl1
-    assert 0 <= dlm <= self.dl
+    assert 0.0 <= dlm <= self.dl, f'0.0 <= {dlm=} <= {self.dl=}, {self.dl0=} {self.dl1=} {self!r}'
     return dlm
 
-  @property
+  @cached_property
   def dt0(self):
     """Duration of acceleration phase."""
-    return 2*self.dl0/(self.v0 + self.vm) if self.isgo else 0.0
+    return (self.vm - self.v0) / self.a0
 
-  @property
+  @cached_property
   def dt1(self):
     """Duration of deceleration phase."""
-    return 2*self.dl1/(self.vm + self.v1) if self.isgo else 0.0
+    return (self.v1 - self.vm) / self.a1
 
-  @property
+  @cached_property
   def dtm(self):
     """Duration of middle phase."""
-    return abs(self.dlm/self.vm if self.isgo else (self.dz if self.dz else self.de)/self.v)
+    return self.dlm/self.vm if self.vm else abs(self.dz if self.dz else self.de)/self.v
 
-  @property
+  @cached_property
   def dt(self):
     """ Get the execution time for a move. """
     return self.dt0 + self.dtm + self.dt1
-
-  @property
-  def a0(self):
-    """ The acceleration at the start of a move. """
-    dt0 = self.dt0
-    return (self.vm - self.v0)/dt0 if dt0 else 0.0
-
-  @property
-  def a1(self):
-    """ The acceleration at the start of a move. """
-    dt1 = self.dt1
-    return (self.v1 - self.vm)/dt1 if dt1 else 0.0
 
   @property
   def ve(self):
@@ -385,17 +417,17 @@ class MoveBase(NamedTuple):
     """ The extrusion bead diameter. """
     return self.w*self.r
 
-  @property
+  @cached_property
   def eb(self):
     """ The extrusion bead volume. """
     return self._eb(self.h, self.w, self.r)
 
-  @property
+  @cached_property
   def el(self):
     """ The line volume not including r under/over extrusion. """
     return self.h*self.w*self.dl/self.Fa
 
-  @property
+  @cached_property
   def isdraw(self):
     return self.isgo and self.de > 0
 
@@ -423,7 +455,7 @@ class MoveBase(NamedTuple):
   def isspeed(self):
     return not (self.isgo or self.dz or self.de)
 
-  @property
+  @cached_property
   def isgo(self):
     return self.dx or self.dy
 
@@ -504,8 +536,10 @@ class MoveBase(NamedTuple):
 
   def join(self, m):
     """ Add two moves together. """
-    return self._replace(dx=self.dx+m.dx, dy=self.dy+m.dy, dz=self.dz+m.dz,
-        de=self.de+m.de, v=min(self.v, m.v),v0=min(self.v0, m.v0), v1=min(m.v1, m.v1), vm=min(self.vm, m.vm))
+    m = self._replace(dx=self.dx+m.dx, dy=self.dy+m.dy, dz=self.dz+m.dz,
+        de=self.de+m.de, v=max(self.v, m.v), v0=self.v0, v1=m.v1)
+    m.fixv(v0=m.v0,v1=m.v1)
+    return m
 
   def split(self, dlmin=1.0):
     """ Partition a move into a list of moves for the acceleration phases. """
@@ -513,8 +547,8 @@ class MoveBase(NamedTuple):
     if v0 == vm == v1 or not self.isdraw:
       # A non-moving, constant speed, or non-extruding move, don't partition it.
       return [self]
-    # Get distances for move phases.
-    dl0, dlm, dl1 = self.dl0, self.dlm, self.dl1
+    # Get distances for move phases, with a little bit of extra room for acceleration.
+    dl0, dlm, dl1 = self.dl0 + 1e-6, self.dlm - 2e-6, self.dl1 + 1e-6
     # initialize middle phase v0 and v1 to just vm.
     mv0 = mv1 = vm
     # if phase distances are small don't bother partitioning them.
@@ -539,45 +573,6 @@ class MoveBase(NamedTuple):
       self.joind(m) < self.Gp))
 
 
-class Move(MoveBase):
-  #__slots__ = ()
-
-  def __init_subclass__(cls, Fd=1.75, Nd=0.4, Ap=500, Vp=100, Gp=0.1):
-    super().__init_subclass__()
-    cls.Fd, cls.Nd, cls.Ap, cls.Vp, cls.Gp = Fd, Nd, Ap, Vp, Gp
-    cls.Fa = acircle(Fd)
-    cls.Na = acircle(Nd)
-
-  def __new__(cls, *args, v0=None, v1=None, vm=None, **kwargs):
-    """ Make v0, v1, and vm default to v for moves and 0.0 for non-moves. """
-    # Round arguments to 6 decimal places and replace -0.0 with 0.0 to clean out fp errors.
-    args = tuple(round(a,6) or 0.0 for a in args)
-    kwargs = {k:(round(v,6) or 0.0) for k,v in kwargs.items()}
-    m = super().__new__(cls, *args, **kwargs)
-    assert 0 <= m.v <= cls.Vp
-    assert v0 is None or 0 <= v0 <= m.v
-    assert v1 is None or 0 <= v1 <= m.v
-    assert vm is None or 0 <= vm <= m.v
-    if m.isgo:
-      v0 = m.v if v0 is None else round(v0,6)
-      v1 = m.v if v1 is None else round(v1,6)
-      vm = m.v if vm is None else round(vm,6)
-    else:
-      v0 = v1 = vm = 0.0
-    m.v0, m.v1, m.vm = v0,v1,vm
-    return m
-
-  def _replace(self, *args, v0=None, v1=None, vm=None, **kwargs):
-    """ Change or scale a move. """
-    # Round arguments to 6 decimal places and replace -0.0 with 0.0 to clean out fp errors.
-    args = tuple(round(a,6) or 0.0 for a in args)
-    kwargs = {k:(round(v,6) or 0.0) for k,v in kwargs.items()}
-    m = super()._replace(*args,**kwargs)
-    m.v0 = self.v0 if v0 is None else round(v0,6)
-    m.v1 = self.v1 if v1 is None else round(v1,6)
-    m.vm = self.vm if vm is None else round(vm,6)
-    return m
-
   def fixv(self, v0=0.0, v1=0.0, m0=None, m1=None):
     """ Update move velocities for moves before/after.
 
@@ -598,11 +593,11 @@ class Move(MoveBase):
       # A stop move, v0, v1, and vm are zero.
       self.v0 = self.v1 = self.vm = 0.0
     else:
-      # limit v0 and v1 with acceleration limits.
+      # limit v0 and v1 with acceleration limits and a tiny bit of headroom.
       if v0 < v1:
-        v1 = min(v1, sqrt(v0**2 + 2*dl*self.Ap))
+        v1 = min(v1, sqrt(v0**2 + 2*dl*self.Ap) - 1e-6)
       elif v0 > v1:
-        v0 = min(v0, sqrt(v1**2 + 2*dl*self.Ap))
+        v0 = min(v0, sqrt(v1**2 + 2*dl*self.Ap) - 1e-6)
       # This is the limit velocity assuming constant acceleration at a/2.
       # This implements smoothed look-ahead to reduce spikey velocity.
       vm = sqrt((dl*self.Ap + v0**2 + v1**2)/2)
@@ -612,6 +607,9 @@ class Move(MoveBase):
       assert 0 <= v0 <= vm <= v <= self.Vp
       assert 0 <= v1 <= vm <= v <= self.Vp
       self.v0, self.v1, self.vm = round(v0,6), round(v1,6), round(vm,6)
+      # Delete cached properties that depend on velocities.
+      for a in 'dt dt0 dt1 dtm dl0 dl1 dlm'.split():
+        if a in self.__dict__: del self.__dict__[a]
 
 
 def ljoin(l):
@@ -1055,7 +1053,7 @@ M18
       assert dt >= 0.0
       if not dl:
         # A hop, drop, retract, restore, or set speed.
-        assert m.v0 == m.v1 == m.vm
+        assert m.v0 == m.v1 == m.vm == 0.0
         v, vz, ve = 0.0, m.dz/dt if dt else 0.0, m.de/dt if dt else 0.0
         # There is only one phase.
         phases =((dt,0),)
@@ -1063,7 +1061,7 @@ M18
         v, dz_dl, de_dl = m.v0, m.dz/dl, m.de/dl
         # Calculate accelerate, move, decelerate phases.
         phases = (m.dt0, m.a0),(m.dtm, m.am),(m.dt1, m.a1)
-      pe, eb, el, h = self.pe, self.eb, 0.0, self.h
+      pe, eb, el, l, h = self.pe, self.eb, 0.0, 0.0, self.h
       for t,a in phases:
         while t>0:
           dt = min(0.001, t)  # Use this iteration time interval.
@@ -1071,7 +1069,8 @@ M18
           dl = (v + dv/2)*dt  # Do trapezoidal integration for dl.
           assert dl >= 0.0
           v += dv
-          assert v >= -0.001
+          l += dl
+          assert islne(0.0, v)
           # Note filament doesn't get sucked back into the nozzle if the pressure
           # advance is negative, and the bead cannot give negative backpressure.
           # Get filament extruded into the nozzle and height.
@@ -1090,7 +1089,8 @@ M18
           eb = max(0.0, eb + nde - lde)
           el += lde
           t -= dt
-      assert abs(v - m.v1) < 0.001, f'{m} {v=} != {m.v1=}'
+      assert isneq(v, m.v1), f'{m!r} {v=} != {m.v1=}'
+      assert isneq(l, m.dl), f'{m!r} {l=} != {m.dl=}'
     else:
       # With Kf and Kb zero, there is no nozzle or bead pressure, so all
       # filament gets extruded and pe<=0 (can be negative when retracted). The
@@ -1103,7 +1103,7 @@ M18
       eb = min(m.eb, self.eb + en)
       el = en + self.eb - eb
     #print(f'{self.Kf=} {self.Kb=} {self.Re=} {self.pe=} {self.eb=} {m} -> {pe=} {eb=} {el=}')
-    assert abs((pe + eb + el)-(self.pe + self.eb + m.de)) < 0.00001, f'{pe=}+{eb=}+{el=} != {self.pe=}+{self.eb=}+{m.de=}'
+    assert isneq(pe + eb + el, self.pe + self.eb + m.de), f'{pe=}+{eb=}+{el=} != {self.pe=}+{self.eb=}+{m.de=}'
     # Note we return pe,eb,en not pe,eb,el, because "what came out the nozzle"
     # is more useful than "what came out the nozzle not including the bead".
     # We also recalculate en from the raw inputs to avoid accumulated integration errors.
@@ -1216,20 +1216,25 @@ M18
   def wait(self, t):
     self.add(round(t*1000))
 
-  def _getNextVeDbhwr(self, gcode):
-    "Get avg ve,db, and initial h,w,r for the next 10mm and 1.0s of draws."
-    h = w = r = None
-    dt = dl = de = hl = 0.0
+  def _getNextPeEb(self, gcode):
+    "Get pe and eb for the next draws."
+    dt = dl = vedl = dbdl = eb = 0.0
+    # Get the line-average ve and db for the next 10mm and 1s of moves.
     for m1 in (m for m in gcode if isinstance(m, Move)):
       if not m1.isdraw or (dl > 10 and dt > 1.0): break
-      if h is None: h,w,r = m1.h, m1.w, m1.r
       dt+=m1.dt
       dl+=m1.dl
-      de+=m1.de
-      hl+=m1.h*m1.dl
-    if dt:
-      return de/dt, de*self.Fa/hl, h, w, r
-    return 0.0, 0.0, self.h, self.w, 0.0
+      vedl+=m1.ve*m1.dl
+      dbdl+=m1.db*m1.dl
+      # Get eb from the first move.
+      if not eb:
+        eb = m1.eb
+        # For dynext, only use the first move.
+        if self.dynext: break
+    if dl:
+      # Calculate pe using the line-average db and ve.
+      return self._calc_pe(dbdl/dl, vedl/dl), eb
+    return 0.0, 0.0
 
   def getCode(self):
     if self.optmov:
@@ -1257,13 +1262,11 @@ M18
             self.flog('skipping empty retract.')
             continue
         elif c.isrestore and self.dynret:
-          # Get the next draws ve,db,h,w,r.
-          ve,db,h,w,r = self._getNextVeDbhwr(gcode[i+1:])
           # Get the pe and eb for the next draws.
-          pe, eb = self._calc_pe(db, ve), Move._eb(h,w,r)
-          # Adjust existing retraction and add the starting bead.
-          #self.flog(f'adjusting {c} for {ve=:.4f} {db=:.4f} l={h}x{w}x{round(r,4)} for {pe=:.4f} {eb=:.4f}')
-          c = c.set(de=pe - self.pe + eb,h=h,w=w)
+          pe, eb = self._getNextPeEb(gcode[i+1:])
+          # Adjust existing restore and add the starting bead.
+          #self.flog(f'adjusting {c} for {pe=:.4f} {eb=:.4f}
+          c = c.set(de=pe - self.pe + eb)
           # If de is zero, skip adding this.
           if not c.de:
             self.flog('skipping empty restore.')
