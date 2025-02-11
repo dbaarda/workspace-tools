@@ -193,14 +193,20 @@ def fstr(s, globals=None, locals=None):
   return eval(f'rf"""{s}"""',globals,locals)
 
 
-def isneq(a,b,e=1e-6):
-  """ Is a nearly equal to b."""
+def isneareq(a,b,e=1e-6):
+  """ Is a nearly equal to b?"""
   return abs(a-b) < e
 
 
-def islne(a,b,e=1e-6):
-  """ Is a less than or nearly equal to b."""
+def isnearle(a,b,e=1e-6):
+  """ Is a nearly less than or equal to b? """
   return a <= b+e
+
+
+def getnear(a, n=6):
+  """ Get the rounded nearest value with n decimal digits."""
+  # This will pass through None and also turns -0.0 into 0.0.
+  return None if a is None else round(a,n) or 0.0
 
 
 def acircle(d):
@@ -234,11 +240,11 @@ class MoveBase(NamedTuple):
 class Move(MoveBase):
   """Move instructions.
 
-  These represent gcode moves enhanced to include the start and end
-  velocities. They can partition a basic gcode "intent" move command into
-  "physical" acceleration, constant velocity, deceleration components based on
-  the printers acceleration, velocity, and cornering specs. They assume the
-  printer interprets gcode into movements as described at;
+  These represent gcode moves enhanced to include the start v0, end v1, and
+  middle vm velocities. They can partition a basic gcode "intent" move command
+  into "physical" acceleration, constant velocity, deceleration components
+  based on the printers acceleration, velocity, and cornering specs. They
+  assume the printer interprets gcode into movements as described at;
 
   https://mmone.github.io/klipper/Kinematics.html
 
@@ -253,6 +259,9 @@ class Move(MoveBase):
   Fa = acircle(Fd)  # Fillament area in mm^2.
   Na = acircle(Nd)  # Nozzle area in mm^2.
 
+  # The cached properties that depend on velocity attributes.
+  __vprops = frozenset('vm dt dt0 dt1 dtm dl0 dl1 dlm'.split())
+
   def __init_subclass__(cls, Fd=Fd, Nd=Nd, Ap=Ap, Vp=Vp, Gp=Gp):
     super().__init_subclass__()
     cls.Fd, cls.Nd, cls.Ap, cls.Vp, cls.Gp = Fd, Nd, Ap, Vp, Gp
@@ -260,33 +269,25 @@ class Move(MoveBase):
     cls.Na = acircle(Nd)
     cls.a0, cls.a1, cls.am = Ap, -Ap, 0.0
 
-  def __new__(cls, *args, v0=None, v1=None, vm=None, **kwargs):
-    """ Make v0, v1, and vm default to v for moves and 0.0 for non-moves. """
-    # Round arguments to 6 decimal places and replace -0.0 with 0.0 to clean out fp errors.
-    args = tuple(round(a,6) or 0.0 for a in args)
-    kwargs = {k:(round(v,6) or 0.0) for k,v in kwargs.items()}
-    m = super().__new__(cls, *args, **kwargs)
-    assert 0 <= m.v <= cls.Vp
-    assert v0 is None or 0 <= v0 <= m.v
-    assert v1 is None or 0 <= v1 <= m.v
-    assert vm is None or 0 <= vm <= m.v
-    if m.isgo:
-      m.v0 = m.v if v0 is None else round(v0,6)
-      m.v1 = m.v if v1 is None else round(v1,6)
-      m.vm = m.v if vm is None else round(vm,6)
-    else:
-      m.v0 = m.v1 = m.vm = 0.0
-    return m
+  def __new__(cls, *args, v0=None, v1=None, **kwargs):
+    """ Create a new Move. """
+    # Round arguments to clean out fp errors.
+    args = tuple(getnear(a) for a in args)
+    kwargs = {k:getnear(v) for k,v in kwargs.items()}
+    self = super().__new__(cls, *args, **kwargs)
+    assert 0.0 <= self.v <= cls.Vp
+    self.v0 = self.v1 = 0.0
+    self.setv(v0, v1)
+    return self
 
-  def _replace(self, *args, v0=None, v1=None, vm=None, **kwargs):
-    """ Change or scale a move. """
-    # Round arguments to 6 decimal places and replace -0.0 with 0.0 to clean out fp errors.
-    args = tuple(round(a,6) or 0.0 for a in args)
-    kwargs = {k:(round(v,6) or 0.0) for k,v in kwargs.items()}
+  def _replace(self, *args, v0=None, v1=None, **kwargs):
+    """ Create a new modified Move. """
+    # Round arguments to clean out fp errors.
+    args = tuple(getnear(a) for a in args)
+    kwargs = {k:getnear(v) for k,v in kwargs.items()}
     m = super()._replace(*args,**kwargs)
-    m.v0 = self.v0 if v0 is None else round(v0,6)
-    m.v1 = self.v1 if v1 is None else round(v1,6)
-    m.vm = self.vm if vm is None else round(vm,6)
+    m.v0, m.v1 = self.v0, self.v1
+    m.setv(v0, v1)
     return m
 
   def __repr__(self):
@@ -311,7 +312,20 @@ class Move(MoveBase):
       return f'move {gostr}'
     #return f'{self.__class__.__name__}({dx=:.2f}, {dy=:.2f}, {dz=:.2f}, {de=:.4f}, {v=:.2f}, {v0=:.2f}, {v1=:.2f}, {h=:.2f}, {w=:.2f})'
 
-  def set(self, *args, s=None, **kwargs):
+  def setv(self, v0=None, v1=None):
+    """ Set the v0, v1 start and end velocities. """
+    v0 = self.v0 if v0 is None else getnear(v0)
+    v1 = self.v1 if v1 is None else getnear(v1)
+    assert self.isgo or v0 == v1 == 0.0
+    assert 0.0 <= v0 <= self.v
+    assert 0.0 <= v1 <= self.v
+    if (v0, v1) != (self.v0, self.v1):
+      # Delete cached properties that depend on v0 or v1.
+      for a in self.__vprops:
+        if a in self.__dict__: delattr(self,a)
+      self.v0, self.v1 = v0, v1
+
+  def change(self, *args, s=None, **kwargs):
     """ Change or scale a move. """
     if s is not None:
       # add scaled fields to kwargs if not in args or kwargs.
@@ -330,10 +344,26 @@ class Move(MoveBase):
     return round(self.v * 60)
 
   @cached_property
+  def vm(self):
+    """ The speed of the middle phase of a move. """
+    if not self.isgo:
+      return 0.0
+    v, v0, v1 = self.v, self.v0, self.v1
+    # This is the limit velocity assuming constant acceleration at a/2.
+    # This implements smoothed look-ahead to reduce spikey velocity.
+    vm = sqrt((self.dl*self.Ap + v0**2 + v1**2)/2)
+    # If vm is less than v0 or v1, we don't need acceleration at both ends,
+    # don't set vm higher than the move's speed, and round it.
+    vm = getnear(min(v, max(v0, v1, vm)))
+    assert v0 <= vm <= v
+    assert v1 <= vm <= v
+    return vm
+
+  @cached_property
   def r(self):
     """ The extrusion ratio of a move. """
     if self.isdraw:
-      return round(self.de/self.el, 6)
+      return getnear(self.de/self.el)
     return 0.0
 
   @cached_property
@@ -428,6 +458,11 @@ class Move(MoveBase):
     return self.h*self.w*self.dl/self.Fa
 
   @cached_property
+  def isgo(self):
+    """ Is this a horizontal move? """
+    return self.dx or self.dy
+
+  @cached_property
   def isdraw(self):
     return self.isgo and self.de > 0
 
@@ -453,11 +488,8 @@ class Move(MoveBase):
 
   @property
   def isspeed(self):
+    """ Is this just a speed change? """
     return not (self.isgo or self.dz or self.de)
-
-  @cached_property
-  def isgo(self):
-    return self.dx or self.dy
 
   @property
   def isaccel(self):
@@ -536,10 +568,8 @@ class Move(MoveBase):
 
   def join(self, m):
     """ Add two moves together. """
-    m = self._replace(dx=self.dx+m.dx, dy=self.dy+m.dy, dz=self.dz+m.dz,
+    return self.change(dx=self.dx+m.dx, dy=self.dy+m.dy, dz=self.dz+m.dz,
         de=self.de+m.de, v=max(self.v, m.v), v0=self.v0, v1=m.v1)
-    m.fixv(v0=m.v0,v1=m.v1)
-    return m
 
   def split(self, dlmin=1.0):
     """ Partition a move into a list of moves for the acceleration phases. """
@@ -559,8 +589,7 @@ class Move(MoveBase):
     # Make a list of the s,v0,v1 values for each phase.
     phases = [(dl0/dl, v0, vm), (dlm/dl, mv0, mv1), (dl1/dl, vm, v1)]
     # Return a list moves for the non-zero phases.
-    l=[self.set(v0=v0, v1=v1, s=s) for s,v0,v1 in phases if s]
-    return l
+    return [self.change(v0=v0, v1=v1, s=s) for s,v0,v1 in phases if s]
 
   def canjoin(self,m):
     # Always join moves together.
@@ -593,23 +622,12 @@ class Move(MoveBase):
       # A stop move, v0, v1, and vm are zero.
       self.v0 = self.v1 = self.vm = 0.0
     else:
-      # limit v0 and v1 with acceleration limits and a tiny bit of headroom.
+      # limit v0 and v1 for acceleration with a tiny bit of headroom.
       if v0 < v1:
         v1 = min(v1, sqrt(v0**2 + 2*dl*self.Ap) - 1e-6)
       elif v0 > v1:
         v0 = min(v0, sqrt(v1**2 + 2*dl*self.Ap) - 1e-6)
-      # This is the limit velocity assuming constant acceleration at a/2.
-      # This implements smoothed look-ahead to reduce spikey velocity.
-      vm = sqrt((dl*self.Ap + v0**2 + v1**2)/2)
-      # If vm is less than v0 or v1, we don't need acceleration at both ends.
-      vm = max(v0, v1, vm)
-      vm = min(v, vm)  # don't set vm higher than requested.
-      assert 0 <= v0 <= vm <= v <= self.Vp
-      assert 0 <= v1 <= vm <= v <= self.Vp
-      self.v0, self.v1, self.vm = round(v0,6), round(v1,6), round(vm,6)
-      # Delete cached properties that depend on velocities.
-      for a in 'dt dt0 dt1 dtm dl0 dl1 dlm'.split():
-        if a in self.__dict__: del self.__dict__[a]
+      self.setv(v0, v1)
 
 
 def ljoin(l):
@@ -861,11 +879,11 @@ M18
     dx,dy,dz,de,v = m[:5]
     v0, v1 = m.v0, m.v1
     dt, dl = m.dt, m.dl
-    # Round positions to 6 decimal places to remove floating point errors.
-    self.x = round(self.x+dx, 6)
-    self.y = round(self.y+dy, 6)
-    self.z = round(self.z+dz, 6)
-    self.e = round(self.e+de, 6)
+    # Round positions to remove floating point errors.
+    self.x = getnear(self.x+dx)
+    self.y = getnear(self.y+dy)
+    self.z = getnear(self.z+dz)
+    self.e = getnear(self.e+de)
     self.f = m.f
     self.pe, self.eb, en = self._calc_pe_eb_en(m)
     self.f_l += dl if en else 0.0
@@ -1026,10 +1044,10 @@ M18
 
   def _db(self, eb=None, h=None):
     """ Get bead diameter from bead volume."""
+    h = getnear(h) # remove accumulating floating point errors.
     if eb is None: eb = self.eb
     if h is None: h = self.h
     assert eb >= 0.0
-    h=round(h,6) # remove accumulating floating point errors.
     # h<=0 can happen for initializing moves or moves at the start of a new
     # layer before a hop.
     return 2*sqrt(eb*self.Fa/(h*pi)) if h > 0.0 else 0.0
@@ -1070,7 +1088,7 @@ M18
           assert dl >= 0.0
           v += dv
           l += dl
-          assert islne(0.0, v)
+          assert isnearle(0.0, v)
           # Note filament doesn't get sucked back into the nozzle if the pressure
           # advance is negative, and the bead cannot give negative backpressure.
           # Get filament extruded into the nozzle and height.
@@ -1089,8 +1107,8 @@ M18
           eb = max(0.0, eb + nde - lde)
           el += lde
           t -= dt
-      assert isneq(v, m.v1), f'{m!r} {v=} != {m.v1=}'
-      assert isneq(l, m.dl), f'{m!r} {l=} != {m.dl=}'
+      assert isneareq(v, m.v1), f'{m!r} {v=} != {m.v1=}'
+      assert isneareq(l, m.dl), f'{m!r} {l=} != {m.dl=}'
     else:
       # With Kf and Kb zero, there is no nozzle or bead pressure, so all
       # filament gets extruded and pe<=0 (can be negative when retracted). The
@@ -1103,7 +1121,7 @@ M18
       eb = min(m.eb, self.eb + en)
       el = en + self.eb - eb
     #print(f'{self.Kf=} {self.Kb=} {self.Re=} {self.pe=} {self.eb=} {m} -> {pe=} {eb=} {el=}')
-    assert isneq(pe + eb + el, self.pe + self.eb + m.de), f'{pe=}+{eb=}+{el=} != {self.pe=}+{self.eb=}+{m.de=}'
+    assert isneareq(pe + eb + el, self.pe + self.eb + m.de), f'{pe=}+{eb=}+{el=} != {self.pe=}+{self.eb=}+{m.de=}'
     # Note we return pe,eb,en not pe,eb,el, because "what came out the nozzle"
     # is more useful than "what came out the nozzle not including the bead".
     # We also recalculate en from the raw inputs to avoid accumulated integration errors.
@@ -1244,7 +1262,7 @@ M18
     lfixv(self.gcode)
     if self.fixvel:
       # set velocity to vm for decelerating moves.
-      self.gcode = [m.set(v=m.vm) if isinstance(m,Move) and m.v>m.v0==m.vm>m.v1 else m for m in self.gcode]
+      self.gcode = [m.change(v=m.vm) if isinstance(m,Move) and m.v>m.v0==m.vm>m.v1 else m for m in self.gcode]
     if self.dynext:
       # Partition all the moves into phases
       self.gcode = lsplit(self.gcode)
@@ -1256,7 +1274,7 @@ M18
       if isinstance(c, Move):
         if c.isretract and self.dynret:
           # Adjust retraction to Re and also relieve advance pressure.
-          c = c.set(de=-self.Re - self.pe)
+          c = c.change(de=-self.Re - self.pe)
           # If de is zero, skip adding this.
           if not c.de:
             self.flog('skipping empty retract.')
@@ -1266,7 +1284,7 @@ M18
           pe, eb = self._getNextPeEb(gcode[i+1:])
           # Adjust existing restore and add the starting bead.
           #self.flog(f'adjusting {c} for {pe=:.4f} {eb=:.4f}
-          c = c.set(de=pe - self.pe + eb)
+          c = c.change(de=pe - self.pe + eb)
           # If de is zero, skip adding this.
           if not c.de:
             self.flog('skipping empty restore.')
@@ -1277,7 +1295,7 @@ M18
           # Adjust de to include required change in pe over the move.
           #self.flog(f'adjusting {c} {c.ve=:.4f}({c.ve0:.4f}<{c.vem:.4f}>{c.ve1:.4f}) {c.isaccel=}')
           # TODO: This tends to oscillate, change to a PID or PD controller.
-          c = c.set(de=c.de + pe - self.pe)
+          c = c.change(de=c.de + pe - self.pe)
       self.fadd(c)
     return b'\n'.join(self.gcode) + b'\n'
 
@@ -1406,7 +1424,7 @@ M18
     if shells:
       self.fbox(x0,y0,x1,y1,shells,**kwargs)
     b=(shells+0.5)*w
-    x0,y0,x1,y1 = round(x0+b,6), round(y0+b,6), round(x1-b,6), round(y1-b,6)
+    x0,y0,x1,y1 = getnear(x0+b), getnear(y0+b), getnear(x1-b), getnear(y1-b)
     self.cmt('structure:infill-solid')
     dx=w*2**0.5
     # Diagonal direction depends on odd vs even layers.
