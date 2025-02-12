@@ -1456,19 +1456,19 @@ M18
         # left diagonal end is following left side.
         ly+=dy
         if ly<y0:
-          # hit the bottom corner, start following top or bottom.
+          # hit the bottom corner, start following bottom.
           lx+=y0-ly
           ly=y0
         elif y1<ly:
-          # hit the bottom corner, start following top or bottom.
+          # hit the top corner, start following top.
           lx+=ly-y1
           ly=y1
       else:
         # left diagonal end is following the top.
         lx+=dx
         if lx>x1: lx=x1
-      #self.log(f'pos=({{x}},{{y}}) l=({lx},{ly}) r=({rx},{ry})')
-      if self.y==ry or self.x==rx :
+      #self.log(f'pos={{(x,y)}} l={(lx,ly)} r={(rx,ry)}')
+      if self.y == ry or self.x == rx or (rx - self.x) < (self.x - lx):
         # starting diagonal from right point.
         self.draw(x=rx,y=ry,**kwargs)
         self.draw(x=lx,y=ly,**kwargs)
