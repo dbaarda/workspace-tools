@@ -167,6 +167,7 @@ import vtext
 from typing import NamedTuple
 from functools import cached_property
 from pprint import *
+from collections import deque
 
 nl = '\n'  # for use inside fstrings.
 
@@ -317,8 +318,8 @@ class Move(MoveBase):
     v0 = self.v0 if v0 is None else getnear(v0)
     v1 = self.v1 if v1 is None else getnear(v1)
     assert self.isgo or v0 == v1 == 0.0
-    assert 0.0 <= v0 <= self.v
-    assert 0.0 <= v1 <= self.v
+    assert 0.0 <= v0 <= self.v, f'0.0 <= {v0} <= {self.v} for {self!r}'
+    assert 0.0 <= v1 <= self.v, f'0.0 <= {v1} <= {self.v} for {self!r}'
     if (v0, v1) != (self.v0, self.v1):
       # Delete cached properties that depend on v0 or v1.
       for a in self.__vprops:
@@ -395,12 +396,12 @@ class Move(MoveBase):
   @cached_property
   def dt0(self):
     """Duration of acceleration phase."""
-    return (self.vm - self.v0) / self.a0
+    return self.dv0 / self.a0
 
   @cached_property
   def dt1(self):
     """Duration of deceleration phase."""
-    return (self.v1 - self.vm) / self.a1
+    return self.dv1 / self.a1
 
   @cached_property
   def dtm(self):
@@ -411,6 +412,36 @@ class Move(MoveBase):
   def dt(self):
     """ Get the execution time for a move. """
     return self.dt0 + self.dtm + self.dt1
+
+  @property
+  def dv0(self):
+    """ The acceleration phase change in velocity. """
+    return self.vm - self.v0
+
+  @property
+  def dv1(self):
+    """ The decceleration phase change in velocity. """
+    return self.v1 - self.vm
+
+  @property
+  def dvm(self):
+    """ The mid phase change in velocity. """
+    return 0.0
+
+  @property
+  def de0(self):
+    """ The acceleration phase change in e. """
+    return self.de * self.dl0/self.dl if self.dl else 0.0
+
+  @property
+  def de1(self):
+    """ The decceleration phase change in e. """
+    return self.de * self.dl1/self.dl if self.dl else 0.0
+
+  @property
+  def dem(self):
+    """ The mid phase change in e. """
+    return self.de * self.dlm/self.dl if self.dl else self.de
 
   @property
   def ve(self):
@@ -435,6 +466,21 @@ class Move(MoveBase):
     """ The extrusion rate at the end of a move. """
     dl = self.dl
     return self.de/dl * self.v1 if dl else self.ve
+
+  @property
+  def dh0(self):
+    """ Change in height of acceleration phase."""
+    return self.dz * self.dl0/self.dl if self.dl else 0.0
+
+  @property
+  def dh1(self):
+    """ Change in height of decceleration phase."""
+    return self.dz * self.dl1/self.dl if self.dl else 0.0
+
+  @property
+  def dhm(self):
+    """ Change in height of mid phase."""
+    return self.dz * self.dlm/self.dl if self.dl else self.dz
 
   @property
   def vl(self):
@@ -464,11 +510,12 @@ class Move(MoveBase):
 
   @cached_property
   def isdraw(self):
-    return self.isgo and self.de > 0
+    # Note we treat moving retractions as pressure adjusted draws.
+    return self.isgo and self.de != 0.0
 
   @property
   def ismove(self):
-    return self.isgo and self.de <= 0
+    return self.isgo and self.de == 0.0
 
   @property
   def isretract(self):
@@ -563,8 +610,9 @@ class Move(MoveBase):
     sinth2 = min(sqrt((1 - self.costh(m))/2), 0.9999)
     # R = g * sin(th/2)/(1-sin(th/2))
     R = self.Gp*sinth2/(1-sinth2)
-    # v = sqrt(a*R)
-    return min(sqrt(self.Ap*R), self.v1, m.v0)
+    # vmax = sqrt(a*R)
+    vmax = sqrt(self.Ap*R)
+    return min(vmax, self.v, m.v)
 
   def join(self, m):
     """ Add two moves together. """
@@ -591,9 +639,12 @@ class Move(MoveBase):
     # Return a list moves for the non-zero phases.
     return [self.change(v0=v0, v1=v1, s=s) for s,v0,v1 in phases if s]
 
-  def canjoin(self,m):
-    # Always join moves together.
-    return ((self.ismove and m.ismove) or
+  def canjoin(self,m,lh=None):
+    if lh is None: lh = self.Nd
+    # Join moves together if ...
+    return ((self.ismove and m.ismove and
+      # ... they are hopped or straight enough.
+      ((self.h > lh and m.h > lh) or self.joind(m) < self.Gp)) or
       # Join draws together if ...
       (self.isdraw and m.isdraw and
       # ... they have the same line settings, and ...
@@ -614,7 +665,6 @@ class Move(MoveBase):
     If m1 is set the v1 end velocity is set to the corner velocity.
     If v0, or v1 are still not set they default to 0.0.
     """
-    v = self.v
     if m0 is not None: v0 = m0.cornerv(self)
     if m1 is not None: v1 = self.cornerv(m1)
     dl = self.dl
@@ -630,67 +680,63 @@ class Move(MoveBase):
       self.setv(v0, v1)
 
 
-def ljoin(l):
-  # TODO: make this and lfixv methods of GCodeGen and make ljoin not optimze
-  # pre-extrudes or non-hopped moves (moves not crossing edges).
-  i = m = None
-  i1 = 0
-  while i1<len(l):
-    m1 = l[i1]
-    if isinstance(m1, Move):
-      if m is None:
-        # This is the first m to join with.
-        i, m = i1, m1
+def ljoin(gcode):
+  # TODO: make this and lfixv methods of GCodeGen.
+  codes = deque()
+  i = m = l = None
+  for c in gcode:
+    # Keep the layer for checking moves against.
+    if isinstance(c, Layer):
+      l, m = c, None
+    # Never join across non comment commands.
+    elif not isinstance(c, str):
+      m = None
+    # Skip joining moves before layer 1 to not optimize pre-extrudes.
+    elif isinstance(c, Move) and l.n > 0:
+      if m and m.canjoin(c, l.h):
+        # replace the i entry with the new joined m.
+        codes[i] = m = m.join(c)
+        # Skip appending the joined move.
+        continue
       else:
-        # We have the next move m1, join m and m1 if they can.
-        if m.canjoin(m1):
-          # replace the i1 entry with the new joined m1.
-          l[i1] = m1 = m.join(m1)
-          # delete the old m entry, and adjust i1 to still point at m1
-          del l[i]
-          i1-=1
-        # m1 is the next m to try and join.
-        i, m = i1, m1
-    i1+=1
-  return l
+        # Try to join this with later moves.
+        i, m = len(codes), c
+    codes.append(c)
+  return codes
 
 
-def _rfixv(l, v1):
-  """ Reverse fix velocities for deceleration limits. """
-  for m in reversed(l):
-    if isinstance(m, Move):
-      # if v1 is already set to the target, stop.
-      if m.v1 == v1:
-        break
-      m.fixv(v0=m.v0, v1=v1)
-      v1 = m.v0
-
-
-def lfixv(l, v0=0.0, v1=0.0):
+def lfixv(gcode, v0=0.0, v1=0.0):
   """ Fix velocities in a list of moves/comments/commands. """
-  i = m = None
-  for i1,m1 in enumerate(l):
-    if isinstance(m1, Move):
-      if m is None:
-        # This is the first m to fix.
-        i, m = i1, m1
-      else:
-        # We have the next move m1, fixv m.
-        m.fixv(v0=v0, m1=m1)
-        # if v0 changed, reverse fix velocities for acceleration limits.
-        if m.v0 != v0:
-          _rfixv(l[:i], m.v0)
-        # v0 is the last m.v1, m1 is the next m to fix,
-        v0, i, m = m.v1, i1, m1
-  if m is not None:
-    # Fix the last move.
-    m.fixv(v0=v0, v1=v1)
-  return l
+
+  def _rfixv(m, v0, v1=None, m1=None):
+    """ Fix m and previous moves for acceleration limits. """
+    m.fixv(v0=v0, v1=v1, m1=m1)
+    # Save m in m1 so we can append it later.
+    m1 = m
+    # fix previous moves if their v1 doesnt match the next v0.
+    for m0 in reversed(prevs):
+      # if v1 is already set to the target, stop.
+      if m0.v1 == m.v0: break
+      m0.fixv(v0=m0.v0, v1=m.v0)
+      m = m0
+    prevs.append(m1)
+
+  prevs = []
+  moves = (m for m in gcode if isinstance(m, Move))
+  m = next(moves)
+  for m1 in moves:
+    # fixv m and possibly previous moves for next move m1.
+    _rfixv(m, v0=v0, m1=m1)
+    # v0 is the last m.v1, m1 is the next m to fix,
+    v0, m = m.v1, m1
+  # Fix the last move for final v1.
+  _rfixv(m, v0=v0, v1=v1)
+  return gcode
 
 
 def lsplit(l):
   """ Partition moves in a list of moves/comments/commands. """
-  return [p for m in l for p in (m.split() if isinstance(m, Move) else [m])]
+  return deque(p for m in l for p in (m.split() if isinstance(m, Move) else [m]))
 
 
 def ldt(l):
@@ -716,6 +762,71 @@ class Layer(NamedTuple):
 class GCodeGen(object):
   """ GCodeGen gcode generator.
 
+  The general operation of this is;
+
+  1. An instance is created with the desired arguments.
+  2. Doing resetfile() initializes the file state between "runs".
+  3. Doing resetlayer() initializes the layer state before each layer.
+  4. Commands are added with add(code), which executes them to update state
+     and records them in self.gcode. Commands can be Layers, Moves, tuples
+     with gcode instructions, strings of gcode lines, binary blobs or other
+     arbitrary things added/supported by subclasses.
+  5. After the commands are all added, getGcode() can be called to get the
+     encoded binary gcode blob. This applys several post-processing
+     transformations before finally transforming them into byte encoded gcode.
+     The transformations applied depends on initialization arguments.
+
+  The string commands can include Python f-strings that are evaluated in the
+  final transformation to gcode in a namespace containing all the execution
+  state at that point. This means they can include complex expressions
+  evaluated from the current execution state for the gcode they generate.
+
+  There are many helper methods that generate and add() commands to do various
+  different things. These include;
+
+  * startFile()/endFile(): add gcode initialization/finalization cmds.
+  * startLayer()/endLayer(): add layer initialization/finalization cmds.
+  * cmd(): add an arbitrary gcode command.
+  * cmt(): add a gcode comment line.
+  * log(): add a gcode comment log line, depending on self.verb setting.
+  * draw(), move(), retract(), restore(), hopup(), hopdn(): add move cmds
+    for basic actions.
+  * preExt(), fbox(), dbox(), dot(), line(), text(): add multiple move
+    commands for complex output.
+
+  The inc(code) method is used to execute a command and increment the state.
+  It dispatches to different inc<type>(code) methods for executing the
+  different types of commands. The default behaviour is to not change the
+  state.
+
+  Post-processing is done by mod<feature>(codes) post-processor methods which
+  take a list of commands and return a modified list of commands. These are
+  selectively executed by a top level mod(codes) method based on
+  initialization arguments.
+
+  Post-processors can modify the list in-place and return it, or create a new
+  list. They can directly modify the list of commands, or they can resetfile()
+  and modify and replay the comands with add(), returning self.gcode as the
+  result. This allows them to use the state generated by the modified cmds to
+  drive the modifications.
+
+  The final transformation into encoded gcode is implemented as a modfmt(codes)
+  post-processor. It does resetfile() and replays the commands with
+  fadd(code), which executes and transforms them into their encoded binary.
+
+  The fadd(code) method does different things for different types of commands.
+  It filters out empty cmds that evaluate to False. It just adds pre-encoded
+  bytes. It formats and encodes strings. For anything else it executes
+  fmt(code) to transform the code into text, inc(code) to increment the state,
+  and finally recursively calls fadd(text). Note this means fmt() is called
+  before the state is incremented, and the result is recursively formated and
+  encoded after the state is updated. This means fmt() can return strings with
+  content evaluated based on the state before the cmd is executed, and include
+  f-strings that evaluate based on the state after it's executed.
+
+  The fmt(code) method takes a command and returns it a text command. It
+  dispatches to f<cmd>(cmd) methods for handling the different types of cmds.
+
   Attributes:
     Te: Extruder temp (degC).
     Tp: Platform temp (degC).
@@ -736,21 +847,29 @@ class GCodeGen(object):
     dynret: linear advance dynamic retraction enabled.
     dynext: linear advance dynamic extrusion enabled.
     optmov: path optimizing enabled.
-    pe: current advance/retract length for extruder pressure.
-    eb: current extruded bead volume for nozzle backpressure.
     f_t: current file execution time.
     f_l: current file printed line length.
     f_e: current file extruded filament length.
     l_t: current layer execution time.
     l_l: current layer printed line length.
     l_e: current layer extruded filament length.
-    vl: move/draw velocity at the end of the last move.
-    ve: extruder velocity at the end of the last move.
-    vn: nozzle flow velocity at the end of the last move.
-    db: extruded bead diameter at the end of the last move.
+    pe: current extruder pressure or retraction.
+    eb: current extruded bead volume.
+    db: current extruded bead diameter (property).
+    vn: nozzle flow velocity (property).
+    ve: current extruder velocity.
+    vl: current line velocity.
+    dt: the execution time of the last command.
+    dl: the line length of the last move.
+    de: the extruder change of the last move.
+    en: the extruded volume of the last move.
+    c: the last command.
+    m: the last move command.
+    d: the last move command that was a draw.
     x,y,z,e,f: Current x,y,z,e,f position values.
-    h: current height above layer base (property).
-    _log_t: time of last logging output for diff mode output.
+    h: current height above the layer base.
+    w: current default line width (property).
+    r: current default extrusion ratio (property).
   """
 
   Fd = 1.75  # Fillament diameter.
@@ -783,7 +902,6 @@ M104 S0 T1
 M107
 M900 K{Kf:.3f} T0
 G90
-{"M82"+nl if relext else ""}\
 G28
 M132 X Y Z A B
 G1 Z50.000 F420
@@ -793,6 +911,7 @@ M6 T0
 {_setFc(Fc)}
 M108 T0
 {_setFe(Fe)+nl if Fe else ""}\
+{"M83"+nl if relext else ""}\
 """
   endcode = """\
 ;end gcode
@@ -827,16 +946,28 @@ M18
     # Default line height, width, and extrusion ratio.
     self.Lh, self.Lw, self.Lr = Lh, Lw, Lr
     # Processing mode options.
-    self.relext = relext
-    self.dynret, self.dynext, self.optmov, self.fixvel, self.diff, self.verb = dynret, dynext, optmov, fixvel, diff, verb
+    self.relext, self.dynret, self.dynext, self.optmov, self.fixvel = relext, dynret, dynext, optmov, fixvel
+    # Logging mode options.
+    self.diff, self.verb = diff, verb
     class GMove(Move, Fd=self.Fd, Nd=self.Nd): pass
     self.GMove = GMove
     self.resetfile()
 
   @property
-  def h(self):
-    """ Get the current height above the layer base."""
-    return self.z - (self.layer.z if self.layer else 0.0)
+  def db(self):
+    """ Get the current bead diameter from the bead volume."""
+    eb, h = self.eb, self.h
+    # h<=0 can happen for initializing moves or moves at the start of a new
+    # layer before a hop.
+    return 2*sqrt(eb*self.Fa/(h*pi)) if h > 0.0 else 0.0
+
+  @property
+  def vn(self):
+    """Get nozzle flow velocity from the nozzle pressure and back pressure."""
+    pe, db = self.pe, self.db
+    pb = max(0.0, self.Kb*db)            # bead backpressure.
+    pn = max(0.0, pe - pb)               # nozzle pressure.
+    return pn/self.Kf if self.Kf else self.ve if pe>=pb else 0.0
 
   @property
   def w(self):
@@ -852,61 +983,193 @@ M18
     """ Reset all state variables. """
     # Zero all positions so the first move's deltas are actually absolute.
     self.x, self.y, self.z, self.e, self.f = 0.0, 0.0, 0.0, 0.0, 0
-    self.f_t = self.f_l = self.f_e = self._log_t = 0.0
-    self.pe = 0.0  # current extruder linear advance pressure or retracted length mm.
-    self.eb = 0.0  # current extruded bead volume in mm of fillament.
-    self.gcode = []
+    self.f_t = self.f_l = self.f_e  = 0.0
+    self.pe = self.eb = self.vl = self.ve = self.h = 0.0
+    self.gcode = deque()
     self.resetlayer()
 
   def resetlayer(self):
     """ Reset all layer state variables. """
     self.layer = None
     self.l_t = self.l_l = self.l_e = 0.0
-    self.lastdraw = None
+    self.c = self.m = self.d = None
+    self.resetstate()
 
-  def inclayer(self, l):
-    """ Increment state for starting a Layer. """
-    self.resetlayer()
-    self.layer = l
+  def resetstate(self):
+    """ Reset all move state variables. """
+    self.dt = self.de = self.dl = self.en = 0.0
+
+  def iterstate(self, dt, de, dl, dv, dh):
+    """ Increment the state for a small dt interval. """
+    # Note filament doesn't get sucked back into the nozzle if the pressure
+    # advance is negative, and the bead cannot give negative backpressure.
+    # Get filament extruded into the nozzle and height.
+    pe, eb, db, h = self.pe, self.eb, self.db, self.h
+    pe += de
+    pb = max(0, self.Kb * db)                 # bead backpressure.
+    pn = max(0, pe - pb)                      # nozzle pressure.
+    en = pn * dt/(self.Kf + dt)               # filament extruded out the nozzle.
+    el = min(db * h * dl / self.Fa, eb + en)  # fillament removed from bead to line,
+    self.pe = pe - en
+    self.eb = max(0.0, eb + en - el)
+    self.dt += dt
+    self.de += de
+    self.en += en
+    self.dl += dl
+    self.vl += dv
+    self.h += dh
+
+  def incstate(self, dt, de=0.0, dl=0.0, dv=0.0, dh=0.0):
+    """ Increment the state for a large dt interval. """
+    # Keep the expected final state to check against and use later.
+    dt1, de1, dl1, vl1, h1 = self.dt+dt, self.de+de, self.dl+dl, self.vl+dv, self.h+dh
+    t, idt = dt, 0.001
+    if dl:
+      # integrate a horizontal move.
+      al, de_dl, dh_dl = dv/dt, de/dl, dh/dl
+      while t > 0.0:
+        idt = min(idt, t)
+        idv = al * idt
+        idl = (self.vl + idv/2) * idt  # Do trapezoidal integration for dl.
+        ide = idl * de_dl
+        idh = idl * dh_dl
+        self.iterstate(idt, ide, idl, idv, idh)
+        t -= idt
+    else:
+      # integrate a non-horizontal change.
+      ve, vz = de/dt, dh/dt
+      while t > 0.0:
+        idt = min(idt, t)
+        ide = ve * idt
+        idh = vz * idt
+        self.iterstate(idt, ide, 0.0, 0.0, idh)
+        t -= idt
+    assert isneareq(self.dt, dt1)
+    assert isneareq(self.de, de1)
+    assert isneareq(self.dl, dl1)
+    assert isneareq(self.vl, vl1)
+    assert isneareq(self.h, h1)
+    # Use the expected final states to remove small integration errors.
+    self.dt, self.de, self.dl, self.vl, self.h = dt1, de1, dl1, vl1, h1
+
+  def inc(self, code):
+    if isinstance(code, Layer):
+      self.inclayer(code)
+    elif isinstance(code, Move):
+      self.incmove(code)
+    elif isinstance(code, tuple):
+      self.inccmd(code)
+    self.c = code
 
   def inct(self, dt):
     """ Increment time. """
     self.f_t += dt
     self.l_t += dt
+    self.dt = dt
+
+  def inclayer(self, l):
+    """ Increment state for starting a Layer. """
+    self.resetlayer()
+    self.layer = l
+    self.h = getnear(self.z - l.z)
 
   def incmove(self, m):
     """ Increment state for executing a Move. """
-    dx,dy,dz,de,v = m[:5]
-    v0, v1 = m.v0, m.v1
-    dt, dl = m.dt, m.dl
-    # Round positions to remove floating point errors.
-    self.x = getnear(self.x+dx)
-    self.y = getnear(self.y+dy)
-    self.z = getnear(self.z+dz)
-    self.e = getnear(self.e+de)
+    assert isneareq(self.h, self.z - self.layer.z), f'{self.h=} != {self.z - self.layer.z}'
+    assert isneareq(self.vl, m.v0), f'{self.vl=} != {m.v0=} for {m} at {ftime(self.f_t)}'
+    h1 = self.h + m.dz
+    #self.vl = m.v0
+    # Reset and update the state for the three move phases.
+    self.resetstate()
+    if m.dt0: self.incstate(m.dt0, m.de0, m.dl0, m.dv0, m.dh0)
+    if m.dtm: self.incstate(m.dtm, m.dem, m.dlm, m.dvm, m.dhm)
+    if m.dt1: self.incstate(m.dt1, m.de1, m.dl1, m.dv1, m.dh1)
+    # Check that the end states are as expected.
+    assert isneareq(self.dt, m.dt)
+    assert isneareq(self.de, m.de)
+    assert isneareq(self.dl, m.dl)
+    assert isneareq(self.vl, m.v1)
+    assert isneareq(self.h, h1)
+    # Update and round positions to remove floating point errors.
+    self.x = getnear(self.x+m.dx)
+    self.y = getnear(self.y+m.dy)
+    self.z = getnear(self.z+m.dz)
+    self.e = getnear(self.e+m.de)
     self.f = m.f
-    self.pe, self.eb, en = self._calc_pe_eb_en(m)
-    self.f_l += dl if en else 0.0
-    self.f_e += en
-    self.l_l += dl if en else 0.0
-    self.l_e += en
-    self.vl = v1
-    self.ve = de/dl*v1 if dl else de/dt if dt else 0.0
-    self.vn = self._vn()
-    self.db = self._db()
-    self.en = en
-    self.inct(dt)
-    if m.isdraw: self.last_draw = m
+    self.f_l += m.dl if self.en else 0.0
+    self.f_e += self.en
+    self.l_l += m.dl if self.en else 0.0
+    self.l_e += self.en
+    self.vl = m.v1
+    self.ve = m.ve1
+    self.h = getnear(self.z - self.layer.z)
+    self.m = m
+    if m.isdraw: self.d = m
+    self.inct(m.dt)
 
   def inccmd(self, cmd):
-    """ Handle special string gcode commands. """
-    if m := re.match(r'G92(?: X([-+0-9.]+))?(?: Y([-+0-9.]+))?(?: Z([-+0-9.]+))?(?: E([-+0-9.]+))?', cmd):
+    """ Increment state for special gcode commands. """
+    cmd, kwargs = cmd
+    if cmd == 'G92':
       # This is a "set XYZE to ..." cmd, often used to keep E < 1000.
-      x,y,z,e = m.groups()
-      if x is not None: self.x = float(x)
-      if y is not None: self.y = float(y)
-      if z is not None: self.z = float(z)
-      if e is not None: self.e = float(e)
+      if 'X' in kwargs: self.x = kwargs['X']
+      if 'Y' in kwargs: self.y = kwargs['Y']
+      if 'Z' in kwargs: self.z = kwargs['Z']
+      if 'E' in kwargs: self.e = kwargs['E']
+    elif cmd == 'G4':
+      # This is a pause command.
+      dt = kwargs['P']/1000
+      self.resetstate()
+      self.incstate(dt=dt)
+      inct(dt)
+
+  def fmt(self, code):
+    if isinstance(code, Layer):
+      return self.flayer(code)
+    elif isinstance(code, Move):
+      return self.fmove(code)
+    elif isinstance(code, tuple):
+      cmd, kwargs = code
+      return self.fcmd(cmd, **kwargs)
+    elif isinstance(code, str):
+      return self.fstr(code)
+    else:
+      # It's probably Flashprint binary header stuff.
+      return code
+
+  def flayer(self, l):
+    """ Format a layer as a comment string. """
+    # Note we only add the comment for layers >=1, not the pre-layers.
+    return self.fcmt('layer:{layer.h:.2f}') if l.n else None
+
+  def fmove(self, m):
+    """ Format a Move as a gcode command. """
+    dx,dy,dz,de = m[:4]
+    # Don't include args in cmd if they are unchanged.
+    # Include both x and y if either are changed.
+    x = self.x + dx if dx or dy else None
+    y = self.y + dy if dy or dx else None
+    z = self.z + dz if dz else None
+    # If relext or diff mode is on, use relative extrusion.
+    e = (de if self.relext or self.diff else self.e + de) if de else None
+    f = m.f if m.f != self.f else None
+    cmd = self.fcmd('G1', X=x, Y=y, Z=z, E=e, F=f)
+    prefix, suffix = [], []
+    if self.verb:
+      # Add additional command comment and suffix log line.
+      cmd = f'{cmd:40s}; {{m}} r={{en/m.el if m.el else db/m.w:.2f}}'
+      suffix.append(self.flog('{pe=:.4f} {eb=:.4f} {ve=:.4f} {vn=:.4f} {vl=:.3f} {db=:.2f}'))
+    # Note Flashprint interprets extrude_ratio comments as layer height changes.
+    if m.isdraw and (not self.d or m.h != self.d.h):
+      # Prepend extrude_ratio comment.
+      prefix.append(self.fcmt('extrude_ratio:{round(m.h/layer.h, 4)}'))
+    return '\n'.join(prefix + [cmd] + suffix)
+
+  def fcmd(self, cmd, **kwargs):
+    """ Format a gcode command. """
+    fmts = dict(X='.2f',Y='.2f',Z='.3f',E='.4f',F='d')
+    args = ' '.join(f'{k}{v:{fmts.get(k,"")}}' for k,v in kwargs.items() if v is not None)
+    return f'{cmd} {args}' if args else cmd
 
   def fstr(self, str):
     """ Format a string as an f-string with attributes of self."""
@@ -915,90 +1178,53 @@ M18
     except Exception as e:
       raise Exception(f'Error formatting {str!r}.') from e
 
-  def fcmd(self, cmd, **kwargs):
-    """ Format a gcode command. """
-    fmts = dict(X='.2f',Y='.2f',Z='.3f',E='.4f',F='d')
-    args = ' '.join(f'{k}{v:{fmts.get(k,"")}}' for k,v in kwargs.items() if v is not None)
-    return f'{cmd} {args}' if args else cmd
+  def fcmt(self, cmt):
+    """ Format a comment. """
+    return f';{cmt}'
 
-  def fmove(self, m):
-    """ Format a Move as a gcode command. """
-    dx,dy,dz,de,v = m[:5]
-    # Don't include args in cmd if they are unchanged.
-    # Include both x and y if either are changed.
-    x = self.x + dx if dx or dy else None
-    y = self.y + dy if dy or dx else None
-    z = self.z + dz if dz else None
-    # If relext or diff mode is on, use relative extrusion.
-    if self.relext or self.diff:
-      e = de if de else None
-    else:
-      e = self.e + de if de else None
-    f = m.f
-    if f == self.f: f = None
-    cmd = self.fcmd('G1', X=x, Y=y, Z=z, E=e, F=f)
-    if self.verb:
-      cmd = f'{cmd:40s}; {m} r={{en/{m.el} if {m.el} else db/{m.w}:.2f}}'
-    return cmd
-
-  def fadd(self, code):
-    """ Do a final format to string and add. """
-    if isinstance(code, Layer):
-      self.inclayer(code)
-    elif isinstance(code, Move):
-      out = self.fmove(code)
-      # Flashprint interprets extrude_ratio comments as layer height changes.
-      if code.isdraw and (not self.last_draw or code.h != self.last_draw.h):
-        self.fadd(f';extrude_ratio:{round(code.h/self.layer.h, 4)}')
-      self.incmove(code)
-      self.fadd(out)
-      self.flog('{pe=:.4f} {eb=:.4f} {ve=:.4f} {vn=:.4f} {vl=:.3f} {db=:.2f}')
-    elif isinstance(code, int):
-      # ints are waits.
-      self.inct(code/1000)
-      self.fadd(self.fcmd('G4', P=code))
-    elif isinstance(code, str):
-      self.inccmd(code)
-      self.add(self.fstr(code.strip()).encode())
-    else:
-      # It's probably Flashprint binary header stuff.
-      self.add(code)
-
-  def add(self, code):
-    """ Add code Layer, Move, Wait, or format-string instances. """
-    if isinstance(code, Layer):
-      self.inclayer(code)
-    elif isinstance(code, Move):
-      self.incmove(code)
-    elif isinstance(code, int):
-      # ints are waits.
-      self.inct(code/1000)
-    elif isinstance(code, str):
-      self.inccmd(code)
-    self.gcode.append(code)
-
-  def cmd(self, cmd, **kwargs):
-    self.add(self.fcmd(cmd,**kwargs))
-
-  def cmt(self, cmt):
-    self.add(f';{cmt}')
-
-  def log(self, txt):
+  def flog(self, txt):
+    """ Conditionally format a log comment. """
     #print(self.fstr(txt))
     if self.verb:
       if self.diff:
-        self.cmt('{f_t - _log_t:.3f}: ' + txt)
+        return self.fcmt('{dt:.3f}: ' + txt)
       else:
-        self.cmt('{ftime(f_t)}: ' + txt)
+        return self.fcmt('{ftime(f_t)}: ' + txt)
 
-  def flog(self, txt):
-    """Add a formatted log entry."""
-    if self.verb:
-      self.log(txt)
-      # We need to fstr() reformat that last log entry...
-      self.fadd(self.gcode.pop())
-      # Update the log time.
-      self._log_t = self.f_t
+  def fadd(self, code):
+    """ Do a final format and add. """
+    if not code:
+      return
+    elif isinstance(code, bytes):
+      self.add(code)
+    elif isinstance(code, str):
+      self.add(self.fstr(code.strip()).encode())
+    else:
+      fcode = self.fmt(code)
+      self.inc(code)
+      self.fadd(fcode)
+
+  def add(self, code):
+    """ Add code Layer, Move, Wait, or format-string instances. """
+    # skip empty commands
+    if code:
+      self.inc(code)
+      self.gcode.append(code)
+
+  def cmd(self, cmd, **kwargs):
+    """ Add a gcode command as a tuple. """
+    # Strip out None arguments.
+    kwargs = {k:v for k,v in kwargs.items() if v is not None}
+    self.add((cmd, kwargs))
+
+  def cmt(self, cmt):
+    """ Add a comment. """
+    self.add(self.fcmt(cmt))
+
+  def log(self, txt):
+    """ Conditionally add a log comment. """
+    #print(self.fstr(txt))
+    self.add(self.flog(txt))
 
   def startFile(self):
     self.add(self.fstr(self.startcode))
@@ -1007,7 +1233,7 @@ M18
 
   def endFile(self):
     # Retract to -2.5mm for the next print.
-    self.retract(de=-2.5)
+    self.endLayer(de=-2.5, h=10.0)
     self.filestats()
     self.add(self.fstr(self.endcode))
 
@@ -1027,105 +1253,17 @@ M18
         w or self.Lw,
         r*self.Lr)
     self.add(l)
-    if l.n:
-      self.cmt('layer:{layer.h:.2f}')
-      self.log('layer={layer.n} h={layer.h:.2f} w={layer.w:.2f} r={layer.r:.2f}')
+    self.log('layer={layer.n} h={layer.h:.2f} w={layer.w:.2f} r={layer.r:.2f}')
 
   def endLayer(self, **upargs):
     self.hopup(**upargs)
     self.layerstats()
 
-  def _calc_pe(self, db, ve):
-    """ Get steady-state pressure advance pe needed for target db and ve. """
-    pb = max(0, self.Kb*db)
-    pn = max(0, self.Kf*ve)
-    #pn = self.Kf*ve * e**(-dt/self.Kf)
-    return pn+pb
-
-  def _db(self, eb=None, h=None):
-    """ Get bead diameter from bead volume."""
-    h = getnear(h) # remove accumulating floating point errors.
-    if eb is None: eb = self.eb
-    if h is None: h = self.h
-    assert eb >= 0.0
-    # h<=0 can happen for initializing moves or moves at the start of a new
-    # layer before a hop.
-    return 2*sqrt(eb*self.Fa/(h*pi)) if h > 0.0 else 0.0
-
-  def _vn(self,pe=None,eb=None,h=None,ve=None):
-    """Get nozzle flow velocity from pe, eb, h, and ve."""
-    if pe is None: pe = self.pe
-    if ve is None: ve = self.ve
-    db = self._db(eb,h)                # diameter of bead
-    pb = max(0, self.Kb*db)            # bead backpressure.
-    pn = max(0, pe - pb)               # nozzle pressure.
-    return pn/self.Kf if self.Kf else ve if pe>=pb else 0.0
-
-  def _calc_pe_eb_en(self, m):
-    """ Calculate updated pe, eb, and en values after a move."""
-    if (self.Kf or self.Kb) and (self.pe>0 or self.eb>0 or m.de>=0):
-      # Calculate change in pressure advance 'pe' and bead volume `eb` by
-      # iterating over the time interval with a dt that is small relative to
-      # the Kf timeconstant.
-      dt, dl = m.dt, m.dl
-      assert dt >= 0.0
-      if not dl:
-        # A hop, drop, retract, restore, or set speed.
-        assert m.v0 == m.v1 == m.vm == 0.0
-        v, vz, ve = 0.0, m.dz/dt if dt else 0.0, m.de/dt if dt else 0.0
-        # There is only one phase.
-        phases =((dt,0),)
-      else:
-        v, dz_dl, de_dl = m.v0, m.dz/dl, m.de/dl
-        # Calculate accelerate, move, decelerate phases.
-        phases = (m.dt0, m.a0),(m.dtm, m.am),(m.dt1, m.a1)
-      pe, eb, el, l, h = self.pe, self.eb, 0.0, 0.0, self.h
-      for t,a in phases:
-        while t>0:
-          dt = min(0.001, t)  # Use this iteration time interval.
-          dv = a*dt
-          dl = (v + dv/2)*dt  # Do trapezoidal integration for dl.
-          assert dl >= 0.0
-          v += dv
-          l += dl
-          assert isnearle(0.0, v)
-          # Note filament doesn't get sucked back into the nozzle if the pressure
-          # advance is negative, and the bead cannot give negative backpressure.
-          # Get filament extruded into the nozzle and height.
-          if dl:
-            pe += de_dl * dl
-            h += dz_dl * dl
-          else:
-            pe += ve * dt
-            h += vz * dt
-          db = self._db(eb, h)                # diameter of bead.
-          pb = max(0, self.Kb*db)             # bead backpressure.
-          pn = max(0, pe - pb)                # nozzle pressure.
-          nde = pn*dt/(self.Kf+dt)            # Get filament extruded out the nozzle.
-          lde = min(db*h*dl/self.Fa, eb+nde)  # Get volume removed from bead to line,
-          pe -= nde
-          eb = max(0.0, eb + nde - lde)
-          el += lde
-          t -= dt
-      assert isneareq(v, m.v1), f'{m!r} {v=} != {m.v1=}'
-      assert isneareq(l, m.dl), f'{m!r} {l=} != {m.dl=}'
-    else:
-      # With Kf and Kb zero, there is no nozzle or bead pressure, so all
-      # filament gets extruded and pe<=0 (can be negative when retracted). The
-      # bead size is max the target move bead size, but can be less if
-      # insuficient filament is extruded. The filament added to the line is
-      # all the filament extruded minus the bead.
-      ex = self.pe + m.de
-      pe = min(0.0, ex)
-      en = max(0.0, ex)
-      eb = min(m.eb, self.eb + en)
-      el = en + self.eb - eb
-    #print(f'{self.Kf=} {self.Kb=} {self.Re=} {self.pe=} {self.eb=} {m} -> {pe=} {eb=} {el=}')
-    assert isneareq(pe + eb + el, self.pe + self.eb + m.de), f'{pe=}+{eb=}+{el=} != {self.pe=}+{self.eb=}+{m.de=}'
-    # Note we return pe,eb,en not pe,eb,el, because "what came out the nozzle"
-    # is more useful than "what came out the nozzle not including the bead".
-    # We also recalculate en from the raw inputs to avoid accumulated integration errors.
-    return pe, eb, self.pe + m.de - pe
+  def nextLayer(self, h=None, **largs):
+    h = h or self.Lh
+    # hopup to Zh above the top of the new layer.
+    self.endlayer(h=self.layer.h + h + self.Zh)
+    self.startLayer(h=h, **largs)
 
   def draw(self,
       x=None, y=None, z=None, e=None,
@@ -1212,7 +1350,7 @@ M18
       dx=None, dy=None, dz=None, de=None,
       vt=None, vz=None, ve=None, vb=None,
       s=1.0, h=None):
-    """ Do a retract, raise, and move. """
+    """ Do a retract and raise. """
     # default hopup is to Zh above layer height.
     if h is None: h = self.layer.h + self.Zh
     self.retract(e=e, de=de, ve=ve, s=s)
@@ -1232,7 +1370,15 @@ M18
     self.restore(e=e, de=de, vb=vb, s=s)
 
   def wait(self, t):
-    self.add(round(t*1000))
+    """ Do a pause. """
+    self.cmd('G4', P=round(t*1000))
+
+  def _calc_pe(self, db, ve):
+    """ Get steady-state pressure advance pe needed for target db and ve. """
+    pb = max(0, self.Kb*db)
+    pn = max(0, self.Kf*ve)
+    #pn = self.Kf*ve * e**(-dt/self.Kf)
+    return pn+pb
 
   def _getNextPeEb(self, gcode):
     "Get pe and eb for the next draws."
@@ -1254,22 +1400,10 @@ M18
       return self._calc_pe(dbdl/dl, vedl/dl), eb
     return 0.0, 0.0
 
-  def getCode(self):
-    if self.optmov:
-      # Join together any moves that can be joined.
-      ljoin(self.gcode)
-    # Fix all the velocities.
-    lfixv(self.gcode)
-    if self.fixvel:
-      # set velocity to vm for decelerating moves.
-      self.gcode = [m.change(v=m.vm) if isinstance(m,Move) and m.v>m.v0==m.vm>m.v1 else m for m in self.gcode]
-    if self.dynext:
-      # Partition all the moves into phases
-      self.gcode = lsplit(self.gcode)
-    # finalize and return the resulting gcode.
-    gcode = self.gcode
+  def modpa(self, gcode):
     self.resetfile()
-    for i,c in enumerate(gcode):
+    while gcode:
+      c = gcode.popleft()
       # Adjust Move's to include dynamic retraction and extrusion.
       if isinstance(c, Move):
         if c.isretract and self.dynret:
@@ -1277,26 +1411,40 @@ M18
           c = c.change(de=-self.Re - self.pe)
           # If de is zero, skip adding this.
           if not c.de:
-            self.flog('skipping empty retract.')
-            continue
+            c = self.flog('skipping empty retract.')
         elif c.isrestore and self.dynret:
           # Get the pe and eb for the next draws.
-          pe, eb = self._getNextPeEb(gcode[i+1:])
+          pe, eb = self._getNextPeEb(gcode)
           # Adjust existing restore and add the starting bead.
-          #self.flog(f'adjusting {c} for {pe=:.4f} {eb=:.4f}
+          #self.fadd(self.flog(f'adjusting {c} for {pe=:.4f} {eb=:.4f})
           c = c.change(de=pe - self.pe + eb)
           # If de is zero, skip adding this.
           if not c.de:
-            self.flog('skipping empty restore.')
-            continue
+            c = self.flog('skipping empty restore.')
         elif c.isdraw and self.dynext:
           # For calculating the pressure pe needed, use the ending ve1.
           pe = self._calc_pe(c.db, c.ve1)
           # Adjust de to include required change in pe over the move.
-          #self.flog(f'adjusting {c} {c.ve=:.4f}({c.ve0:.4f}<{c.vem:.4f}>{c.ve1:.4f}) {c.isaccel=}')
+          #self.fadd(self.flog(f'adjusting {c} {c.ve=:.4f}({c.ve0:.4f}<{c.vem:.4f}>{c.ve1:.4f}) {c.isaccel=}'))
           # TODO: This tends to oscillate, change to a PID or PD controller.
           c = c.change(de=c.de + pe - self.pe)
       self.fadd(c)
+    return self.gcode
+
+  def getCode(self):
+    if self.optmov:
+      # Join together any moves that can be joined.
+      self.gcode = ljoin(self.gcode)
+    # Fix all the velocities.
+    self.gcode = lfixv(self.gcode)
+    if self.fixvel:
+      # set velocity to vm for decelerating moves.
+      self.gcode = deque(m.change(v=m.vm) if isinstance(m,Move) and m.v>m.v0==m.vm>m.v1 else m for m in self.gcode)
+    if self.dynext:
+      # Partition all the moves into phases
+      self.gcode = lsplit(self.gcode)
+    # finalize and return the resulting gcode.
+    self.gcode = self.modpa(self.gcode)
     return b'\n'.join(self.gcode) + b'\n'
 
   def layerstats(self):
