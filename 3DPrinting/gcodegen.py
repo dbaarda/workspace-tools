@@ -639,18 +639,25 @@ class Move(MoveBase):
     # Return a list moves for the non-zero phases.
     return [self.change(v0=v0, v1=v1, s=s) for s,v0,v1 in phases if s]
 
-  def canjoin(self,m,lh=None):
+  def canjoin(self, m, lh=None):
+    """ Can this move be reasonably joined with m?
+
+    This needs the layer height to figure out if these are hopped moves which
+    can always be joined. We can't arbitrarily join moves at layer height
+    because they could be avoiding outlines.
+    """
     if lh is None: lh = self.Nd
-    # Join moves together if ...
-    return ((self.ismove and m.ismove and
-      # ... they are hopped or straight enough.
-      ((self.h > lh and m.h > lh) or self.joind(m) < self.Gp)) or
-      # Join draws together if ...
-      (self.isdraw and m.isdraw and
-      # ... they have the same line settings, and ...
-      (self.h,self.w,self.r) == (self.h,self.w,self.r) and
-      # The path deviation from joining them is less than Gp.
-      self.joind(m) < self.Gp))
+    return (
+        # Join moves together if ...
+        (self.ismove and m.ismove and
+        # ... they are hopped or straight enough.
+        ((self.h > lh and m.h > lh) or self.joind(m) < self.Gp)) or
+        # Join draws together if ...
+        (self.isdraw and m.isdraw and
+        # ... they have the same line settings, and ...
+        (self.h,self.w,self.r) == (self.h,self.w,self.r) and
+        # The path deviation from joining them is small.
+        self.joind(m) < self.Gp))
 
 
   def fixv(self, v0=0.0, v1=0.0, m0=None, m1=None):
@@ -678,65 +685,6 @@ class Move(MoveBase):
       elif v0 > v1:
         v0 = min(v0, sqrt(v1**2 + 2*dl*self.Ap) - 1e-6)
       self.setv(v0, v1)
-
-
-def ljoin(gcode):
-  # TODO: make this and lfixv methods of GCodeGen.
-  codes = deque()
-  i = m = l = None
-  for c in gcode:
-    # Keep the layer for checking moves against.
-    if isinstance(c, Layer):
-      l, m = c, None
-    # Never join across non comment commands.
-    elif not isinstance(c, str):
-      m = None
-    # Skip joining moves before layer 1 to not optimize pre-extrudes.
-    elif isinstance(c, Move) and l.n > 0:
-      if m and m.canjoin(c, l.h):
-        # replace the i entry with the new joined m.
-        codes[i] = m = m.join(c)
-        # Skip appending the joined move.
-        continue
-      else:
-        # Try to join this with later moves.
-        i, m = len(codes), c
-    codes.append(c)
-  return codes
-
-
-def lfixv(gcode, v0=0.0, v1=0.0):
-  """ Fix velocities in a list of moves/comments/commands. """
-
-  def _rfixv(m, v0, v1=None, m1=None):
-    """ Fix m and previous moves for acceleration limits. """
-    m.fixv(v0=v0, v1=v1, m1=m1)
-    # Save m in m1 so we can append it later.
-    m1 = m
-    # fix previous moves if their v1 doesnt match the next v0.
-    for m0 in reversed(prevs):
-      # if v1 is already set to the target, stop.
-      if m0.v1 == m.v0: break
-      m0.fixv(v0=m0.v0, v1=m.v0)
-      m = m0
-    prevs.append(m1)
-
-  prevs = []
-  moves = (m for m in gcode if isinstance(m, Move))
-  m = next(moves)
-  for m1 in moves:
-    # fixv m and possibly previous moves for next move m1.
-    _rfixv(m, v0=v0, m1=m1)
-    # v0 is the last m.v1, m1 is the next m to fix,
-    v0, m = m.v1, m1
-  # Fix the last move for final v1.
-  _rfixv(m, v0=v0, v1=v1)
-  return gcode
-
-
-def lsplit(l):
-  """ Partition moves in a list of moves/comments/commands. """
-  return deque(p for m in l for p in (m.split() if isinstance(m, Move) else [m]))
 
 
 def ldt(l):
@@ -1373,11 +1321,10 @@ M18
     """ Do a pause. """
     self.cmd('G4', P=round(t*1000))
 
-  def _calc_pe(self, db, ve):
-    """ Get steady-state pressure advance pe needed for target db and ve. """
-    pb = max(0, self.Kb*db)
+  def _calc_pe(self, ve, db):
+    """ Get steady-state pressure advance pe needed for target ve and db. """
     pn = max(0, self.Kf*ve)
-    #pn = self.Kf*ve * e**(-dt/self.Kf)
+    pb = max(0, self.Kb*db)
     return pn+pb
 
   def _getNextPeEb(self, gcode):
@@ -1397,10 +1344,73 @@ M18
         if self.dynext: break
     if dl:
       # Calculate pe using the line-average db and ve.
-      return self._calc_pe(dbdl/dl, vedl/dl), eb
+      return self._calc_pe(vedl/dl, dbdl/dl), eb
     return 0.0, 0.0
 
-  def modpa(self, gcode):
+  def modjoin(self):
+    """Postprocess gcode to join moves."""
+    gcode, self.gcode = self.gcode, deque()
+    i = m = l = None
+    for c in gcode:
+      # Keep the layer for checking moves against.
+      if isinstance(c, Layer):
+        l, m = c, None
+      # Skip joining moves before layer 1 to not optimize pre-extrudes.
+      elif isinstance(c, Move) and l.n > 0:
+        if m and m.canjoin(c, l.h):
+          # replace the i entry with the new joined m.
+          self.gcode[i] = m = m.join(c)
+          # Replace the joined move with a log entry.
+          c = self.flog(f'Joined {c} with previous move {{m}}.')
+        else:
+          # Try to join this with later moves.
+          i, m = len(self.gcode), c
+      # Never join across non comment commands.
+      elif not isinstance(c, str):
+        m = None
+      self.gcode.append(c)
+
+  def modfixv(self):
+    """ Fix velocities of moves in gcode. """
+    # This adjusts moves in self.gcode in-place.
+
+    def _rfixv(prevs, m, v0, m1):
+      """ Fix m and previous moves for acceleration limits. """
+      # Note if m1 is None this will use v1=0.0 instead.
+      m.fixv(v0=v0, v1=0.0, m1=m1)
+      # fix previous moves if their v1 doesn't match the next v0.
+      for m0 in reversed(prevs):
+        # if v1 is already set to the target, stop.
+        if m0.v1 == m.v0: break
+        m0.fixv(v0=m0.v0, v1=m.v0)
+        m = m0
+
+    prevs = []
+    v0, m = 0.0, None
+    # Only go through non-comment commands using None for non-moves.
+    cmds = (m for m in self.gcode if not isinstance(m, str))
+    for m1 in (m if isinstance(m, Move) else None for m in cmds):
+      if m:
+        # fixv m and possibly previous moves for next move m1.
+        # This will use v1=0.0 to stop if m1 is not a move.
+        _rfixv(prevs, m, v0=v0, m1=m1)
+        # Append m to the list of previous moves for _rfix().
+        prevs.append(m)
+        # v0 is the last m.v1
+        v0 = m.v1
+      # m1 is the next m.
+      m = m1
+    if m:
+      # Fix the last move for final v1.
+      _rfixv(prevs, m, v0=v0, m1=None)
+
+  def modsplit(self):
+    """ Partition moves in a list of moves/comments/commands. """
+    splits = (c.split() if isinstance(c,Move) else [c] for c in self.gcode)
+    self.gcode = deque(p for s in splits for p in s)
+
+  def modpa(self):
+    gcode = self.gcode
     self.resetfile()
     while gcode:
       c = gcode.popleft()
@@ -1423,28 +1433,27 @@ M18
             c = self.flog('skipping empty restore.')
         elif c.isdraw and self.dynext:
           # For calculating the pressure pe needed, use the ending ve1.
-          pe = self._calc_pe(c.db, c.ve1)
+          pe = self._calc_pe(c.ve1, c.db)
           # Adjust de to include required change in pe over the move.
           #self.fadd(self.flog(f'adjusting {c} {c.ve=:.4f}({c.ve0:.4f}<{c.vem:.4f}>{c.ve1:.4f}) {c.isaccel=}'))
           # TODO: This tends to oscillate, change to a PID or PD controller.
           c = c.change(de=c.de + pe - self.pe)
       self.fadd(c)
-    return self.gcode
 
   def getCode(self):
     if self.optmov:
       # Join together any moves that can be joined.
-      self.gcode = ljoin(self.gcode)
+      self.modjoin()
     # Fix all the velocities.
-    self.gcode = lfixv(self.gcode)
+    self.modfixv()
     if self.fixvel:
       # set velocity to vm for decelerating moves.
       self.gcode = deque(m.change(v=m.vm) if isinstance(m,Move) and m.v>m.v0==m.vm>m.v1 else m for m in self.gcode)
     if self.dynext:
       # Partition all the moves into phases
-      self.gcode = lsplit(self.gcode)
+      self.modsplit()
     # finalize and return the resulting gcode.
-    self.gcode = self.modpa(self.gcode)
+    self.modpa()
     return b'\n'.join(self.gcode) + b'\n'
 
   def layerstats(self):
