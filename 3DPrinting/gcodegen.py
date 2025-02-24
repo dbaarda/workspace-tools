@@ -1437,7 +1437,11 @@ M18
           # Adjust de to include required change in pe over the move.
           #self.fadd(self.flog(f'adjusting {c} {c.ve=:.4f}({c.ve0:.4f}<{c.vem:.4f}>{c.ve1:.4f}) {c.isaccel=}'))
           # TODO: This tends to oscillate, change to a PID or PD controller.
-          c = c.change(de=c.de + pe - self.pe)
+          # Lets try the P part first with Kp=0.5 to try and reduce the overshoot.
+          c = c.change(de=c.de + 0.5*(pe - self.pe))
+      if isinstance(c, Move) and self.e + c.de > 1000.0:
+        # Reset the E offset before it goes over 1000.0
+        self.fadd(('G92',dict(E=0)))
       self.fadd(c)
 
   def getCode(self):
