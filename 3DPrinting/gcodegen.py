@@ -1210,7 +1210,7 @@ M18
   def nextLayer(self, h=None, **largs):
     h = h or self.Lh
     # hopup to Zh above the top of the new layer.
-    self.endlayer(h=self.layer.h + h + self.Zh)
+    self.endLayer(h=self.layer.h + h + self.Zh)
     self.startLayer(h=h, **largs)
 
   def draw(self,
@@ -1427,7 +1427,8 @@ M18
           pe, eb = self._getNextPeEb(gcode)
           # Adjust existing restore and add the starting bead.
           #self.fadd(self.flog(f'adjusting {c} for {pe=:.4f} {eb=:.4f})
-          c = c.change(de=pe - self.pe + eb)
+          # Pets also try P control with Kp=0.8 for restores.
+          c = c.change(de=0.8*pe - self.pe + eb)
           # If de is zero, skip adding this.
           if not c.de:
             c = self.flog('skipping empty restore.')
@@ -1437,8 +1438,8 @@ M18
           # Adjust de to include required change in pe over the move.
           #self.fadd(self.flog(f'adjusting {c} {c.ve=:.4f}({c.ve0:.4f}<{c.vem:.4f}>{c.ve1:.4f}) {c.isaccel=}'))
           # TODO: This tends to oscillate, change to a PID or PD controller.
-          # Lets try the P part first with Kp=0.5 to try and reduce the overshoot.
-          c = c.change(de=c.de + 0.5*(pe - self.pe))
+          # Lets try the P control first with Kp=0.8 to try and reduce the overshoot.
+          c = c.change(de=c.de + 0.8*(pe - self.pe))
       if isinstance(c, Move) and self.e + c.de > 1000.0:
         # Reset the E offset before it goes over 1000.0
         self.fadd(('G92',dict(E=0)))
@@ -1748,15 +1749,12 @@ if __name__ == '__main__':
 
   gen.startFile()
   gen.preExt(-10,-10,10,10)
-  gen.startLayer()
+  gen.nextLayer()
   gen.dbox(-10,-10,10,10)
-  gen.endLayer()
-  gen.startLayer()
+  gen.nextLayer()
   gen.dbox(-10,-10,10,10)
-  gen.endLayer()
-  gen.startLayer()
+  gen.nextLayer()
   gen.text("Hello\nWorld!",-8,8,8,-8)
-  gen.endLayer()
   gen.endFile()
   data=gen.getCode()
   sys.stdout.buffer.write(data)
