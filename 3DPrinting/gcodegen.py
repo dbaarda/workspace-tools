@@ -195,14 +195,19 @@ def fstr(s, globals=None, locals=None):
   return eval(f'rf"""{s}"""',globals,locals)
 
 
-def isneareq(a,b,e=1e-6):
+def fesc(s):
+  """ Escape a string to prevent f-string expansion problems. """
+  return str(s).replace('{', '{{').replace('}','}}')
+
+
+def isneareq(a, b, n=6):
   """ Is a nearly equal to b?"""
-  return abs(a-b) < e
+  return abs(a-b) < 10**-n
 
 
-def isnearle(a,b,e=1e-6):
+def isnearle(a, b, n=6):
   """ Is a nearly less than or equal to b? """
-  return a <= b+e
+  return a <= b + 10**-n
 
 
 def getnear(a, n=6):
@@ -840,9 +845,9 @@ class GCodeGen(object):
     ve: current extruder velocity.
     vl: current line velocity.
     dt: the execution time of the last command.
-    dl: the line length of the last move.
-    de: the extruder change of the last move.
-    en: the extruded volume of the last move.
+    dl: the line length of the last command.
+    de: the extruder change of the last command.
+    en: the extruded volume of the last command.
     c: the last command.
     m: the last move command.
     d: the last move command that was a draw.
@@ -967,6 +972,21 @@ M18
     """ Get the current default extrusion ratio."""
     return (self.layer.r if self.layer else self.Lr)
 
+  def islayer(self, cmd):
+    return isinstance(cmd, Layer)
+
+  def ismove(self, cmd):
+    return isinstance(cmd, Move)
+
+  def iscmd(self, cmd):
+    return type(cmd) == tuple
+
+  def isstr(self, cmd):
+    return isinstance(cmd, str)
+
+  def isbin(self, cmd):
+    return isinstance(cmd, bytes)
+
   def resetfile(self, nextcmds=None, finalize=False):
     """ Reset all file state variables.
 
@@ -1044,11 +1064,11 @@ M18
     self.dt, self.de, self.dl, self.vl, self.h = dt1, de1, dl1, vl1, h1
 
   def inc(self, code):
-    if isinstance(code, Layer):
+    if self.islayer(code):
       self.inclayer(code)
-    elif isinstance(code, Move):
+    elif self.ismove(code):
       self.incmove(code)
-    elif isinstance(code, tuple):
+    elif self.iscmd(code):
       self.inccmd(code)
     self.c = code
 
@@ -1068,10 +1088,10 @@ M18
     """ Increment state for executing a Move. """
     assert isneareq(self.h, self.z - self.layer.z), f'{self.h=} != {self.z - self.layer.z}'
     assert isneareq(self.vl, m.v0), f'{self.vl=} != {m.v0=} for {m} at {ftime(self.f_t)}'
-    h1 = self.h + m.dz
-    #self.vl = m.v0
-    # Reset and update the state for the three move phases.
     self.resetstate()
+    # Save the expected final h to assert against later.
+    h1 = self.h + m.dz
+    # Update the state for the three move phases.
     if m.dt0: self.incstate(m.dt0, m.de0, m.dl0, m.dv0, m.dh0)
     if m.dtm: self.incstate(m.dtm, m.dem, m.dlm, m.dvm, m.dhm)
     if m.dt1: self.incstate(m.dt1, m.de1, m.dl1, m.dv1, m.dh1)
@@ -1100,6 +1120,7 @@ M18
 
   def inccmd(self, cmd):
     """ Increment state for special gcode commands. """
+    self.resetstate()
     cmd, kwargs = cmd
     if cmd == 'G92':
       # This is a "set XYZE to ..." cmd, often used to keep E < 1000.
@@ -1110,16 +1131,15 @@ M18
     elif cmd == 'G4':
       # This is a pause command.
       dt = kwargs['P']/1000
-      self.resetstate()
       self.incstate(dt=dt)
-      inct(dt)
+      self.inct(dt)
 
   def fmt(self, code):
-    if isinstance(code, Layer):
+    if self.islayer(code):
       return self.flayer(code)
-    elif isinstance(code, Move):
+    elif self.ismove(code):
       return self.fmove(code)
-    elif isinstance(code, tuple):
+    elif self.iscmd(code):
       cmd, kwargs = code
       return self.fcmd(cmd, **kwargs)
     elif isinstance(code, str):
@@ -1219,7 +1239,7 @@ M18
 
   def fadd(self, code):
     """ Do a final format and add. """
-    if isinstance(code, Move):
+    if self.ismove(code):
       # For moves use faddmove().
       self.faddmove(code)
     else:
@@ -1416,7 +1436,7 @@ M18
     "Get pe and eb for the next draws."
     dt = dl = vedl = dbdl = eb = 0.0
     # Get the line-average ve and db for the next 10mm and 1s of moves.
-    for m1 in (m for m in self.nextcmds if isinstance(m, Move)):
+    for m1 in (m for m in self.nextcmds if self.ismove(m)):
       if not m1.isdraw or (dl > 10 and dt > 1.0): break
       dt+=m1.dt
       dl+=m1.dl
@@ -1440,9 +1460,9 @@ M18
     i = m = l = None
     for c in nextcmds:
       # Keep the layer for checking moves against.
-      if isinstance(c, Layer):
+      if self.islayer(c):
         l = c
-      elif isinstance(c, Move):
+      elif self.ismove(c):
         # Skip joining moves before layer 1 to not optimize pre-extrudes.
         if l.n > 0 and m and m.canjoin(c, l.h):
           # replace this entry with the new joined m.
@@ -1454,7 +1474,7 @@ M18
           # Try to join this with later moves.
           i, m = len(self.prevcmds), c
       # Never join across other gcode commands.
-      elif isinstance(c, tuple):
+      elif self.iscmd(c):
         m = None
       self.prevcmds.append(c)
 
@@ -1477,7 +1497,7 @@ M18
     v0, m = 0.0, None
     # Only go through non-comment commands using None for non-moves.
     cmds = (m for m in self.prevcmds if not isinstance(m, str))
-    for m1 in (m if isinstance(m, Move) else None for m in cmds):
+    for m1 in (m if self.ismove(m) else None for m in cmds):
       if m:
         # fixv m and possibly previous moves for next move m1.
         # This will use v1=0.0 to stop if m1 is not a move.
@@ -1494,7 +1514,7 @@ M18
 
   def modsegvel(self):
     """ Partition moves into accel/cruise/decel phases. """
-    splits = (c.split() if isinstance(c,Move) else [c] for c in self.prevcmds)
+    splits = (c.split() if self.ismove(c) else [c] for c in self.prevcmds)
     self.prevcmds = deque(p for s in splits for p in s)
 
   def modfixvel(self):
@@ -1503,7 +1523,7 @@ M18
 
     def _fixvel(m):
       """Fix v depending on fixvel level of velocity fix required."""
-      if isinstance(m, Move) and m.isgo and (m.vm < m.v) and (
+      if self.ismove(m) and m.isgo and (m.vm < m.v) and (
           # Any slow move.
           (self.fixvel == 3) or
           # Accelerating move.
