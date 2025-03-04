@@ -255,30 +255,30 @@ def hc(v):
 
 class Printer(gcodegen.GCodeGen):
   Tf = 5.0    # fan speed timeconstant.
-  Tp = 1.0    # fan pwm cycle time.
-  # The Th0 heat decay rate is the seconds it takes to cool 63%, or
+  Td = 1.0    # fan pwm cycle time.
+  # The Th0 heat decay rate is the seconds it takes to cool 63% towards ambient, or
   # about 2x the time to cool from 245degC to 160degC in a 30degC enclosure.
   Th0 = 15.0  # decay rate of heat extruded with 0% fan.
   # The Th decay rate varies with fan output fo as;
-  # Th = Kht/hc(fva1*fo)
+  # Th = KTh/hc(fva1*fo)
   fva1 = 10.0  # airflow velocity for max fan in m/s.
   KTh = Th0*hc(0)
   # For printers with automatic fan speed control we assume fan speed is a
-  # linear function of extrusion rate. The fan output fo in the range 0->1 is;
-  # fo = fd*(Fk*de/dt + Fc)
-  fve1 = 1.0   # extrusion rate for max fan in mm/s.
-  Fc = 0.1  # min fan speed while fan is on is 10%.
-  Fk = (1-Fc)/fve1
+  # linear function of nozzle flow rate. The fan output fo in the range 0->1
+  # is; fo = fd*(Fk*vn + Fc)
+  fvn1 = 5.0   # nozzle flow rate for max fan in mm/s = 0.3*0.4*1.0@100mm/s.
+  Ac = 0.1  # min fan speed while fan is on is 10%.
+  Ak = (1-Ac)/fvn1
 
   def _Th(self, fo):
     """Get Th temperature decay rate for fo fan output."""
     assert fo >= 0
     return self.KTh / hc(self.fva1 * fo)
 
-  def _fo(self, fd, de_dt):
+  def _fo(self, fd, vn):
     # Get fo fan output for autofan if enabled, else fo = fd fan drive.
-    assert de_dt >=0.0
-    return fd*min(1.0, self.Fk*de_dt + self.Fc) if self.autofan else fd
+    assert vn >= 0.0
+    return fd*min(1.0, self.Ak*vn + self.Ac) if self.autofan else fd
 
   def __init__(self, Hs=0.0, Lp=0.0, pwmfan=False, autofan=True, **kwargs):
     super().__init__(**kwargs)
@@ -287,78 +287,124 @@ class Printer(gcodegen.GCodeGen):
     self.pwmfan=pwmfan  # whether to control fanspeed with gcode pwm.
     self.autofan=autofan  # whether the printer autocontrols fan speed.
 
-  def resetfile(self):
+  def resetfile(self, nextcmds=None, finalize=False):
     """ Reset all state variables. """
-    super().resetfile()
+    super().resetfile(nextcmds, finalize)
+    self.finalizefan = False
     self.fan_on = None
     self.ho = 0.0  # accumulated heat extruded out.
-    self.fs = 0.0  # current dynamicly adjusted fanspeed.
-    self.fo = 0.0  # filtered fan speed output.
-    self.fd = 0.0  # current fan speed drive.
-    self.fe = 0.0  # heat extruded since last fan cycle.
-    self.ft = 0.0  # time since last fan cycle.
-    self.de_dt = 0.0 # extrusion rate of last move command.
+    self.fs = 0.0  # current target fanspeed.
+    self.fo = 0.0  # filtered output fanspeed.
+    self.fd = 0.0  # current fanspeed drive.
+    self.fe = 0.0  # filtered nozzle flow rate over past Tf.
+    self.ft = 0.0  # time since last fan pwm cycle.
 
-  def runCode(self, code):
+  def iterstate(self, dt, de, dl, dv, dh):
+    """ Increment the state for a small dt interval. """
+    # We need the change in en filters.
+    dn = self.en
+    super().iterstate(dt, de, dl, dv, dh)
+    dn = self.en - dn
+    # Get filtered extrusion rate fe.
+    self.fe = (dn + self.Tf*self.fe)/(self.Tf + dt)
+    # Get filtered fan output fo.
+    fo = self._fo(self.fd, self.fe)
+    self.fo = (dt*fo + self.Tf*self.fo)/(self.Tf + dt)
+    # Get Th and calculate extruded heat ho.
+    Th = self._Th(fo)
+    self.ho = (dn + self.ho)*Th/(Th + dt)
+
+  def inccmd(self, cmd):
+    """ Increment state for special gcode commands. """
+    super().inccmd(cmd)
+    cmd, kwargs = cmd
+    # when not in finalizefan mode, fan cmds also toggle fan_on.
+    if cmd == 'M106':
+      # Sets the extruder fan speed, default to 100% if S not specified.
+      self.fd = kwargs.get('S', 255)/255
+      if not self.finalizefan:
+        self.fan_on = True
+    elif cmd == 'M107':
+      # Turns extruder fan off.
+      self.fd=0.0
+      if not self.finalizefan:
+        self.fan_on = False
+
+
+  def inct(self, dt):
+    # Also increment the ft fan pwm timer.
+    super().inct(dt)
+    self.ft += dt
+
+  def fadd(self, cmd):
+    if self.iscmd(cmd):
+      code, kwargs = cmd
+      if code == 'G4':
+        if self.pe > self.Re:
+          # We should never pause without retracting to relieve nozzle pressure.
+          self.log(f';WARNING: pause with residual nozzle pressure, pe={self.pe:.4f}>{self.Re:.4f}')
+        if self.Lp:
+          # Change all layer waits to wait for Lp duration.
+          kwargs['P'] = round(self.Lp*1000)
+    super().fadd(cmd)
+    # if not already in finalizefan mode, generate finalizefan commands.
+    if not self.finalizefan and (self.ismove(cmd) or self.iscmd(cmd)):
+      self.finalizefan = True
+      self.dofan()
+      self.finalizefan = False
+
+  def dofan(self):
+    # Turn on if there is excess heat extruded.
+    on = self.fan_on and self.ho >= self.Hs
+    fs = self.Fe if on else 0.0
+    if self.ft > self.Td and fs > 0.0:
+      self.ft = 0.0
+    if self.pwmfan:
+      fd = 1.0 if self.ft < fs*self.Td else 0.0
+    else:
+      fd = fs
+    if fs != self.fs:
+      self.fs = fs
+    if not gcodegen.isneareq(fd, self.fd, 2):
+      self.setefan(fd)
+    self.fanstats()
+
+  def setefan(self, s):
+    """ Set the extruder fan speed between 0.0 to 1.0. """
+    assert 0.0 <= s <= 1.0
+    if s == 0.0:
+      self.cmd('M107')
+    elif s == 1.0:
+      self.cmd('M106')
+    else:
+      self.cmd('M106', S=round(s*255))
+
+  def layerstats(self):
+    super().layerstats()
+    self.log('  {ho=:.1f} {fo=:.2f}')
+
+  def fanstats(self):
+    self.log(
+        'fan={fbool(fan_on)} '
+        '{ft=:.4f}/{Td:.1f} '
+        '{fe=:.4f}/{fvn1:.1f} '
+        '{fo=:.2f}/{fs=:.2f} '
+        '{ho=:.2f}/{Hs=:.2f} '
+        '{fd=:.2f}')
+
+  def addCode(self, code):
     self.resetfile()
     code = FixFlashPrintLayerStartHop(code)
     for line in code.splitlines():
       try:
-        self.runline(line.decode())
+        self.padd(line.decode())
       except UnicodeDecodeError:
         # If it's not text it's *.gx file binary data; just append it.
         self.add(line)
 
-  def fanstats(self, de, dt, fs, fd):
-    fo, ho, Hs = self.fo, self.ho, self.Hs
-    self.log(
-        f'fan={fbool(self.fan_on)} '
-        f'de/dt={de:.2f}/{dt:.2f} '
-        f'fo/fs={fo:.2f}/{fs:.2f} '
-        f'ho/Hs={ho:.2f}/{Hs:.2f} '
-        f'fd={fd:.1f}')
-
-  def setfan(self, fs):
-    de, dt = self.fe, self.ft
-    if self.ft > self.Tp and fs > 0.0:
-      self.ft = self.fe = 0.0
-    if self.pwmfan:
-      fd = 1.0 if self.ft < fs*self.Tp else 0.0
-    else:
-      fd = fs
-    if fd != self.fd or fs != self.fs:
-      self.fanstats(de, dt, fs, fd)
-    if fd != self.fd:
-      if 0.0 < fd < 1.0:
-        self.cmd('M106', S=f'{int(fd*255)}')
-      else:
-        self.cmd('M106' if fd else 'M107')
-    self.fs, self.fd = fs,fd
-
-  def dofan(self, de, dt):
-    self.ft += dt
-    self.fe += de
-    if dt:
-      self.de_dt = de/dt
-    # Get and filter fan output fo.
-    fo = self._fo(self.fd, self.de_dt)
-    self.fo = (dt*fo + self.Tf*self.fo)/(self.Tf + dt)
-    #self.fo = (self.fo - fo)*e**(-dt/self.Tf) + fo
-    # Get Th and calculate extruded heat ho.
-    Th = self._Th(fo)
-    self.ho = (de + self.ho)*Th/(Th + dt)
-    # Turn on if there is excess heat extruded.
-    on = self.fan_on and self.ho >= self.Hs
-    self.setfan(self.Fe if on else 0.0)
-
-  def layerstats(self):
-    super().layerstats()
-    self.log(f'  ho={self.ho:.1f} fo={self.fo:.2f}')
-
-  def runline(self,line):
-    """ Parse, execute, and add a line of gcode. """
+  def padd(self, line):
+    """ Parse and add a line of gcode. """
     #print(line)
-    dt=de=0.0
     if line.startswith(';start gcode'):
       self.cmt('heat_ext: {Hs}')
       self.cmt('layer_pause: {Lp}')
@@ -373,16 +419,15 @@ class Printer(gcodegen.GCodeGen):
       self.filestats()
       self.add(line)
     elif line.startswith('M106'):
-      dt = self.M106(line)
+      self.M106(line)
     elif line.startswith('M107'):
-      dt = self.M107(line)
+      self.M107(line)
     elif line.startswith('G4 '):
-      dt = self.G4(line)
+      self.G4(line)
     elif line.startswith('G1 '):
-      dt, de = self.G1(line)
+      self.G1(line)
     else:
       self.add(line)
-    self.dofan(max(de, 0.0), dt)
 
   def Layer(self, line):
     """ Start a new layer. """
@@ -392,21 +437,17 @@ class Printer(gcodegen.GCodeGen):
       self.startLayer(n=0, z=0.0, h=h)
       self.add(line)
     else:
-      self.layerstats()
-      self.startLayer(h=h)
+      self.nextLayer(h=h)
 
   def M106(self, line):
     """ Fan on."""
-    self.fan_on=True
-    self.setfan(self.Fe)
-    return 0.0
+    m = re.match(r'M106(?: S([-+0-9.]+))?', line)
+    fs = 1.0 if m[1] is None else int(m[1])/255
+    self.setefan(fs)
 
   def M107(self, line):
     """ Fan off. """
-    self.fan_on=False
-    self.fd=1.0  # Trick setfan() into always emitting an M107.
-    self.setfan(0.0)
-    return 0.0
+    self.setefan(0.0)
 
   def G1(self, line):
     m = re.match(r'G1(?: X([-+0-9.]+))?(?: Y([-+0-9.]+))?(?: Z([-+0-9.]+))?(?: E([-+0-9.]+))?(?: F([-+0-9]+))?', line)
@@ -414,26 +455,13 @@ class Printer(gcodegen.GCodeGen):
     # Always use the previous f value when parsing gcode files.
     if f is None: f = self.f
     self.move(x=x, y=y, z=z, e=e, v=f/60)
-    # Get the last added move to get it's dt and de. Note it could be logged
-    # as skipped if it didn't do anything.
-    m=self.gcode[-1]
-    return (m.dt, m.de) if isinstance(m, gcodegen.Move) else (0.0, 0.0)
 
   def G4(self, line):
     """ wait. """
-    if self.pe > self.Re:
-      # We should never pause without retracting to relieve nozzle pressure.
-      self.log(f';WARNING: pause with residual nozzle pressure, pe={self.pe:.4f}>{self.Re:.4f}')
-    if self.Lp:
-      # Change all layer waits to wait for Lp duration.
-      dt = self.Lp
-      if self.Hs and self.ho>self.Hs:
-        dt += self._Th(0)*log(self.ho/self.Hs)
-    else:
-      m = re.match(r'G4 P([0-9]+)', line)
-      dt = float(m[1])/1000.0
+    m = re.match(r'G4 P([0-9]+)', line)
+    dt = float(m[1])/1000.0
     self.wait(dt)
-    return dt
+
 
 def GCodeGenArgs(cmdline):
   gcodegen.GCodeGenArgs(cmdline)
@@ -464,6 +492,6 @@ if __name__ == '__main__':
 
   data = args.infile.read()
   p=Printer(**GCodeGetArgs(args))
-  p.runCode(data)
+  p.addCode(data)
   data=p.getCode()
   sys.stdout.buffer.write(data)
