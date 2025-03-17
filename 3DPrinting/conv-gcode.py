@@ -330,7 +330,6 @@ class Printer(gcodegen.GCodeGen):
       if not self.finalizefan:
         self.fan_on = False
 
-
   def inct(self, dt):
     # Also increment the ft fan pwm timer.
     super().inct(dt)
@@ -409,7 +408,6 @@ class Printer(gcodegen.GCodeGen):
       self.cmt('heat_ext: {Hs}')
       self.cmt('layer_pause: {Lp}')
       self.add(line)
-      self.startLayer(0, 0.0)
     elif line.startswith(';preExtrude:'):
       self.Layer(line)
     elif line.startswith(';layer:'):
@@ -435,7 +433,6 @@ class Printer(gcodegen.GCodeGen):
     h = float(h)
     if t == 'preExtrude':
       self.startLayer(n=0, z=0.0, h=h)
-      self.add(line)
     else:
       self.nextLayer(h=h)
 

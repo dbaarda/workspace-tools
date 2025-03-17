@@ -965,12 +965,14 @@ M18
   @property
   def w(self):
     """ Get the current default width."""
-    return (self.layer.w if self.layer else self.Lw)
+    # This is the width of the previous draw or the layer default.
+    return self.d.w if self.d else self.layer.w
 
   @property
   def r(self):
     """ Get the current default extrusion ratio."""
-    return (self.layer.r if self.layer else self.Lr)
+    # This is the ratio of the previous draw or the layer default.
+    return self.d.r if self.d else self.layer.r
 
   def islayer(self, cmd):
     return isinstance(cmd, Layer)
@@ -1001,7 +1003,9 @@ M18
 
   def resetlayer(self):
     """ Reset all layer state variables. """
-    self.layer = None
+    # Set layer to a default base layer for any layer-less moves.
+    self.layer = Layer(
+        -1, 0.0, self.Vp, self.Vt, self.Vz, self.Ve, self.Vb, self.Lh, self.Lw, self.Lr)
     self.l_t = self.l_l = self.l_e = 0.0
     self.c = self.m = self.d = None
     self.resetstate()
@@ -1151,8 +1155,8 @@ M18
 
   def flayer(self, l):
     """ Format a layer as a comment string. """
-    # Note we only add the comment for layers >=1, not the pre-layers.
-    return self.fcmt('layer:{layer.h:.2f}') if l.n else None
+    # layer 0 is the preExtrude
+    return self.fcmt('{"layer" if layer.n else "preExtrude"}:{layer.h:.2f}')
 
   def fmove(self, m):
     """ Format a Move as a gcode command. """
@@ -1229,9 +1233,6 @@ M18
     if self.e + m.de > 1000.0:
       # Reset the E offset before it goes over 1000.0
       self.cmd('G92', E=0)
-    # Note Flashprint interprets extrude_ratio comments as layer height changes.
-    if m.isdraw and (not self.d or m.h != self.d.h):
-      self.cmt(f'extrude_ratio:{round(m.h/self.layer.h, 4)}')
     fmove = self.fmove(m)
     self.inc(m)
     self.add(fmove)
@@ -1286,15 +1287,16 @@ M18
 
   def endFile(self):
     # Retract to -2.5mm for the next print.
-    self.endLayer(de=-2.5, h=10.0)
+    self.hopup(pe=-2.5)
+    self.endLayer()
     self.filestats()
     self.add(self.fstr(self.endcode))
 
   def startLayer(self, n=None, z=None,
       Vp=None, Vt=None, Vz=None, Ve=None, Vb=None,
       h=None, w=None, r=1.0):
-    if n is None: n = self.layer.n + 1 if self.layer else 0
-    if z is None: z = self.layer.z + self.layer.h if self.layer and self.layer.n else 0.0
+    if n is None: n = self.layer.n + 1
+    if z is None: z = self.layer.z + self.layer.h if n > 1 else 0.0
     l = Layer(
         n, z,
         Vp or self.Vp,
@@ -1307,22 +1309,21 @@ M18
         r*self.Lr)
     self.add(l)
     self.log('layer={layer.n} h={layer.h:.2f} w={layer.w:.2f} r={layer.r:.2f}')
+    if not isneareq(l.r, self.Lr, 2):
+      self.cmt(f'extrude_ratio:{round(layer.r, 2):.3g}')
 
-  def endLayer(self, **upargs):
-    self.hopup(**upargs)
+  def endLayer(self):
     self.layerstats()
 
-  def nextLayer(self, h=None, **largs):
-    h = h or self.Lh
-    # hopup to Zh above the top of the new layer.
-    self.endLayer(h=self.layer.h + h + self.Zh)
-    self.startLayer(h=h, **largs)
+  def nextLayer(self, **largs):
+    self.endLayer()
+    self.startLayer(**largs)
 
-  def draw(self,
+  def move(self,
       x=None, y=None, z=None, e=None,
       dx=None, dy=None, dz=None, de=None,
-      v=None, s=1.0, h=None, w=None, r=1.0):
-    """ Draw a line.
+      v=None, s=1.0, h=None, w=None, r=0.0):
+    """ Move the extruder.
 
     Movement can be absolute using `x,y,z,e` arguments, or relative using
     `dx,dy,dz,de` arguments. The z axis can also be specified with `h` height
@@ -1334,7 +1335,7 @@ M18
     default `Vp,Vt,Vz,Ve,Vb` speeds for print, travel, vertical, retract, and
     restore movement.
 
-    Note this is the simple raw movement. Any pressure advance compensation
+    Note this is a simple raw movement. Any pressure advance compensation
     will be added in post-processing.
     """
     if z is None and dz is None and h is not None: z = self.layer.z + h
@@ -1359,39 +1360,48 @@ M18
     m = self.GMove(dx,dy,dz,de,v,h=h,w=w)
     # Only add it if it does anything.
     if any(m[:4]):
+      #if m.isdraw and not isneareq(m.r, self.r, 2):
+      #  self.cmt(f'extrude_ratio:{round(m.r, 2):.3g} {m.r=} {self.r=}')
       self.add(m)
     else:
       self.log(f'skipping empty move {m}')
 
-  def move(self, x=None, y=None, z=None, r=0.0, **kwargs):
-    """ Move the extruder.
+  def draw(self, x=None, y=None, z=None, r=None, **kwargs):
+    """ Draw a line.
 
-    This is the same as draw() but with the default r=0.0 so it travels instead
-    of prints by default.
+    This is the same as move() but with the default previous draw or layer r
+    value so it draws instead of travels by default.
     """
-    self.draw(x, y, z, r=r, **kwargs)
+    # We need r before scaling by layer.r
+    if r is None: r = self.r / self.layer.r
+    self.move(x, y, z, r=r, **kwargs)
 
-  def retract(self, e=None, de=None, ve=None, s=1.0):
+  def retract(self, e=None, de=None, ve=None, s=1.0, pe=None):
     """Do a retract.
 
-    This is a simple retraction with default self.Re. Note compensation for
-    advance pressure is added in post processing if enabled.
+    This is a retraction that by default relieves any pressure and retracts to
+    pe which defaults to -self.Re. Setting de or e will do a fixed retraction
+    ignoring the current pressure. Note compensation for advance pressure is
+    adjusted in post processing if enabled.
     """
-    if de is None: de = -self.Re
+    if pe is None: pe = -self.Re
+    if de is None: de = -self.pe + pe
     # If dynamic retraction is enabled and de is zero, set de to a tiny
     # retraction so that it doesn't get optimized away and can be dynamically
     # adjusted later.
     if self.dynret and not de: de = -0.00001
     self.move(e=e, de=de, v=ve, s=s)
 
-  def restore(self, e=None, de=None, vb=None, s=1.0):
+  def restore(self, e=None, de=None, vb=None, s=1.0, pe=None):
     """ Do a restore.
 
-    This is a simple restore with default self.Re. Note adding starting dots
-    and compensating for advance pressure is added in post-processing if
-    enabled.
+    This is a restore that by default reverts any retraction and restores
+    pressure to pe which defaults to 0.0. Setting e or de will do a fixed
+    restore ignoring current retraction. Note adding starting dots and
+    compensating for advance pressure is added in post-processing if enabled.
     """
-    if de is None: de = self.Re
+    if pe is None: pe = 0.0
+    if de is None: de = -self.pe + pe
     # If dynamic retraction is enabled and de is zero, set de to a tiny
     # restore so that it doesn't get optimized away and can be dynamically
     # adjusted later.
@@ -1402,25 +1412,25 @@ M18
       x=None, y=None, z=None, e=None,
       dx=None, dy=None, dz=None, de=None,
       vt=None, vz=None, ve=None, vb=None,
-      s=1.0, h=None):
+      s=1.0, h=None, pe=None):
     """ Do a retract and raise. """
     # default hopup is to Zh above layer height.
     if h is None: h = self.layer.h + self.Zh
-    self.retract(e=e, de=de, ve=ve, s=s)
+    self.retract(e=e, de=de, ve=ve, s=s, pe=pe)
     self.move(z=z, dz=dz, v=vz, s=s, h=h)
 
   def hopdn(self,
       x=None, y=None, z=None, e=None,
       dx=None, dy=None, dz=None, de=None,
       vt=None, vz=None, ve=None, vb=None,
-      s=1.0, h=None):
+      s=1.0, h=None, pe=None):
     """ Do a move, drop, and restore. """
     # default hop down is to layer height.
     if h is None: h = self.layer.h
     if (x, y, dx, dy) != (None, None, None, None):
       self.move(x=x, y=y, dx=dx, dy=dy, v=vt, s=s)
     self.move(z=z, dz=dz, v=vz, h=h, s=s)
-    self.restore(e=e, de=de, vb=vb, s=s)
+    self.restore(e=e, de=de, vb=vb, s=s, pe=pe)
 
   def wait(self, t):
     """ Do a pause. """
@@ -1457,7 +1467,8 @@ M18
     # Note this resets the file but doesn't re-process the cmds, it just appends them.
     nextcmds = self.prevcmds
     self.resetfile()
-    i = m = l = None
+    l = self.layer
+    i = m = None
     for c in nextcmds:
       # Keep the layer for checking moves against.
       if self.islayer(c):
@@ -1599,7 +1610,6 @@ M18
     Set `lw=0` to turn off the wipe and stick phases. Note this includes a
     hopdn before and hopup at the end.
     """
-    self.cmt('preExtrude:{h:.2f}')
     self.cmt('structure:pre-extrude')
     x0,x1 = sorted([x0,x1])
     y0,y1 = sorted([y0,y1])

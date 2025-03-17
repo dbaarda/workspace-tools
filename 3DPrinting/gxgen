@@ -12,12 +12,20 @@
 
 infile="${@:$#}"
 argstr=$(echo "${@:1:$#-1}" | sed -e 's:[- =.]::g')
+
+# Start with outfile matching infile.
+outfile="${infile}"
+
 # Strip any existing conv-gcode.py args from the name.
-outfile="${infile/_*./.}"
+if [[ "${outfile}" =~ .*_(Te|Tp|Fe|Fc|Kf|Kb)[0-9].*\.gx? ]]; then
+  outfile="${outfile%_*}.${outfile##*.}"
+fi
+
 # Add the new conv-gcode.py args from the name.
-outfile="${outfile/./_${argstr}.}"
+outfile="${outfile%.*}_${argstr}.${outfile##*.}"
 
 echo "Processing '${infile}' into '${outfile}'."
-./conv-gcode.py "$@" > $outfile
+./conv-gcode.py "$@" > "$outfile" &&
+git sdiff --no-index -a "$infile" "$outfile"
 
-./gxsum $outfile
+#./gxsum $outfile
