@@ -817,6 +817,7 @@ class GCodeGen(object):
     Tp: Platform temp (degC).
     Fe: Extruder fan speed (0.0->1.0).
     Fc: Case fan speed (0.0->1.0).
+    fKf: Firmware Linear Advance factor (0.0->4.0 mm/mm/s).
     Kf: Linear Advance factor (0.0->4.0 mm/mm/s).
     Kb: Bead backpressure factor (??? mm/mm).
     Re: Retraction distance (0.0->10.0 mm).
@@ -886,7 +887,7 @@ M140 S{round(Tp)} T0
 M104 S{round(Te)} T0
 M104 S0 T1
 M107
-M900 K{Kf:.3f} T0
+M900 K{fKf:.3f} T0
 G90
 G28
 M132 X Y Z A B
@@ -922,14 +923,15 @@ M18
     return f'M106' if fe == 1.0 else f'M106 S{round(fe*255)}' if fe else 'M107'
 
   def __init__(self,
-      Te=210, Tp=50, Fe=1.0, Fc=1.0, Kf=0.0, Kb=0.0, Re=5,
+      Te=210, Tp=50, Fe=1.0, Fc=1.0, fKf=0.0,
+      Kf=0.0, Kb=0.0, Re=5,
       Vp=60, Vt=100, Vz=7, Ve=40, Vb=30,
       Lh=0.2, Lw=Nd, Lr=1.0,
       relext=False, optmov=False, segvel=False, fixvel=0,
       diff=False, verb=False,
       dynret=False, dynext=False):
     # Temp and Fan settings.
-    self.Te, self.Tp, self.Fe, self.Fc = Te, Tp, Fe, Fc
+    self.Te, self.Tp, self.Fe, self.Fc, self.fKf = Te, Tp, Fe, Fc, fKf
     # Linear advance and retraction settings.
     self.Kf, self.Kb, self.Re = Kf, Kb, Re
     # Default velocities.
@@ -1800,6 +1802,8 @@ def GCodeGenArgs(cmdline):
       help='Extruder fan speed between 0.0 to 1.0.')
   cmdline.add_argument('-Fc', type=RangeType(0.0,1.0), default=0.0,
       help='Case fan speed between 0.0 to 1.0.')
+  cmdline.add_argument('-fKf', type=RangeType(0.0,4.0), default=0.0,
+      help='Firmware Linear Advance factor between 0.0 to 4.0 in mm/mm/s.')
   cmdline.add_argument('-Kf', type=RangeType(0.0,4.0), default=0.0,
       help='Linear Advance factor between 0.0 to 4.0 in mm/mm/s.')
   cmdline.add_argument('-Kb', type=RangeType(0.0,10.0), default=0.0,
@@ -1843,7 +1847,7 @@ def GCodeGenArgs(cmdline):
 def GCodeGetArgs(args):
   """ Get the dict of standard GCode arguments. """
   return dict (
-      Te=args.Te, Tp=args.Tp, Fe=args.Fe, Fc=args.Fc,
+      Te=args.Te, Tp=args.Tp, Fe=args.Fe, Fc=args.Fc, fKf=args.fKf,
       Kf=args.Kf, Kb=args.Kb, Re=args.Re,
       Vp=args.Vp, Vt=args.Vt, Vz=args.Vz, Ve=args.Ve, Vb=args.Vb,
       Lh=args.Lh, Lw=args.Lw, Lr=args.Lr,
