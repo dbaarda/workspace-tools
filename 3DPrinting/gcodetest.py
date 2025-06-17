@@ -33,6 +33,11 @@ class ExtrudeTest(gcodegen.GCodeGen):
   # These are printer configuration test arguments.
   _CONF_ARGS = ('Kf','Kb','Re', 'fKf')
 
+  def resetfile(self,*args,**kwargs):
+    """Initialize confstack whenever we resetfile()."""
+    super().resetfile(*args,**kwargs)
+    self.confstack = []
+
   def _fval(self,k,v):
     """ Format a single test argument value or range."""
     v=f'{v[0]}-{v[1]}' if isinstance(v, tuple) else f'{round(v,4)}'
@@ -51,48 +56,47 @@ class ExtrudeTest(gcodegen.GCodeGen):
     return v0, v1, dv
 
   def setconf(self, **kwargs):
-    # Filter out configs set to None.
-    kwargs = {k:v for k,v in kwargs.items() if v is not None and getattr(self,k,None) != v}
+    # Filter out configs set to None or already set.
+    kwargs = {k:v for k,v in kwargs.items() if v is not None and getattr(self,k) != v}
     if kwargs:
-      self.log(f'setting config {self._fset(**kwargs)}')
+      self.log(f'Setting config {self._fset(**kwargs)}')
     self.add(kwargs)
 
   def pushconf(self, **kwargs):
     """Push and change config attributes on self."""
-    if not hasattr(self, 'confstack'):
-      self.confstack = []
-    old_conf = {k:getattr(self,k,0) for k in kwargs}
-    if old_conf:
-      self.log(f'pushing config {self._fset(**old_conf)}')
+    old_conf = {k:getattr(self,k) for k in self._CONF_ARGS}
     self.confstack.append(old_conf)
+    self.log(f'Pushed config {self._fset(**old_conf)}')
     self.setconf(**kwargs)
 
   def popconf(self):
     """Pop and restore config attributes on self."""
     conf = self.confstack.pop()
-    if conf:
-      self.log(f'restoring config {self._fset(**conf)}')
+    self.log(f'Popped config {self._fset(**conf)}')
     self.setconf(**conf)
 
-  def isconf(self, cmd):
-    return isinstance(cmd, dict)
+  def isconf(self, code):
+    return isinstance(code, dict)
 
   def incconf(self, conf):
     """Apply a config change to the current state."""
     for k, v in conf.items():
       setattr(self, k, v)
 
+  def fconf(self, conf):
+    """Format a config change."""
+    # Test config args only emit fKf settings.
+    fKf = conf.get('fKf')
+    if fKf is not None:
+      return self.fcmd('M900', K=f'{fKf:.3f}', T=0)
+
   def fmt(self, code):
-    # Test config args don't emit anything in the final output...
     if self.isconf(code):
-      #... except for fKf firmware Kf commands.
-      if 'fKf' in code:
-        return self.fcmd('M900', K=code['fKf'], T=0)
+      return self.fconf(code)
     else:
       return super().fmt(code)
 
   def inc(self, code):
-    # Test config args need to be set on self.
     if self.isconf(code):
       self.incconf(code)
     else:
@@ -173,9 +177,8 @@ class ExtrudeTest(gcodegen.GCodeGen):
     self.ruler(x0, y0)
     self.settings(x0 + self.rdx+1, y0, **kwargs)
     y = y0 - self.rdy
-    # Push the config arguments before the test.
-    confargs = {k:v for k,(v,_,_) in testargs.items() if k in self._CONF_ARGS}
-    self.pushconf(**confargs)
+    # Push the config arguments without applying changes before the test.
+    self.pushconf()
     self.cmt(f'structure:shell-inner')
     e=0.00001
     while all(v <= v1+e for (v,v1,dv) in testargs.values()):
@@ -313,29 +316,34 @@ class ExtrudeTest(gcodegen.GCodeGen):
     self.draw(dx=dx[4],v=5)
     self.hopup()
 
-  def testBacklash(self, x0, y0, vx=None, ve=None, h=None, w=None, r=1.0, re=5.0, r0=None):
+  def testBacklash(self, x0, y0, vx=None, ve=None, h=None, w=None, r=1.0, r0=0.0, re=5.0):
     """ Test retract and restore distances.
 
-    This test is to test retraction and restore distances for different vx
-    velocities.
+    This test is to test retraction and restore distances for different vx and/or ve
+    velocities. Note draw speeds can be set with any combination of vx and/or
+    ve optionally together with h, w, and r.
 
     Test phases are;
 
-      * 0mm: hopdn and restore to h=0.3.
-      * 5mm: draw at 1mm/s to prime nozzle.
+      * 0mm: hopdn and restore to h=0.2.
+      * 5mm: draw at 5mm/s to prime nozzle.
       * 10mm: move at 1mm/s to drain nozzle.
       * 0mm: hopdn and restore to h=h.
       * 30mm: draw at <vx>mm/s to stabilize pressure at that speed.
       * 0mm: move to h=0.2mm for start of pressure measurement.
+      * 0mm: retract initial de=re0.
       * 20mm: moving retract of <re>mm at 10mm/s to measure required retract.
-        if r0 is set, an additional r0mm will be retracted over the first 1mm.
+      * 0mm: restore initial de=re0.
       * 20mm: moving restore of <re>mm at 10mm/s to measure required restore.
-      * 0mm: default retract and hopup, then hopdn and restore to h=0.3mm to remove backlash.
-      * 5mm: draw at 1mm/s to finalize line and stabilize pressure.
+      * 0mm: default retract and hopup, then hopdn and restore to h=0.2mm to remove backlash.
+      * 5mm: draw at 5mm/s to finalize line and stabilize pressure.
       * 0mm: default retract and hopup to relieve any vestigial pressure.
 
     Args:
-      vx: movement speed to check against.
+      vx: movement speed to check.
+      ve: extrusion speed to check.
+      h,w,r: line height, width, and ratio to check.
+      r0: initial retract/restore distance.
       re: moving retract/restore distance.
     """
     # For Kf=0.5,Kb=4.0 we expect values to be in the ranges;
@@ -347,21 +355,19 @@ class ExtrudeTest(gcodegen.GCodeGen):
     # le = 0.008 -> 0.25 mm/mm (l=0.2x0.1x1.0 -> 0.3x2.0x1.0) or 0.05 for l=0.2x0.6x1.0.
     # For v=10mm/s, we need at least ve=0.2*0.1*10/Fa=0.08mm/s for a w=0.1mm line, or Pe=0.44mm for Kf=0.5,Kb=4.0.
     vx,ve,h,w,r = self._getVxVehwr(vx,ve,h,w,r)
-    self.hopdn(x0, y0, h=0.3)
-    self.draw(dx=5,v=1)
+    self.hopdn(x0, y0, h=0.2)
+    self.draw(dx=5,v=self.vx0)
     self.move(dx=10,v=1)
     self.hopdn(h=h)
-    self.draw(dx=30,v=vx,w=w)
+    self.draw(dx=30,v=vx,w=w,r=r)
     self.move(h=0.2)
-    if r0:
-      self.move(dx=1,de=-re*1/20-r0, v=10)
-      self.move(dx=19,de=-re*19/20, v=10)
-    else:
-      self.move(dx=20,de=-re, v=10)
+    self.retract(de=r0)
+    self.move(dx=20,de=-re, v=10)
+    self.restore(de=r0)
     self.move(dx=20,de=+re, v=10)
     self.hopup()
-    self.hopdn(h=0.3)
-    self.draw(dx=5,v=1)
+    self.hopdn(h=0.2)
+    self.draw(dx=5,v=self.vx0)
     self.hopup()
 
   def testKf(self, x0, y0, vx0, vx1):
@@ -437,7 +443,6 @@ if __name__ == '__main__':
       dict(ve=1.0, h=0.2, w=(0.8,1.8), r0=4.0, re=2.0),
       ))
 
-
   Kf,Kb,Re = 0.4,1.0,1.0  # "best" default values.
   Kfargs=dict(name="Kf", linefn=gen.testKf, tests=(
     dict(Kf=(0.0,1.0), Kb=Kb, Re=Re, vx0=20, vx1=100),
@@ -456,10 +461,10 @@ if __name__ == '__main__':
   fKfargs=dict(name="fKf", linefn=gen.testKf,
     Kf=args.Kf, Kb=args.Kb, Re=args.Re,
     tests=(
-      dict(fKf=(0,200), vx0=20, vx1=100),
-      dict(fKf=  0, vx0=(10,50), vx1=(20,100)),
-      dict(fKf=100, vx0=(10,50), vx1=(20,100)),
-      dict(fKf=300, vx0=(10,50), vx1=(20,100))))
+      dict(fKf=(0.0,2.0), vx0=20, vx1=100),
+      dict(fKf=0.0, vx0=(10,50), vx1=(20,100)),
+      dict(fKf=1.0, vx0=(10,50), vx1=(20,100)),
+      dict(fKf=2.0, vx0=(10,50), vx1=(20,100))))
 
   gen.startFile()
   gen.doTests(n=args.n, **fKfargs)
