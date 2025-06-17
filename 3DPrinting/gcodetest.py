@@ -30,6 +30,9 @@ class ExtrudeTest(gcodegen.GCodeGen):
   tdx = rdx + sdy  # test box total width.
   tdy = rdy + tn*ty + 5 # test box total height.
 
+  # These are printer configuration test arguments.
+  _CONF_ARGS = ('Kf','Kb','Re', 'fKf')
+
   def _fval(self,k,v):
     """ Format a single test argument value or range."""
     v=f'{v[0]}-{v[1]}' if isinstance(v, tuple) else f'{round(v,4)}'
@@ -47,45 +50,56 @@ class ExtrudeTest(gcodegen.GCodeGen):
     dv = (v1-v0)/tn
     return v0, v1, dv
 
+  def setconf(self, **kwargs):
+    # Filter out configs set to None.
+    kwargs = {k:v for k,v in kwargs.items() if v is not None and getattr(self,k,None) != v}
+    if kwargs:
+      self.log(f'setting config {self._fset(**kwargs)}')
+    self.add(kwargs)
+
   def pushconf(self, **kwargs):
     """Push and change config attributes on self."""
     if not hasattr(self, 'confstack'):
       self.confstack = []
-    # Filter out configs set to None.
-    kwargs = {k:v for k,v in kwargs.items() if v is not None}
-    old_conf = {k:getattr(self,k) for k in kwargs}
+    old_conf = {k:getattr(self,k,0) for k in kwargs}
+    if old_conf:
+      self.log(f'pushing config {self._fset(**old_conf)}')
     self.confstack.append(old_conf)
-    if kwargs:
-      self.log(f'setting config {self._fset(**kwargs)}')
-    self.add(kwargs)
+    self.setconf(**kwargs)
 
   def popconf(self):
     """Pop and restore config attributes on self."""
     conf = self.confstack.pop()
     if conf:
       self.log(f'restoring config {self._fset(**conf)}')
-    self.add(conf)
+    self.setconf(**conf)
+
+  def isconf(self, cmd):
+    return isinstance(cmd, dict)
 
   def incconf(self, conf):
     """Apply a config change to the current state."""
     for k, v in conf.items():
       setattr(self, k, v)
 
-  def fadd(self, code):
-    # Test config args don't emit anything in the final output.
-    if isinstance(code, dict):
+  def fmt(self, code):
+    # Test config args don't emit anything in the final output...
+    if self.isconf(code):
+      #... except for fKf firmware Kf commands.
+      if 'fKf' in code:
+        return self.fcmd('M900', K=code['fKf'], T=0)
+    else:
+      return super().fmt(code)
+
+  def inc(self, code):
+    # Test config args need to be set on self.
+    if self.isconf(code):
       self.incconf(code)
     else:
-      super().fadd(code)
-
-  def add(self, code):
-    # Test config args need to be set on self.
-    if isinstance(code, dict):
-      self.incconf(code)
-    super().add(code)
+      super().inc(code)
 
   def preextrude(self,n=0,x0=-50,y0=-60,x1=70,y1=60):
-    self.preExt(x0-2*n,y0,x1,y1+2*n,m=5)
+    self.preExt(x0-2*n,y0,x1,y1+2*n,m=5,lw=0)
 
   def title(self,x0,y0, **kwargs):
     self.cmt("structure:brim")
@@ -131,7 +145,7 @@ class ExtrudeTest(gcodegen.GCodeGen):
       linefn: The function that executes a single line of a test.
       tests: A sequence of up to 4 dicts containing args for each test.
       n: optional index of a single test to run, otherwise run all.
-      **kwargs: key-value args to put in title.
+      **kwargs: key-value args to put in the title.
     """
     assert len(tests) <= 4, 'Can only fit max 4 tests.'
     # set alltests for running all tests and initialize n=0 if needed.
@@ -159,19 +173,23 @@ class ExtrudeTest(gcodegen.GCodeGen):
     self.ruler(x0, y0)
     self.settings(x0 + self.rdx+1, y0, **kwargs)
     y = y0 - self.rdy
+    # Push the config arguments before the test.
+    confargs = {k:v for k,(v,_,_) in testargs.items() if k in self._CONF_ARGS}
+    self.pushconf(**confargs)
     self.cmt(f'structure:shell-inner')
     e=0.00001
     while all(v <= v1+e for (v,v1,dv) in testargs.values()):
       lineargs={k:v for k,(v,_,_) in testargs.items()}
-      confargs={k:v for k,v in lineargs.items() if k in ('Kf','Kb','Re')}
-      funcargs={k:v for k,v in lineargs.items() if k not in confargs}
+      confargs={k:v for k,v in lineargs.items() if k in self._CONF_ARGS}
+      funcargs={k:v for k,v in lineargs.items() if k not in self._CONF_ARGS}
       self.log(f'Test Line {name} {self._fset(**lineargs)}')
-      self.pushconf(**confargs)
+      self.setconf(**confargs)
       linefn(x0, y, **funcargs)
-      self.popconf()
       for k,(v,v1,dv) in testargs.items():
         testargs[k] = (v+dv,v1,dv)
       y-=self.ty
+    # Restore the config arguments after the test.
+    self.popconf()
 
   def _getVxVehwr(self, vx=None, ve=None, h=None, w=None, r=1.0):
     """ Get vx, ve, h, w, and r from each other. """
@@ -357,14 +375,14 @@ class ExtrudeTest(gcodegen.GCodeGen):
       * 5mm: warmup draw at 5mm/s
       * 20mm: draw at <vx0>mm/s base speed before changing speed.
       * 40mm: draw at <vx1>mm/s to check changing to and from this speed.
-      * 20mm: draw at <vx>mm/s base speed after changing speed.
+      * 20mm: draw at <vx0>mm/s base speed after changing speed.
       * 5mm: cooldown draw at 5mm/s
 
     Args:
       vx0: the slow speed to use.
       vx1: the fast speed to use.
     """
-    self.log(f'testKfline vx0={vx0} vx1={vx1}')
+    self.log(f'testKfline {vx0=} {vx1=}')
     self.hopdn(x0, y0)
     self.draw(dx=self.t0x,v=self.vx0)
     self.draw(dx=self.t1x,v=vx0)
@@ -419,8 +437,32 @@ if __name__ == '__main__':
       dict(ve=1.0, h=0.2, w=(0.8,1.8), r0=4.0, re=2.0),
       ))
 
+
+  Kf,Kb,Re = 0.4,1.0,1.0  # "best" default values.
+  Kfargs=dict(name="Kf", linefn=gen.testKf, tests=(
+    dict(Kf=(0.0,1.0), Kb=Kb, Re=Re, vx0=20, vx1=100),
+    dict(Kf=Kf, Kb=(0.0,4.0), Re=Re, vx0=20, vx1=100),
+    dict(Kf=Kf, Kb=Kb, Re=(0.0,5.0), vx0=20, vx1=100),
+    dict(Kf=Kf, Kb=Kb, Re=Re, vx0=(10,50), vx1=(20,100))))
+
+  # Pre Marlin v1.5 Kf was in extruder advance steps per mm/sec, with numbers
+  # for PLA in the range 30-130. In v1.5 it was changed to mm of advance per
+  # mm/s, with numbers in the range 0.1=2.0. We don't know what the
+  # Adventurer3 supports. It's also possible setting pressure advance works
+  # the same as turning the extruder fan on/off and it's executed a
+  # parse-time, not pushed into the execution queue. This would mean it can
+  # only realistically be set once at the start of a print, and cannot
+  # reliably be adjusted mid-print.
+  fKfargs=dict(name="fKf", linefn=gen.testKf,
+    Kf=args.Kf, Kb=args.Kb, Re=args.Re,
+    tests=(
+      dict(fKf=(0,200), vx0=20, vx1=100),
+      dict(fKf=  0, vx0=(10,50), vx1=(20,100)),
+      dict(fKf=100, vx0=(10,50), vx1=(20,100)),
+      dict(fKf=300, vx0=(10,50), vx1=(20,100))))
+
   gen.startFile()
-  gen.doTests(n=args.n, **backlashargs)
+  gen.doTests(n=args.n, **fKfargs)
   gen.endFile()
   data=gen.getCode()
   sys.stdout.buffer.write(data)
