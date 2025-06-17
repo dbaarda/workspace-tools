@@ -356,18 +356,18 @@ class ExtrudeTest(gcodegen.GCodeGen):
     # For v=10mm/s, we need at least ve=0.2*0.1*10/Fa=0.08mm/s for a w=0.1mm line, or Pe=0.44mm for Kf=0.5,Kb=4.0.
     vx,ve,h,w,r = self._getVxVehwr(vx,ve,h,w,r)
     self.hopdn(x0, y0, h=0.2)
-    self.draw(dx=5,v=self.vx0)
+    self.draw(dx=5,v=self.vx0,w=self.layer.w,r=self.layer.r)
     self.move(dx=10,v=1)
     self.hopdn(h=h)
     self.draw(dx=30,v=vx,w=w,r=r)
     self.move(h=0.2)
     self.retract(de=r0)
-    self.move(dx=20,de=-re, v=10)
+    self.move(dx=20,de=-re, v=10, w=self.layer.w)
     self.restore(de=r0)
-    self.move(dx=20,de=+re, v=10)
+    self.move(dx=20,de=+re, v=10, w=self.layer.w)
     self.hopup()
     self.hopdn(h=0.2)
-    self.draw(dx=5,v=self.vx0)
+    self.draw(dx=5,v=self.vx0, w=self.layer.w, r=self.layer.r)
     self.hopup()
 
   def testKf(self, x0, y0, vx0, vx1):
@@ -436,11 +436,13 @@ if __name__ == '__main__':
 
   backlashargs=dict(name="Backlash", linefn=gen.testBacklash,
     Kf=args.Kf, Kb=args.Kb, Re=args.Re,
+    # Note ve=1.0mm/s is the same as vx=30mm/s with h=0.2,w=0.4
+    # or vx=10mm/s with h=0.3,w=0.8.
     tests=(
-      dict(ve=1.0, h=0.3, w=(0.3,0.8), r0=2.0, re=3.0),
-      dict(ve=1.0, h=0.3, w=(0.8,1.8), r0=4.0, re=2.0),
-      dict(ve=1.0, h=0.2, w=(0.3,0.8), r0=2.0, re=3.0),
-      dict(ve=1.0, h=0.2, w=(0.8,1.8), r0=4.0, re=2.0),
+      dict(ve=1.0, h=0.3, w=(0.3,0.8), r0=0.0, re=4.0),
+      dict(ve=1.0, h=0.3, w=(0.8,1.6), r0=2.0, re=4.0),
+      dict(ve=1.0, h=0.2, w=(0.3,0.8), r0=0.0, re=4.0),
+      dict(ve=1.0, h=0.2, w=(0.8,1.6), r0=2.0, re=4.0),
       ))
 
   Kf,Kb,Re = 0.4,1.0,1.0  # "best" default values.
@@ -467,7 +469,7 @@ if __name__ == '__main__':
       dict(fKf=2.0, vx0=(10,50), vx1=(20,100))))
 
   gen.startFile()
-  gen.doTests(n=args.n, **fKfargs)
+  gen.doTests(n=args.n, **backlashargs)
   gen.endFile()
   data=gen.getCode()
   sys.stdout.buffer.write(data)
