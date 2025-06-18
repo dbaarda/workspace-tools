@@ -1404,10 +1404,10 @@ M18
     """
     if pe is None: pe = 0.0
     if de is None: de = -self.pe + pe
-    # If dynamic retraction is enabled and de is zero, set de to a tiny
-    # restore so that it doesn't get optimized away and can be dynamically
-    # adjusted later.
-    if self.dynret and not de: de = 0.00001
+    # If dynamic retraction is enabled and de is less than zero, set de to a
+    # tiny restore so that it doesn't get optimized away or seen as a
+    # retraction and can be dynamicly adjusted later.
+    if self.dynret and de <= 0: de = 0.00001
     self.move(e=e, de=de, v=vb, s=s)
 
   def hopup(self,
