@@ -213,6 +213,21 @@ class ExtrudeTest(gcodegen.GCodeGen):
     assert abs(ve*self.Fa - h*w*r*vx) < 0.0001
     return vx,ve,h,w,r
 
+  def begLine(self, x0, y0, h):
+    """ This is a standard warmup for a test line. """
+    # Go to the start of the line and restore for the warmup.
+    self.hopdn(x0, y0, h=h)
+    # This slow draw then move is to ensure the nozzle is primed and wiped, and
+    # any advance pressure, actual and estimated, has decayed away.
+    self.draw(dx=self.t0x, v=self.vx0, w=self.layer.w, r=0.5)
+    self.move(dx=10,v=1)
+
+  def endLine(self, de=None):
+    """ This is a standard cooldown for a test line."""
+    self.restore(de=None)
+    self.draw(dx=self.t0x, v=self.vx0, w=self.layer.w, r=1.0)
+    self.hopup()
+
   def testRetract(self, x0, y0, vx=None, ve=None, h=None, w=None, r=1.0, vr=10, re=4):
     """ Test retract and restore for different settings.
 
@@ -220,7 +235,7 @@ class ExtrudeTest(gcodegen.GCodeGen):
     extruding after moving or figure out how retract/restore speed matters.
     The pre/post phases are;
 
-      * 5mm: warmup draw at 1mm/s to prime the nozzle.
+      * 5mm: warmup draw at v=5mm/s,r=0.5 to prime the nozzle.
       * 10mm: move at 1mm/s to drain actual and estimated pressure.
       * 0mm: restore default Re to prepare for draw.
       * 30mm: draw at vx mm/s to build pressure at that speed.
@@ -245,11 +260,7 @@ class ExtrudeTest(gcodegen.GCodeGen):
     # A printer with a=500mm/s^2 can go from 0 to 100mm/s in 0.2s over 10mm.
     # Retracting de=10mm at vr=100mm/s over 40mm means retracting at ve=25mm/s
     # which is probably fine.
-    self.hopdn(x0, y0, h=h)
-    # This slow draw then move is to ensure the nozzle is primed and wiped, and
-    # any advance pressure, actual and estimated, has decayed away.
-    self.draw(dx=5,v=1,w=w)
-    self.move(dx=10,v=1)
+    self.begLine(x0, y0, h)
     # This restore pre-loads advance pressure for drawing the line. If the
     # start of the line is too thin, there was not enough pressure, and Kf
     # probably needs to be increased. If the start is too thick, pressure was
@@ -257,12 +268,10 @@ class ExtrudeTest(gcodegen.GCodeGen):
     # consistently the same width as all the other lines.
     self.restore()
     self.draw(dx=30,v=vx,w=w,r=r)      # draw at v=vx.
-    self.move(dx=40,v=vr,de=-re)          # retract while moving at v=vr.
-    self.restore(de=re)                   # restore to recover from retract.
-    self.draw(dx=self.t0x,v=self.vx0)     # cooldown draw.
-    self.hopup()
+    self.move(dx=40,v=vr,de=-re)       # retract while moving at v=vr.
+    self.endLine(de=re)
 
-  def testStartStop(self, x0, y0, vx):
+  def testStartStop(self, x0, y0, vx=None, ve=None, h=None, w=None, r=1.0):
     """ Test starting and stopping extrusion for different settings.
 
     This test is to check dynamic retracting for different Kf/Kb/Re
@@ -271,40 +280,41 @@ class ExtrudeTest(gcodegen.GCodeGen):
     Test phases are;
 
       * 0mm: default drop and restore.
-      * 5mm: warmup draw at 5mm/s to prime nozzle with fillament.
+      * 5mm: warmup draw at v=5mm/s,r=0.5 to prime nozzle with fillament.
       * 10mm: move at 1mm/s to drain actual and estimated pressure.
       * 0mm: default restore to pre-apply pressure before draw.
       * 50mm: draw at <vx>mm/s to check pre-applied pressure and build pressure.
       * 0mm: default retract to relieve pressure.
-      * 10mm: move at 1mm/s to check and drain any vestigial pressure.
+      * 20mm: move at 10mm/s to check and drain any vestigial pressure.
       * 0mm: default restore.
-      * 15mm: draw at 5mm/s to check slow draw after retract/restore.
+      * 5mm: draw at v=5mm/s,r=1.0 to check slow draw after retract/restore.
       * 0mm: default retract and raise.
 
     Args:
-      vx: movement speed to check against.
+      vx: draw speed to test.
+      ve: optional extrude speed while drawing.
+      h: optional line height.
+      w: optional line width.
+      r: optional extrusion ratio.
     """
+    vx,ve,h,w,r = self._getVxVehwr(vx,ve,h,w,r)
     # Set different line-phase lengths.
-    dx = (5, 10, 50, 10, 15)
-    self.hopdn(x0, y0)
-    # This slow draw then move is to ensure the nozzle is primed and wiped, and
-    # any advance pressure, actual and estimated, has decayed away.
-    self.draw(dx=dx[0],v=5)
-    self.move(dx=dx[1],v=1)
+    dx = (5, 10, 50, 20, 5)
+    self.begLine(x0,y0,h)
     # This restore pre-loads advance pressure for drawing the line. If the
     # start of the line is too thin, there was not enough pressure, and Kf
     # probably needs to be increased. If the start is too thick, pressure was
     # too high and Kf should probably be dropped. The line should be
     # consistently the same width as all the other lines.
     self.restore()
-    self.draw(dx=dx[2],v=vx)
+    self.draw(dx=dx[2],v=vx,w=w,r=r)
     # This retract and slow move is to relieve the advance pressure, and see
     # if any remaining pressure drools off. If there is any trailing drool,
     # the amount of pressure was underestimated and Kf or Kb probably needs
     # to be increased. If there is still stringing when otherwise Kf/Kb seems
     # right, adding some additional retraction with Re could help.
     self.retract()
-    self.move(dx=dx[3],v=1)
+    self.move(dx=dx[3],v=10)
     # This restore applies advance pressure for a final slow line after
     # the earlier retraction. It should be the same width as all the other
     # lines. If it starts too thin, it suggests the earlier retraction
@@ -312,9 +322,7 @@ class ExtrudeTest(gcodegen.GCodeGen):
     # If it starts too thick it suggests the earlier retraction under
     # estimated the pressure and extra retraction was actually relieving
     # pressure, so Kf should be increased and Re could possibly be reduced.
-    self.restore()
-    self.draw(dx=dx[4],v=5)
-    self.hopup()
+    self.endLine()
 
   def testBacklash(self, x0, y0, vx=None, ve=None, h=None, w=None, r=1.0, r0=0.0, re=5.0):
     """ Test retract and restore distances.
@@ -355,9 +363,7 @@ class ExtrudeTest(gcodegen.GCodeGen):
     # le = 0.008 -> 0.25 mm/mm (l=0.2x0.1x1.0 -> 0.3x2.0x1.0) or 0.05 for l=0.2x0.6x1.0.
     # For v=10mm/s, we need at least ve=0.2*0.1*10/Fa=0.08mm/s for a w=0.1mm line, or Pe=0.44mm for Kf=0.5,Kb=4.0.
     vx,ve,h,w,r = self._getVxVehwr(vx,ve,h,w,r)
-    self.hopdn(x0, y0, h=0.2)
-    self.draw(dx=5,v=self.vx0,w=self.layer.w,r=self.layer.r)
-    self.move(dx=10,v=1)
+    self.begLine(x0, y0, h=0.2)
     self.hopdn(h=h)
     self.draw(dx=30,v=vx,w=w,r=r)
     self.move(h=0.2)
@@ -367,8 +373,7 @@ class ExtrudeTest(gcodegen.GCodeGen):
     self.move(dx=20,de=+re, v=10, w=self.layer.w)
     self.hopup()
     self.hopdn(h=0.2)
-    self.draw(dx=5,v=self.vx0, w=self.layer.w, r=self.layer.r)
-    self.hopup()
+    self.endLine()
 
   def testKf(self, x0, y0, vx0, vx1):
     """ Test linear advance changing speed different speeds.
@@ -468,8 +473,17 @@ if __name__ == '__main__':
       dict(fKf=1.0, vx0=(10,50), vx1=(20,100)),
       dict(fKf=2.0, vx0=(10,50), vx1=(20,100))))
 
+  # Use the StartStopTest to try and characterise backpressure.
+  backpressure1args=dict(name="Backpressure1", linefn=gen.testStartStop,
+    Kf=args.Kf, Kb=args.Kb, Re=args.Re,
+    tests=(
+      dict(Kb=(0.0,4.0), Re=0.5, ve=1.0, h=0.2, w=0.3),
+      dict(Kb=(0.0,4.0), Re=0.5, ve=1.0, h=0.2, w=0.4),
+      dict(Kb=(0.0,4.0), Re=0.5, ve=1.0, h=0.2, w=0.8),
+      dict(Kb=(0.0,4.0), Re=0.5, ve=1.0, h=0.2, w=1.6)))
+
   gen.startFile()
-  gen.doTests(n=args.n, **backlashargs)
+  gen.doTests(n=args.n, **backpressure1args)
   gen.endFile()
   data=gen.getCode()
   sys.stdout.buffer.write(data)
