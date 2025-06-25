@@ -1218,8 +1218,12 @@ M18
       pe, eb = self._getNextPeEb()
       # Adjust existing restore and add the starting bead.
       # self.log(f'adjusting {c} for {pe=:.4f} {eb=:.4f}')
-      # Lets also try P control with Kp=0.8 for restores.
-      m = m.change(de=0.8*pe - self.pe + eb)
+      # Using P control with Kp=0.8 for restores was contributing to
+      # underrestores without dynext, so only do that if dynext is on.
+      if self.dynext:
+        m = m.change(de=0.8*pe - self.pe + eb)
+      else:
+        m = m.change(de=pe - self.pe + eb)
       # If de is zero, skip adding this.
       if not m.de:
         self.log('skipping empty restore.')

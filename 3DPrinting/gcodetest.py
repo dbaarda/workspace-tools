@@ -340,7 +340,8 @@ class ExtrudeTest(gcodegen.GCodeGen):
       assert dRdC is not None, 'need to specify dRdC with dl'
       # Solve dRdC*dC^2 + 2*R0*dC - dl/pi = 0 and take the smaller result.
       dC = min(solvequad(a=dRdC, b=2*R0, c=-dl/pi))
-    self.log(f'spiral({dC=}, {dl=}, {vl=}, {ve=}')
+    if dR is None: dR = dC*dRdC
+    self.log(f'spiral RC0=({R0:.1f},{C0:.3f}) dRC=({dR:.1f},{dC:.3f}) {dl=:.1f}@{vl:.0f} {de=:.3f}@{ve:.1f} l={h:.2f}x{w:.2f}x{r:.2f}')
     R, C, C1, dC = R0, C0, C0+dC, 1/72
     while C < C1:
       dC = min(dC, C1 - C)
@@ -395,9 +396,9 @@ class ExtrudeTest(gcodegen.GCodeGen):
     R0+=self.dRdC; R1-=self.dRdC
     # Do tests
     Rl,Cl = R0,C0
+    self.dialStart(Cl)
     for tn,t in enumerate(tests):
       self.settings([0,-30,-30,0][tn],[25,25,0,0][tn], **t)
-      self.dialStart(Cl)
       self.doSpiralTest(tn, name, Rl, Cl, lines, ln, **(kwargs|t))
       # Get the R,C position of the end of the last test and updated it for the next test.
       Rf,Cf = self.xy2rc()
@@ -408,6 +409,7 @@ class ExtrudeTest(gcodegen.GCodeGen):
         # Start next test on the next quarter.
         Rl,Cl = R0, roundup(Cf,1/4)
         if Cl >= 1: break
+        self.dialStart(Cl)
     self.endLayer()
 
   def doSpiralTest(self, tn, name, R, C, lines=None, ln=5, **kwargs):
@@ -427,10 +429,11 @@ class ExtrudeTest(gcodegen.GCodeGen):
     """
     R1 = self.R1 - self.dRdC
     warmup = [
-      dict(dC=4/72, vl=5, h=self.layer.h, w=self.layer.w, r=1.0),
-      dict(dC=4/72, vl=5, h=self.layer.h, w=self.layer.w, r=0.0)]
+      dict(dC=1/72, vl=1, h=self.layer.h, w=self.layer.w, r=1.0),
+      dict(dC=2/72, vl=1, h=self.layer.h, w=self.layer.w, r=0.0),
+      dict(dC=1/72, vl=5, h=self.layer.h, w=self.layer.w, r=0.0)]
     cooldn = [
-      dict(dC=1/72, vl=5,  h=self.layer.h, w=self.layer.w, r=1.0)]
+      dict(dC=1/72, vl=1,  h=self.layer.h, w=self.layer.w, r=1.0)]
     lines = warmup + lines + cooldn
     testargs = {k:self._getstep(ln, v) for k,v in kwargs.items()}
     assert any(dv for _,_,dv in testargs.values()), 'At least one arg in {kwargs} must be a range.'
@@ -444,14 +447,14 @@ class ExtrudeTest(gcodegen.GCodeGen):
       confargs={k:v for k,v in lineargs.items() if k in self._CONF_ARGS}
       self.log(f'Test Line {name} {self._fset(**lineargs)}')
       self.setconf(**confargs)
-      self.hopdnrc(R,C, h=lineargs.get('h',self.layer.h), de=1.0)
+      self.hopdnrc(R,C, h=lineargs.get('h',self.layer.h), pe=1.0)
       for l in lines:
         # Replace any name values in l with the corresponding value in lineargs.
         sargs={k:(eval(v,locals=lineargs) if isinstance(v,str) else v) for k,v in l.items()}
         self.spiral(dRdC=self.dRdC,**sargs)
         R, _ = self.xy2rc()
         if R <= R1: break
-      self.hopup(de=-1.0)
+      self.hopup(pe=-1.5)
       # Get the R,C position of the start of the next 1/4 spiral
       R = roundup(R,self.dRdC)
       # Update the testargs for the next lines.
@@ -760,10 +763,10 @@ if __name__ == '__main__':
   spiralStartStopargs = dict(name="startstop", lines=startstopspirl,
     ve=1.0, h=0.3, dynret=False,
     tests=(
-      dict(Re=(0.0,5.0), w=0.3),
-      dict(Re=(0.0,5.0), w=0.4),
-      dict(Re=(0.0,5.0), w=0.8),
-      dict(Re=(0.0,5.0), w=1.6)))
+      dict(Re=(2.0,4.0), w=0.3),
+      dict(Re=(2.0,4.0), w=0.4),
+      dict(Re=(2.0,4.0), w=0.8),
+      dict(Re=(2.0,4.0), w=1.6)))
 
   gen.startFile()
   #gen.doTests(n=args.n, **backpressure1args)

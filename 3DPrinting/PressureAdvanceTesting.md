@@ -984,7 +984,7 @@ The commented version of gcode output for this is in
 Again, no difference between any of the lines. It seems the Adv3 really
 doesn't support PA. Theory confirmed.
 
-### BacklashTest4
+## BacklashTest4
 
 Here I go back to trying to validate/calibrate the model. I've largely
 forgotten all the lessons learned by now, but it largely seemed to defy
@@ -1006,7 +1006,7 @@ There are a few thoughts that modified my direction a bit.
    pointless. Speeds of 1mm/s are always going to leave a line. The best we
    can do is something like define zero-pressure as no line at h=0.2mm
    vx=10mm/s.
-   
+
 3. Bed leveling deviations completely mess with attempts to consistently
    measure extrusion widths. Maybe we need to do a filled in first layer to
    test on top of.
@@ -1059,3 +1059,144 @@ Interestingly the first test does seem to clearly show the backlash
 as around 0.5 to 1mm.
 
 I'll need to have a think about what the next test should be...
+
+
+### SpStartStopTest1
+
+The problem is the line lengths used in the previous tests are too short for
+the pressure to stablize. We need longer lines, so a spiral test is better.
+The spiral coordinates used are R (radius) and C (number of revolutions).
+Additionally the spirals move inward by dRdC=2mm per revolution. Line lengths
+can be specified in mm (dl), circles "C" (dC), or seconds (dt).
+
+This test is similar to the old StartStopTest but in a spiral for longer line
+lengths. The test phases are;
+
+* warmup
+  * 0mm: hopdn and restore with `de=1.0`.
+  * 4/72C: draw at 5mm/s to prime nozzle.
+  * 4/72C: move at 5mm/s to drain nozzle.
+* test
+  * 0mm: restore with `de=<Re>` to apply pressure.
+  * 3s: draw with `de=<ve>,h=<h>,w=<w>,r=1` to check line quality.
+  * 0mm: retract with `de=-<Re>` to relieve pressure.
+  * 20mm: move at `vl=5mm/s` to check for sufficient retraction.
+  * 0mm: restore pressure with `de=<Re>` to what it was before retracting.
+* cooldown
+  * 5mm: draw at 5mm/s to finalize line and stabilize pressure.
+  * 0mm: retract and hopup with `de=-1mm`.
+
+The objective is to find the ideal retraction and restore distances for
+ve=1.0mm, h=0.3 with different w values.
+
+The tests were run with the cmdline;
+
+```bash
+$ ./gcodetest.py -Te=210 -Tp=50 -Fe=1.0 -Fc=1.0 -Kf=1.0 -Kb=1.0 -Re=1.0 -R >test.g
+```
+
+Note this turns on dynamic retraction with `Kf=1.0 Kb=1.0 Re=1.0` which is
+used to draw the dial ruler and test text, but those settings are overridden
+for the testlines to turn of dynamic retraction while keeping the Kf and Kb
+settings so that the generated logging can show the estimated pressures for
+those settings without changing anything. The test args were;
+
+* common args: ve=1.0, h=0.3, dynret=False
+* test1: Re=(0.0,5.0), w=0.3
+* test2: Re=(0.0,5.0), w=0.4
+* test3: Re=(0.0,5.0), w=0.8
+* test4: Re=(0.0,5.0), w=1.6
+
+The results were;
+
+![SpStartStopTest1 Result](SpStartStopTest1.jpg "SpStartStopTest1 Result")
+
+The commented version of gcode output for this is in
+[SpStartStopTest1_Te210Tp50Fe10Fc10Kf10Kb10Re10Rv.g](./SpStartStopTest1_Te210Tp50Fe10Fc10Kf10Kb10Re10Rv.g).
+
+### Observations
+
+The Kf=1.0,Kb=1.0,Re=1.0 settings are rather wrong as the dial and text is
+under-extruded with poor bed adhesian and under retracted with stringing.
+Interestingly it appears to have got worse as it went around the dial drawing
+the 'ticks', I believe this is because gcodegen.py had a `P=0.8` scaledown on
+the target restore pressure to try and reduce oscillations when playing with
+dynamic extrusion adjustments. However this means it's sacrificing 20% of the
+pressure every retract-restore cycle, so I'm going to remove this when dynamic
+extraction is off.
+
+The pre-extrusion pressure and retraction was overestimated resulting in the
+first text after that failing to print until the second line.
+
+The tests largely succeeded at narrowing down the ideal retract and restore
+distances. For all widths the ideal restore is near 3.0, and the ideal
+retraction is somewhere below 4.0. the resolution is not fine enough to
+identify any differences between widths, but there is maybe a hint that wider
+widths do need slightly higher pressures.
+
+## SpStartStopTest2
+
+Trying again with a slightly tweaked version of the test and narrowing in on
+the retraction distances around 3.0mm. I've fixed the dynamic retraction not
+use the 0.8 scaling if dynamic extrusion is off. I've extended the time and
+reduced the distance of the warmup and cooldown phases by moving at 1mms for
+most of it. I changed the initial hopdn restore and final hopup retract to use
+`pe=` target pressure instead of `de=` extruder distance so that it attempts
+to compensate/cancle accumulated pressure as estimated by the current Kf/Kb
+settings.
+
+* warmup
+  * 0mm: hopdn and restore to `pe=1.0`.
+  * 1/72C: draw at 1mm/s to prime nozzle.
+  * 2/72C: move at 1mm/s to drain nozzle.
+  * 1/72C: move at 5mm/s to check nozzle pressure.
+* test
+  * 0mm: restore with `de=<Re>` to apply pressure.
+  * 3s: draw at `de=<ve>,w=<w>` check line quality.
+  * 0mm: retract with `de=-<Re>` to relieve pressure.
+  * 20mm: move at `vl=5mm/s` to see if there is drool.
+  * 0mm: restore pressure with `de=<Re>` to what it was before retracting.
+* cooldown
+  * 5mm: draw at 5mm/s to finalize line and stabilize pressure.
+  * 0mm: retract and hopup with `pe=-1.5mm`.
+
+The tests were run with the cmdline;
+
+```bash
+$ ./gcodetest.py -Te=210 -Tp=50 -Fe=1.0 -Fc=1.0 -Kf=0.4 -Kb=1.0 -Re=1.5 -R >test.g
+```
+
+* common args: ve=1.0, h=0.3, dynret=False
+* test1: Re=(2.0,4.0), w=0.3
+* test2: Re=(2.0,4.0), w=0.4
+* test3: Re=(2.0,4.0), w=0.8
+* test4: Re=(2.0,4.0), w=1.6
+
+The results were;
+
+![SpStartStopTest1 Result](SpStartStopTest1.jpg "SpStartStopTest1 Result")
+
+The commented version of gcode output for this is in
+[SpStartStopTest1_Te210Tp50Fe10Fc10Kf10Kb10Re10Rv.g](./SpStartStopTest1_Te210Tp50Fe10Fc10Kf10Kb10Re10Rv.g).
+
+The results were;
+
+![SpStartStopTest2 Result](SpStartStopTest2.jpg "SpStartStopTest2 Result")
+
+The commented version of gcode output for this is in
+[SpStartStopTest2_Te210Tp50Fe10Fc10Kf04Kb10Re15Rv.g](./SpStartStopTest2_Te210Tp50Fe10Fc10Kf04Kb10Re15Rv.g).
+
+### Observations.
+
+The starting text is a little better but still seems to suffer from the
+pre-extrude pressure being over-estimated and over-retracted. The dial is
+still terrible and appears to still get worse as it went around adding ticks.
+Looking at the output logging it looks like the pressure model is oscilating,
+but not sure why.
+
+The test seem to generally show what was expected.
+
+There does appear to be a pattern that lines that start under-restored do
+increase in width as they go, but lines that start over-restored seem to not
+decrease in width, or at least not as quickly. It seems it's easier to
+increase a low pressure than it is to shed a high pressure.
