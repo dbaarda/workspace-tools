@@ -1388,10 +1388,12 @@ M18
     """
     if pe is None: pe = -self.Re
     if de is None: de = -self.pe + pe
-    # If dynamic retraction is enabled and de is zero, set de to a tiny
-    # retraction so that it doesn't get optimized away and can be dynamically
-    # adjusted later.
-    if self.dynret and not de: de = -0.00001
+    #if de is None:
+    #  de = -self.Re if pe is None else -self.pe + pe
+    # If dynamic retraction is enabled and de is zero or more, set de to a
+    # tiny retraction so that it doesn't get optimized away or seen as a
+    # restore and can be dynamically adjusted later.
+    if self.dynret and de >= 0: de = -0.00001
     self.move(e=e, de=de, v=ve, s=s)
 
   def restore(self, e=None, de=None, vb=None, s=1.0, pe=None):
@@ -1404,7 +1406,9 @@ M18
     """
     if pe is None: pe = 0.0
     if de is None: de = -self.pe + pe
-    # If dynamic retraction is enabled and de is less than zero, set de to a
+    #if de is None:
+    #  de = self.Re if pe is None else -self.pe + pe
+    # If dynamic retraction is enabled and de is zero or less, set de to a
     # tiny restore so that it doesn't get optimized away or seen as a
     # retraction and can be dynamicly adjusted later.
     if self.dynret and de <= 0: de = 0.00001

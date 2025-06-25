@@ -4,7 +4,15 @@
 import argparse
 import gcodegen
 from pprint import *
+from math import *
 
+def solvequad(a,b,c):
+  """ Solve a quadratic equation, returning the two roots."""
+  d = sqrt(b**2 - 4*a*c)
+  return (-b - d)/(2*a), (-b + d)/(2*a)
+
+def roundup(v,m=1):
+  return m*ceil(v/m)
 
 class ExtrudeTest(gcodegen.GCodeGen):
   """ Generate GCode Extrusion Tests.
@@ -29,9 +37,15 @@ class ExtrudeTest(gcodegen.GCodeGen):
   sdy = 30 # test text settings box width.
   tdx = rdx + sdy  # test box total width.
   tdy = rdy + tn*ty + 5 # test box total height.
+  # Constants for spiral tests.
+  R0 = 70
+  R1 = 42
+  C0 = 0.0
+  dRdC = -2
+  LN = 5
 
   # These are printer configuration test arguments.
-  _CONF_ARGS = ('Kf','Kb','Re', 'fKf')
+  _CONF_ARGS = ('Kf','Kb','Re', 'fKf', 'dynret', 'dynext')
 
   def resetfile(self,*args,**kwargs):
     """Initialize confstack whenever we resetfile()."""
@@ -106,8 +120,7 @@ class ExtrudeTest(gcodegen.GCodeGen):
     self.preExt(x0-2*n,y0,x1,y1+2*n,m=5,lw=0)
 
   def title(self,x0,y0, **kwargs):
-    self.cmt("structure:brim")
-    self.text(self._fset(sep=' ', **kwargs), x0+2, y0+5, fsize=5)
+    self.settings(x0+2,y0+5,sep=' ', **kwargs)
 
   def brim(self, x0, y0, x1, y1):
     w = self.w
@@ -136,10 +149,9 @@ class ExtrudeTest(gcodegen.GCodeGen):
       self.draw(dy=-l)
       self.hopup()
 
-  def settings(self, x0, y0, **kwargs):
+  def settings(self, x0, y0, sep='\n', title='', **kwargs):
     """ Draw the test arguments at (x0,y0)."""
-    self.cmt("structure:brim")
-    self.text(self._fset(sep='\n', **kwargs), x0, y0, fsize=5)
+    self.text(self._fset(sep=sep, **kwargs), x0, y0, fsize=5)
 
   def doTests(self, name, linefn, tests, n=None, **kwargs):
     """Run up to 4 tests.
@@ -194,18 +206,272 @@ class ExtrudeTest(gcodegen.GCodeGen):
     # Restore the config arguments after the test.
     self.popconf()
 
+  def _getLineArgs(self, dl=None, de=None, dt=None, vl=None, ve=None, h=None, w=None, r=1.0):
+    """ Get dl, de, dt, vl, ve, h, w, and r from each other. """
+    # Use default layer vl if there is not enough to derive it.
+    if (vl,ve) == (None,None) and None in (dl,dt) and None in (de,dt):
+      vl = self.layer.Vp if r else self.layer.Vt
+    # Derive vl,dl, and dt from each other.
+    if None not in (dl,dt):
+      assert vl is None, "cannot specify vl with dl and dt"
+      vl = dl/dt if dl else 0.0
+    elif None not in (vl,dt):
+      assert dl is None, "cannot specify dl with vl and dt"
+      dl = vl*dt
+    elif None not in (vl,dl):
+      assert dt is None, " cannot specify dt with vl and dl"
+      dt = dl/vl if dl else 0.0
+    # Derive ve, de, and dt from each other.
+    if None not in (de,dt):
+      assert ve is None, "cannot specify ve with de and dt"
+      ve = de/dt if de else 0.0
+    elif None not in (ve,dt):
+      assert de is None, "cannot specify de with ve and dt"
+      de = ve*dt
+    elif None not in (ve,de):
+      assert dt is None, "cannot specify dt with ve and de"
+      dt = de/ve if de else 0.0
+      # Also set derived vl and dl from dt.
+      if vl is None and dl is not None:
+        vl = dl/dt
+      elif dl is None and vl is not None:
+        dl = vl*dt
+    # Derive h,w,r,vl,ve from each other.
+    if vl and ve is not None:
+      assert None in (h,w,r), 'cannot specify all h,w,r with vl and ve'
+      if h is None: h = self.layer.h if None in (w,r) else ve*self.Fa/(vl*w*r)
+      if w is None: w = self.layer.w if None in (h,r) else ve*self.Fa/(vl*h*r)
+      if r is None: r = ve*self.Fa/(vl*h*w)
+    # Set h,w to defaults because we don't have enough to derive them.
+    else:
+      assert r is not None, 'require r if without ve and vl'
+      if h is None: h = self.layer.h
+      if w is None: w = self.layer.w
+    # Derive vl,de,dt from ve and dl.
+    if vl is None:
+      assert ve is not None, 'should have ve if without vl'
+      assert r, 'require r!=0 to derive vl from ve'
+      vl = ve*self.Fa/(h*w*r)
+    if ve is None:
+      assert vl is not None, 'should have vl if without ve'
+      ve = vl*h*w*r/self.Fa
+    assert abs(ve*self.Fa - vl*h*w*r) < 0.0001
+    # Set dt from dl/vl or de/ve if we still don't have it.
+    if dt is None:
+      if vl and dl is not None:
+        dt=dl/vl
+      elif ve and de is not None:
+        dt=de/ve
+    # Set dl and de from dt if we still don't have them.
+    if dt is not None:
+      if dl is None:
+        dl = vl*dt
+      if de is None:
+        de = ve*dt
+    assert (dl,de,dt) == (None, None, None) or abs(de*self.Fa - dl*h*w*r) < 0.0001
+    return dl,de,dt,vl,ve,h,w,r
+
+  def rc2xy(self, R=None, C=None, dR=None, dC=None, x0=0.0, y0=0.0):
+    """Get x,y from R,C or dR,dC.
+
+    Note R and C default to the current R,C position with optional dR,dC offsets.
+    """
+    if dR is None: dR = 0.0
+    if dC is None: dC = 0.0
+    if R is None: R = dist((x0, y0), (self.x, self.y)) + dR
+    if C is None: C = atan2(self.y-y0, self.x-x0)/(2*pi) + dC
+    a = C*2*pi
+    return x0 + R*cos(a), y0 + R*sin(a)
+
+  def xy2rc(self, x=None, y=None, dx=None, dy=None, x0=0.0, y0=0.0):
+    """Get R,C from x,y or dx, dy.
+
+    Note x and y default to the current x,y position with optional dx,dy offsets.
+    """
+    if dx is None: dx = 0.0
+    if dy is None: dy = 0.0
+    if x is None: x = self.x + dx
+    if y is None: y = self.y + dy
+    return dist((x0, y0), (x, y)), atan2(y-y0, x-x0)/(2*pi)
+
+  def drawrc(self, R=None, C=None, dR=None, dC=None, x0=0.0, y0=0.0, **kwargs):
+    x,y=self.rc2xy(R,C,dR,dC,x0,y0)
+    self.draw(x=x,y=y,**kwargs)
+
+  def hopdnrc(self, R=None, C=None, dR=None, dC=None, x0=0.0, y0=0.0, **kwargs):
+    x, y = self.rc2xy(R, C, dR, dC, x0, y0)
+    self.hopdn(x=x,y=y,**kwargs)
+
+  def spiral(self, R=None, C=None, dR=None, dC=None, dRdC=None, x0=0.0, y0=0.0,
+      dl=None, de=None, dt=None, vl=None, ve=None, h=None, w=None, r=1.0):
+    """ Draw a spiral around x0,y0.
+
+    This draws a spiral from the current R0,C0 position to a position R,C. The
+    position R,C can be specified using any sufficient combination of
+    R,C,dR,dC,dRdC,dl.
+    """
+    R0,C0 = self.xy2rc(x0=x0,y0=y0)
+    if dl == 0:
+      # This is explicitly not a draw or move.
+      if de is not None:
+        # dl=0, de=<value> means apply a specific retract/restore distance.
+        self.move(de=de, v=ve)
+      elif h is not None:
+        # dl=0, h=<value> means apply a generic hopup() or hopdn().
+        self.hopup() if h > 0 else self.hopdn()
+      elif r is not None:
+        # dl=0, r=<value> means apply a generic retract() or restore().
+        self.retract() if r<0 else self.restore()
+      return R0, C0
+    R1,C1 = R,C
+    if R1 is not None: dR = R1 - R0
+    if C1 is not None: dC = C1 - C0
+    if dR is None and None not in (dC, dRdC): dR = dC*dRdC
+    if dC is None and dR is not None and dRdC: dC = dR/dRdC
+    if dR is not None and dC is not None: dRdC = dR/dC
+    # Get dl from dR and dC if provided.
+    if None not in (dR,dC):
+      assert dl is None, 'cannot specify dl with dR,dC'
+      dl = dC*pi*(2*R0 + dR)
+    dl, de, dt, vl, ve, h, w, r = self._getLineArgs(dl,de,dt,vl,ve,h,w,r)
+    # Get dC from dl.
+    if dC is None:
+      assert dl is not None, 'need to specify enough for dl without dC'
+      assert dRdC is not None, 'need to specify dRdC with dl'
+      # Solve dRdC*dC^2 + 2*R0*dC - dl/pi = 0 and take the smaller result.
+      dC = min(solvequad(a=dRdC, b=2*R0, c=-dl/pi))
+    self.log(f'spiral({dC=}, {dl=}, {vl=}, {ve=}')
+    R, C, C1, dC = R0, C0, C0+dC, 1/72
+    while C < C1:
+      dC = min(dC, C1 - C)
+      C += dC
+      R += dC*dRdC
+      self.drawrc(R, C, x0=x0, y0=y0, v=vl, w=w, r=r)
+
+  def dial(self, R=R0, x0=0.0, y0=0.0, tl=3):
+    self.hopdnrc(R, 0, x0=x0, y0=y0)
+    self.spiral(R, 1, x0=x0, y0=y0)
+    self.hopup()
+    for i in range(0,72):
+      C = i/(72)
+      self.hopdnrc(R,C,x0=x0,y0=y0)
+      l = tl/2 if i % 6 else tl
+      self.drawrc(dR=l,x0=x0,y0=y0)
+      self.hopup()
+
+  def dialStart(self,C, R0=R0, R1=R1):
+    self.cmt('structure:shell-outer')
+    self.hopdnrc(R0,C)
+    self.drawrc(R1)
+    self.hopup()
+
+  def dialRuler(self, R0=R0, R1=R1):
+    self.cmt('structure:shell-outer')
+    self.dial(R0,tl=3)
+    self.dial(R1,tl=-3)
+
+  def doSpiralTests(self, name, lines, tests, ln=LN, **kwargs):
+    """ Do tests in a spiral pattern instead of a grid for longer path lengths.
+
+    tests is a list of test kwargs for lines, and  'lines' is a
+    list of spiral kwargs. The spiral kwargs can have string name values
+    referring to values in the test kwargs.
+    """
+    # Note for Kf=1.0,Kb=0.0 the decay to steady state takes about 3sec, which
+    # for v=100mm/s is 300mm of line! A circle of D=100mm have about 300mm of
+    # circumference, so a whole circuit of the spiral is needed. However for
+    # v=25mm only 1/4 of a circle is needed. So we should either adjust the
+    # diameter for the test print speed, or adjust the fraction of the circle
+    # for each phase based on speed.
+    # PreExtrude
+    R0,R1,C0,dRdC = self.R0, self.R1, self.C0, self.dRdC
+    self.hopdnrc(R=R0+5, C=1/16, h=0.2)
+    self.spiral(R=R0+5,C=3/16,vl=10, w=0.4, r=4)
+    self.hopup()
+    # Prepare tests
+    self.startLayer(Vp=10)
+    self.settings(-R0,R0,**kwargs)
+    self.dialRuler(R0,R1)
+    R0+=self.dRdC; R1-=self.dRdC
+    # Do tests
+    Rl,Cl = R0,C0
+    for tn,t in enumerate(tests):
+      self.settings([0,-30,-30,0][tn],[25,25,0,0][tn], **t)
+      self.dialStart(Cl)
+      self.doSpiralTest(tn, name, Rl, Cl, lines, ln, **(kwargs|t))
+      # Get the R,C position of the end of the last test and updated it for the next test.
+      Rf,Cf = self.xy2rc()
+      if Rl - Rf < Rf - R1:
+        # Start next test on the next inside track.
+        Rl = roundup(Rf, self.dRdC)
+      else:
+        # Start next test on the next quarter.
+        Rl,Cl = R0, roundup(Cf,1/4)
+        if Cl >= 1: break
+    self.endLayer()
+
+  def doSpiralTest(self, tn, name, R, C, lines=None, ln=5, **kwargs):
+    """ Do a single spiral test.
+
+    This does a sequence of spiral test lines with varying arguments. Each
+    test line starts at the same C angle and changes R by self.dRdC for each track.
+
+    Args:
+      tn: the number of this test.
+      name: the name of this test.
+      R,C: the R,C coordinates where this test starts.
+      dRdC: the change in R per rotation.
+      lines: a list of spiral kwargs where some values can be string names refering to (possibly range-valued) kwargs arguments.
+      ln: the number of test lines in this test.
+      **kwargs: the (possibly range-valued) arguments for this test.
+    """
+    R1 = self.R1 - self.dRdC
+    warmup = [
+      dict(dC=4/72, vl=5, h=self.layer.h, w=self.layer.w, r=1.0),
+      dict(dC=4/72, vl=5, h=self.layer.h, w=self.layer.w, r=0.0)]
+    cooldn = [
+      dict(dC=1/72, vl=5,  h=self.layer.h, w=self.layer.w, r=1.0)]
+    lines = warmup + lines + cooldn
+    testargs = {k:self._getstep(ln, v) for k,v in kwargs.items()}
+    assert any(dv for _,_,dv in testargs.values()), 'At least one arg in {kwargs} must be a range.'
+    self.log(f'Test{tn} {name} {self._fset(**kwargs)}')
+    # Push the config arguments without applying changes before the test.
+    self.pushconf()
+    self.cmt(f'structure:shell-inner')
+    e=0.00001
+    while all(v <= v1+e for (v,v1,dv) in testargs.values()) and R>R1:
+      lineargs={k:v for k,(v,_,_) in testargs.items()}
+      confargs={k:v for k,v in lineargs.items() if k in self._CONF_ARGS}
+      self.log(f'Test Line {name} {self._fset(**lineargs)}')
+      self.setconf(**confargs)
+      self.hopdnrc(R,C, h=lineargs.get('h',self.layer.h), de=1.0)
+      for l in lines:
+        # Replace any name values in l with the corresponding value in lineargs.
+        sargs={k:(eval(v,locals=lineargs) if isinstance(v,str) else v) for k,v in l.items()}
+        self.spiral(dRdC=self.dRdC,**sargs)
+        R, _ = self.xy2rc()
+        if R <= R1: break
+      self.hopup(de=-1.0)
+      # Get the R,C position of the start of the next 1/4 spiral
+      R = roundup(R,self.dRdC)
+      # Update the testargs for the next lines.
+      for k,(v,v1,dv) in testargs.items():
+        testargs[k] = (v+dv,v1,dv)
+    # Restore the config arguments after the test.
+    self.popconf()
+
   def _getVxVehwr(self, vx=None, ve=None, h=None, w=None, r=1.0):
     """ Get vx, ve, h, w, and r from each other. """
     assert ve is not None or vx is not None, 'must specify at least ve or vx'
     if vx is None:
-      if h is None: h = self.h
-      if w is None: w = self.w
-      # figure out vx from ve, w, and h.
+      if h is None: h = self.layer.h
+      if w is None: w = self.layer.w
+      # figure out vx from ve, w, h, and r.
       vx = ve*self.Fa/(h*w*r)
     if ve is None:
-      if h is None: h = self.h
-      if w is None: w = self.w
-      # figure out ve from vx, w, and h.
+      if h is None: h = self.layer.h
+      if w is None: w = self.layer.w
+      # figure out ve from vx, w, h, and r.
       ve = h*w*r*vx/self.Fa
     # Set h and w
     if h is None: h = self.layer.h if w is None else ve*self.Fa/(w*r*vx)
@@ -482,8 +748,26 @@ if __name__ == '__main__':
       dict(Kb=(0.0,4.0), Re=0.5, ve=1.0, h=0.2, w=0.8),
       dict(Kb=(0.0,4.0), Re=0.5, ve=1.0, h=0.2, w=1.6)))
 
+  # We want to figure out the ideal restore and retract distances for
+  # different fixed ve values and various w values.
+  # ve=1.0 w=0.3, h=0.2 vl=1
+  startstopspirl = [
+      dict(dl=0, de='Re'),
+      dict(dt=3, ve='ve', h='h', w='w', r=1),
+      dict(dl=0, de='-Re'),
+      dict(dl=20, vl='5', h='h', w='w', r=0),
+      dict(dl=0, de='Re')]
+  spiralStartStopargs = dict(name="startstop", lines=startstopspirl,
+    ve=1.0, h=0.3, dynret=False,
+    tests=(
+      dict(Re=(0.0,5.0), w=0.3),
+      dict(Re=(0.0,5.0), w=0.4),
+      dict(Re=(0.0,5.0), w=0.8),
+      dict(Re=(0.0,5.0), w=1.6)))
+
   gen.startFile()
-  gen.doTests(n=args.n, **backpressure1args)
+  #gen.doTests(n=args.n, **backpressure1args)
+  gen.doSpiralTests(**spiralStartStopargs)
   gen.endFile()
   data=gen.getCode()
   sys.stdout.buffer.write(data)
