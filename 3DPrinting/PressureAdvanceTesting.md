@@ -1117,7 +1117,7 @@ The commented version of gcode output for this is in
 ### Observations
 
 The Kf=1.0,Kb=1.0,Re=1.0 settings are rather wrong as the dial and text is
-under-extruded with poor bed adhesian and under retracted with stringing.
+under-extruded with poor bed adhesion and under retracted with stringing.
 Interestingly it appears to have got worse as it went around the dial drawing
 the 'ticks', I believe this is because gcodegen.py had a `P=0.8` scaledown on
 the target restore pressure to try and reduce oscillations when playing with
@@ -1142,7 +1142,7 @@ use the 0.8 scaling if dynamic extrusion is off. I've extended the time and
 reduced the distance of the warmup and cooldown phases by moving at 1mms for
 most of it. I changed the initial hopdn restore and final hopup retract to use
 `pe=` target pressure instead of `de=` extruder distance so that it attempts
-to compensate/cancle accumulated pressure as estimated by the current Kf/Kb
+to compensate/cancel accumulated pressure as estimated by the current Kf/Kb
 settings.
 
 * warmup
@@ -1174,13 +1174,6 @@ $ ./gcodetest.py -Te=210 -Tp=50 -Fe=1.0 -Fc=1.0 -Kf=0.4 -Kb=1.0 -Re=1.5 -R >test
 
 The results were;
 
-![SpStartStopTest1 Result](SpStartStopTest1.jpg "SpStartStopTest1 Result")
-
-The commented version of gcode output for this is in
-[SpStartStopTest1_Te210Tp50Fe10Fc10Kf10Kb10Re10Rv.g](./SpStartStopTest1_Te210Tp50Fe10Fc10Kf10Kb10Re10Rv.g).
-
-The results were;
-
 ![SpStartStopTest2 Result](SpStartStopTest2.jpg "SpStartStopTest2 Result")
 
 The commented version of gcode output for this is in
@@ -1191,12 +1184,99 @@ The commented version of gcode output for this is in
 The starting text is a little better but still seems to suffer from the
 pre-extrude pressure being over-estimated and over-retracted. The dial is
 still terrible and appears to still get worse as it went around adding ticks.
-Looking at the output logging it looks like the pressure model is oscilating,
-but not sure why.
+Looking at the output logging it looks like the pressure model is maybe
+oscilating? Looking again did I imagine that?
 
-The test seem to generally show what was expected.
+Otherwise the test seem to generally show what was expected.
 
 There does appear to be a pattern that lines that start under-restored do
 increase in width as they go, but lines that start over-restored seem to not
 decrease in width, or at least not as quickly. It seems it's easier to
 increase a low pressure than it is to shed a high pressure.
+
+Actually, some of the line-width variation is probably bed-leveling related.
+I've measured the thickness of the lines after peeling them off and they vary
+between about 0.24mm and 0.31mm. This explains why the w=0.3 and w=0.4 lines
+get wider as they go. The line widths at the end are way wider than the target
+0.3mm and 0.4mm.
+
+## SpStartStopTest3
+
+Narrowing in even more. The restore distance to start the lines is less
+than the retraction distance to end them. This is expected, since the restore
+doesn't have to undo backlash because its starting from a passively drained
+nozzle, whereas the retraction needs to undo backlash and relieve pressure,
+and possibly a bit extra to stop/reduce drool.
+
+To handle this I've added a `Be` argument to the test, and the retraction
+distance is `Be+Re`. The target `Re` values have diverged sufficiently to need
+to search different ranges for each line width.
+
+The tests were run with the cmdline;
+
+```bash
+$ ./gcodetest.py -Te=210 -Tp=50 -Fe=1.0 -Fc=1.0 -Kf=0.5 -Kb=2.0 -Re=2.0 -R >test.g
+```
+
+* common args: ve=1.0, h=0.3, dynret=False, Be=0.4
+* test1: Re=(2.6,3.6), w=0.3
+* test2: Re=(2.8,3.8), w=0.4
+* test3: Re=(3.2,4.2), w=0.8
+* test4: Re=(3.6,4.6), w=1.6
+
+The results were;
+
+![SpStartStopTest3 Result](SpStartStopTest3.jpg "SpStartStopTest3 Result")
+
+The commented version of gcode output for this is in
+[SpStartStopTest3_Te210Tp50Fe10Fc10Kf05Kb20Re20Rv.g](./SpStartStopTest3_Te210Tp50Fe10Fc10Kf05Kb20Re20Rv.g).
+
+### Observations.
+
+The dial is much better, but still has a bit of stringing. The start text is
+still lost from over-estimating the pre-extrude pressure. Also the line starts
+for test 4 with `w-1.6` are non-existant except for the first line, showing that the
+`pe=-1.5` retraction at the end of each line is over-estimating the pressure
+at the end of the test line, and this is also visible to a lesser extent for
+test 3 with `w=0.8`. The start of the first line is consistently overextruded
+for all tests, which means the pressure after writing the text summary is
+under-estimated.
+
+This all suggests the `Kf=0.5, Kb=2.0` are wrong, underestimating pressure for
+normal lines (`vl=10,ve=0.62,l=0.3x0.5x1.0`, estimated as `pe=1.31`) lines and
+overestimating the pressure for thick lines (`vl=10,ve=1.33,l=0.2x0.4x4.0`,
+estimated as `pe=3.87`, and `vl=5,ve=1.0,l=0.3x1.6x1.0` estimated as
+`pe=3.70`). Also looking at the estimated pressures, test 4 with w=1.6 is
+estimating that the drawn test line starts very over-restored and doesn't go
+for long enough to stabilize back to `pe=3.7` still estimating `pe=4.19` for
+the last line test. So the pressure is over-estimated even more from the
+restore, but the increasing line widths suggests that actually they were
+under-restored and the pressure was still building.
+
+The test-text to line-start transition goes from
+`vl=10,ve=0.62,l=0.3x0.5x1.0`, estimated as `pe=1.31` to
+`vl=1,ve=0.06,l=0.3x0.5x1.0` estimated as `pe=1.03`, which is the same line
+width but a much lower ve. This means it's under-estimating the pressure
+difference needed for a ve difference, which suggests Kf should be higher.
+
+But the transition from preextrude (`vl=10,ve=1.33,l=0.2x0.4x4.0` estimated as
+`pe=3.87`) to title-text (`vl=10,ve=0.62,l=0.3x0.5x1.0` estimated as
+`pe=1.31`) is over-estimating the pressure difference needed. Since this
+includes a large width change, this suggests Kb should be smaller.
+
+Looking at the restore pressures against width so far it looks like `Kb=3.0` is
+roughly right but somewhere near w=0.8 it flattens out. This matches what I
+expected, where once the bead exceeds the outer width of the nozzle it
+"bulges up" instead of having to push out, so the pressure stops building.
+
+![SpStartStopTest3 Retract and Restore Distances](SpStartStopTest3Graph.png
+"SpStartStopTest3 Retract and Restore Distances")
+
+The retract distances are interesting as they seem to be increasing slower
+than the restore distances. This is not what I expected, since a constant
+backlash would have kept the difference constant. However, we really don't
+have enough points to clearly nail down what is happening.
+
+I'm going to change the pressure model so that bead pressure maxes at 2x the
+nozzle width, and collect more points between w=0.4 and w=0.8 using
+Kf=2.0,Kb=3.0.

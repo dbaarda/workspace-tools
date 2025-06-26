@@ -757,16 +757,16 @@ if __name__ == '__main__':
   startstopspirl = [
       dict(dl=0, de='Re'),
       dict(dt=3, ve='ve', h='h', w='w', r=1),
-      dict(dl=0, de='-Re'),
+      dict(dl=0, de='-(Re+Be)'),
       dict(dl=20, vl='5', h='h', w='w', r=0),
-      dict(dl=0, de='Re')]
+      dict(dl=0, de='Re+Be')]
   spiralStartStopargs = dict(name="startstop", lines=startstopspirl,
-    ve=1.0, h=0.3, dynret=False,
+    ve=1.0, h=0.3, dynret=False, Be=0.4,
     tests=(
-      dict(Re=(2.0,4.0), w=0.3),
-      dict(Re=(2.0,4.0), w=0.4),
-      dict(Re=(2.0,4.0), w=0.8),
-      dict(Re=(2.0,4.0), w=1.6)))
+      dict(Re=(2.6,3.6), w=0.3),
+      dict(Re=(2.8,3.8), w=0.4),
+      dict(Re=(3.2,4.2), w=0.8),
+      dict(Re=(3.6,4.6), w=1.6)))
 
   gen.startFile()
   #gen.doTests(n=args.n, **backpressure1args)
