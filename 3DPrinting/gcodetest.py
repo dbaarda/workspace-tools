@@ -430,8 +430,7 @@ class ExtrudeTest(gcodegen.GCodeGen):
     R1 = self.R1 - self.dRdC
     warmup = [
       dict(dC=1/72, vl=1, h=self.layer.h, w=self.layer.w, r=1.0),
-      dict(dC=2/72, vl=1, h=self.layer.h, w=self.layer.w, r=0.0),
-      dict(dC=1/72, vl=5, h=self.layer.h, w=self.layer.w, r=0.0)]
+      dict(dC=3/72, vl=1, h=self.layer.h, w=self.layer.w, r=0.0)]
     cooldn = [
       dict(dC=1/72, vl=1,  h=self.layer.h, w=self.layer.w, r=1.0)]
     lines = warmup + lines + cooldn
@@ -761,12 +760,12 @@ if __name__ == '__main__':
       dict(dl=20, vl='5', h='h', w='w', r=0),
       dict(dl=0, de='Re+Be')]
   spiralStartStopargs = dict(name="startstop", lines=startstopspirl,
-    ve=1.0, h=0.3, dynret=False, Be=0.4,
+    ve=1.0, h=0.3, dynret=False,
     tests=(
-      dict(Re=(2.6,3.6), w=0.3),
-      dict(Re=(2.8,3.8), w=0.4),
-      dict(Re=(3.2,4.2), w=0.8),
-      dict(Re=(3.6,4.6), w=1.6)))
+      dict(Re=(2.7,3.2), Be=0.9, w=0.3),
+      dict(Re=(2.9,3.4), Be=0.9, w=0.4),
+      dict(Re=(4.0,4.5), Be=0.5, w=0.8),
+      dict(Re=(4.2,4.7), Be=0.5, w=1.6)))
 
   gen.startFile()
   #gen.doTests(n=args.n, **backpressure1args)

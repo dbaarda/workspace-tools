@@ -1280,3 +1280,103 @@ have enough points to clearly nail down what is happening.
 I'm going to change the pressure model so that bead pressure maxes at 2x the
 nozzle width, and collect more points between w=0.4 and w=0.8 using
 Kf=2.0,Kb=3.0.
+
+## SpStartStopTest4
+
+I decided to repeat the previous test and just narrow in a bit more, adjust
+the warmup a little bit, and use the better Kf and Kb vlues. I wanted to
+quickly validate the previous results before moving on.
+
+A theory about why the backlash in the previous test was so different for
+test1&2 vs test3&4 is related to the warmup lines being more defined for
+test1&2 than test3&4 because of the vestigial pressure differences after the
+previous line's cooldown. What if this vesigial pressure difference is still
+significant after the warmup? That would mean the restore values in test1&2
+are under-measured, and possibly over-measured in test3&4. If the retract
+measurements are correct for all tests, then this would explain the apparently
+different backlash for the tests. The backlash for test1&2 is about 1mm and
+for test3&4 is about 0.4mm, but that difference of 0.6mm could be a 0.3mm
+restore under-measure in test1&2, and a 0.3mm over measure in test3&4.
+
+So the test warmup was changed to drain the nozzle longer, replacing the 1/72C of
+@10mm/s movement with another 1/73C of @1mm draining.
+
+* warmup
+  * 0mm: hopdn and restore to `pe=1.0`.
+  * 1/72C: draw at 1mm/s to prime nozzle.
+  * 3/72C: move at 1mm/s to drain nozzle.
+* test
+  * 0mm: restore with `de=<Re>` to apply pressure.
+  * 3s: draw at `de=<ve>,w=<w>` check line quality.
+  * 0mm: retract with `de=-<Re>` to relieve pressure.
+  * 20mm: move at `vl=5mm/s` to see if there is drool.
+  * 0mm: restore pressure with `de=<Re>` to what it was before retracting.
+* cooldown
+  * 5mm: draw at 5mm/s to finalize line and stabilize pressure.
+  * 0mm: retract and hopup with `pe=-1.5mm`.
+
+The tests were run with the cmdline;
+
+```bash
+$ ./gcodetest.py -Te=210 -Tp=50 -Fe=1.0 -Fc=1.0 -Kf=2.0 -Kb=3.0 -Re=1.0 -R >test.g
+```
+
+For the test arguments I zoomed in to 0.1mm Re difference per line centered on
+the previously measured values. The backlash is so different I've specified it
+individually for each test.
+
+* common args: ve=1.0, h=0.3, dynret=False
+* test1: Re=(2.7,3.2), Be=0.9, w=0.3
+* test2: Re=(2.9,3.4), Be=0.9, w=0.4
+* test3: Re=(4.0,4.5), Be=0.5, w=0.8
+* test4: Re=(4.2,4.7), Be=0.5 w=1.6
+
+The results were;
+
+![SpStartStopTest4 Result](SpStartStopTest4.jpg "SpStartStopTest4 Result")
+
+The commented version of gcode output for this is in
+[SpStartStopTest4_Te210Tp50Fe10Fc10Kf20Kb30Re10Rv.g](./SpStartStopTest4_Te210Tp50Fe10Fc10Kf20Kb30Re10Rv.g).
+
+### Observations.
+
+The dial almost identical to the previous test, which is a surprise given how
+different the cmdline arguments are. The reduced -Re=1.0 is compensating for
+the increased -Kf and -Kb to end up with almost the same retraction/restore
+distances for those lines.
+
+The starting text is worse than before. The increased Kf and Kb is more than
+compensating for the capping of bead backpressure to make the over-pressure
+estimation worse.
+
+The test lines are notable for how little difference there is between them. It
+seems +-0.25mm of restore doesn't make much difference when you are close to
+the right value.
+
+The warmup lines for test1&2 start less overextruded but taper down to about
+the same as the previous test, and the restore distances are pretty much
+identical. This suggests the was no vestigial overpressure before, and the
+slow drain worked. The retraction distances are also almost the same, if
+anything a tiny bit longer. I failed to center the retraction distances well
+because I was expecting them to drop a little but the didn't.
+
+The warmup lines for test3 were completely under-extruded except for the first
+after writing the test text. The restore distances seem slightly increased,
+probably because they are starting with a partial retraction. The retractions
+are all over retracted, but for the previous test it first retracted enough at
+4.5mm for this test that's where we started, so it's probably about the same.
+I failed to center this because I was expecting it to increase relative to the
+restore distance. Note that this means retract distance == restore distance,
+which strongly suggests the restore distances are incorrectly too high because
+of starting with a partial retraction.
+
+For test4 the warmup lines were about the same as the previous test run;
+almost non existent. The restore distances seem about the same, but the
+retraction distances increased pretty significantly. I suspect this is because
+in the previous test the lines never stabilized at the final target pressure,
+except for maybe the final line, but on that line the retraction was too
+high.
+
+I think we've not really probed the high-flow end to it's limits. The line
+lengths are too short to stabilize at those flow rates, and the cooldown
+leaves too much vestigial pressure mess for the next test line to be valid.
