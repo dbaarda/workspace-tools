@@ -1308,11 +1308,11 @@ So the test warmup was changed to drain the nozzle longer, replacing the 1/72C o
 * test
   * 0mm: restore with `de=<Re>` to apply pressure.
   * 3s: draw at `de=<ve>,w=<w>` check line quality.
-  * 0mm: retract with `de=-<Re>` to relieve pressure.
+  * 0mm: retract with `de=-(<Re>+><Be>)` to relieve pressure.
   * 20mm: move at `vl=5mm/s` to see if there is drool.
-  * 0mm: restore pressure with `de=<Re>` to what it was before retracting.
+  * 0mm: restore pressure with `de=(<Re>+<Be>)` to what it was before retracting.
 * cooldown
-  * 5mm: draw at 5mm/s to finalize line and stabilize pressure.
+  * 1/72C: draw at 1mm/s to finalize line and stabilize pressure.
   * 0mm: retract and hopup with `pe=-1.5mm`.
 
 The tests were run with the cmdline;
@@ -1380,3 +1380,81 @@ high.
 I think we've not really probed the high-flow end to it's limits. The line
 lengths are too short to stabilize at those flow rates, and the cooldown
 leaves too much vestigial pressure mess for the next test line to be valid.
+
+## SpStartStopTest5
+
+I decided to get some additional width datapoints for w=0.6 and w=1.2 and
+explore the higher restore distances for w=0.8 and w=1.6. To give the line
+longer to stabilize I extended it from 3s to 4s. To improve the
+cooldown I changed it to do a pressure-compensating restore with pe=3.0
+instead of restoring the whole end-of-line pressure and extrude for 3x longer
+to stabilize the pressure. This means the test is now;
+
+* warmup
+  * 0mm: hopdn and restore to `pe=1.0`.
+  * 1/72C: draw at 1mm/s to prime nozzle.
+  * 3/72C: move at 1mm/s to drain nozzle.
+* test
+  * 0mm: restore with `de=<Re>` to apply pressure.
+  * 4s: draw at `de=<ve>,w=<w>` check line quality.
+  * 0mm: retract with `de=-(<Re>+Be)` to relieve pressure.
+  * 20mm: move at `vl=5mm/s` to see if there is drool.
+* cooldown
+  * 0mm: restore pressure with `pe=3.0` to ensure we get flow but not too much.
+  * 3/72C: draw at 1mm/s to finalize line and stabilize pressure.
+  * 0mm: retract and hopup with `pe=-1.5mm`.
+
+The tests were run with the cmdline;
+
+```bash
+$ ./gcodetest.py -Te=210 -Tp=50 -Fe=1.0 -Fc=1.0 -Kf=1.0 -Kb=2.0 -Re=2.0 -R >test.g
+```
+
+For the test arguments I chose these;
+
+* common: ve=1.0, h=0.3, dynret=False
+* test1: Re=(3.4,4.4), Be=0.6, w=0.6
+* test2: Re=(4.0,5.0), Be=0.1, w=0.8
+* test3: Re=(4.1,5.1), Be=0.1, w=1.2
+* test4: Re=(4.2,5.2), Be=0.1, w=1.6
+
+The results were;
+
+![SpStartStopTest5 Result](SpStartStopTest5.jpg "SpStartStopTest5 Result")
+
+The commented version of gcode output for this is in
+[SpStartStopTest5_Te210Tp50Fe10Fc10Kf10Kb20Re20Rv.g](./SpStartStopTest4_Te210Tp50Fe10Fc10Kf10Kb20Re20Rv.g).
+
+### Observations.
+
+This is the cleanest test yet, and it finally has warmup and cooldown traces
+that give me enough trust that there are not vestigial pressure artifacts
+messing with the measurements.
+
+I've figured out the backlash enigma! At higher pressures and longer
+retraction distances the backlash relieves itself. The fillament momentum
+built up while retracting with assistance from the pressure carries it all the
+way through the backlash. This is why the retract distances equal the restore
+distances for w>=0.8.
+
+There is even a bit of retract distances less than the restore distances. At
+first I was thinking maybe there's some kind of startup-momentum-tax, and
+maybe there is, but a far more obvious thing I'd been missing is the initial
+blob extrusion. I include this in the gcodegen.py pressure model, but I'd
+forgotten about it in these tests. For the wider lines the initial blob has a
+significant volume which is immediately subtracted from the pressure.
+
+When we factor this in and plot the graphs for what we have so far, it looks
+like this;
+
+![SpStartStopTest3 Retract and Restore Distances](SpStartStopTest3Graph.png
+"SpStartStopTest3 Retract and Restore Distances")
+
+You can see the estimated pressure from the restore distance minus the initial
+bead almost exactly matches the retract distances for w>=0.8 because the
+backlash is fully resolved by the retracting momentum. For widths/pressures
+less than that there is a pretty linear increase in the backlash up to 1.3mm.
+
+A rough guestimate at the settings to match this is `Kf=1.6,Kb=3.2,Re=1.5`.
+This should slightly underestimate pressures by about the same amount for all
+widths, but give some additional retraction to take up the difference.

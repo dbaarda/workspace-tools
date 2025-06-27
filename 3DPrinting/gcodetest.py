@@ -303,7 +303,7 @@ class ExtrudeTest(gcodegen.GCodeGen):
     self.hopdn(x=x,y=y,**kwargs)
 
   def spiral(self, R=None, C=None, dR=None, dC=None, dRdC=None, x0=0.0, y0=0.0,
-      dl=None, de=None, dt=None, vl=None, ve=None, h=None, w=None, r=1.0):
+      dl=None, de=None, dt=None, vl=None, ve=None, h=None, w=None, r=1.0, pe=None):
     """ Draw a spiral around x0,y0.
 
     This draws a spiral from the current R0,C0 position to a position R,C. The
@@ -316,6 +316,9 @@ class ExtrudeTest(gcodegen.GCodeGen):
       if de is not None:
         # dl=0, de=<value> means apply a specific retract/restore distance.
         self.move(de=de, v=ve)
+      elif pe is not None:
+        # dl=0, pe=<value> means do a pressure compensating restore.
+        self.restore(pe=pe)
       elif h is not None:
         # dl=0, h=<value> means apply a generic hopup() or hopdn().
         self.hopup() if h > 0 else self.hopdn()
@@ -432,7 +435,8 @@ class ExtrudeTest(gcodegen.GCodeGen):
       dict(dC=1/72, vl=1, h=self.layer.h, w=self.layer.w, r=1.0),
       dict(dC=3/72, vl=1, h=self.layer.h, w=self.layer.w, r=0.0)]
     cooldn = [
-      dict(dC=1/72, vl=1,  h=self.layer.h, w=self.layer.w, r=1.0)]
+      dict(dl=0, pe=3.0),
+      dict(dC=3/72, vl=1,  h=self.layer.h, w=self.layer.w, r=1.0)]
     lines = warmup + lines + cooldn
     testargs = {k:self._getstep(ln, v) for k,v in kwargs.items()}
     assert any(dv for _,_,dv in testargs.values()), 'At least one arg in {kwargs} must be a range.'
@@ -755,17 +759,16 @@ if __name__ == '__main__':
   # ve=1.0 w=0.3, h=0.2 vl=1
   startstopspirl = [
       dict(dl=0, de='Re'),
-      dict(dt=3, ve='ve', h='h', w='w', r=1),
+      dict(dt=4, ve='ve', h='h', w='w', r=1),
       dict(dl=0, de='-(Re+Be)'),
-      dict(dl=20, vl='5', h='h', w='w', r=0),
-      dict(dl=0, de='Re+Be')]
+      dict(dl=20, vl=5, h='h', w='w', r=0)]
   spiralStartStopargs = dict(name="startstop", lines=startstopspirl,
     ve=1.0, h=0.3, dynret=False,
     tests=(
-      dict(Re=(2.7,3.2), Be=0.9, w=0.3),
-      dict(Re=(2.9,3.4), Be=0.9, w=0.4),
-      dict(Re=(4.0,4.5), Be=0.5, w=0.8),
-      dict(Re=(4.2,4.7), Be=0.5, w=1.6)))
+      dict(Re=(3.4,4.4), Be=0.6, w=0.6),
+      dict(Re=(4.0,5.0), Be=0.1, w=0.8),
+      dict(Re=(4.1,5.1), Be=0.1, w=1.2),
+      dict(Re=(4.2,5.2), Be=0.1, w=1.6)))
 
   gen.startFile()
   #gen.doTests(n=args.n, **backpressure1args)
