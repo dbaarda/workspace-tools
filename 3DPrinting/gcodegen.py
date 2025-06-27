@@ -840,6 +840,8 @@ class GCodeGen(object):
     l_l: current layer printed line length.
     l_e: current layer extruded filament length.
     pe: current extruder pressure or retraction.
+    pn: current nozzle pressure (property).
+    pb: current bead backpressure (property).
     eb: current extruded bead volume.
     db: current extruded bead diameter (property).
     vn: nozzle flow velocity (property).
@@ -948,6 +950,29 @@ M18
     self.GMove = GMove
     self.resetfile()
 
+  def Pb(self, db):
+    """Get the bead backpressure from db."""
+    return max(0.0, self.Kb*min(db,2*self.Nd))
+
+  def Pn(self, vn):
+    """Get the nozzle pressure from nozzle extrude velocity."""
+    return max(0.0, self.Kf*vn)
+
+  def Pe(self, vn, db):
+    """ Get pressure advance pe for target vn and db. """
+    return self.Pn(vn) + self.Pb(db)
+
+  @property
+  def pn(self):
+    """ The current nozzle pressure."""
+    # Get nozzle pressure from pe minus pb.
+    return max(0.0, self.pe - self.pb)
+
+  @property
+  def pb(self):
+    """ The current bead backpressure."""
+    return self.Pb(self.db)
+
   @property
   def db(self):
     """ Get the current bead diameter from the bead volume."""
@@ -959,10 +984,7 @@ M18
   @property
   def vn(self):
     """Get nozzle flow velocity from the nozzle pressure and back pressure."""
-    pe, db = self.pe, self.db
-    pb = max(0.0, self.Kb*db)            # bead backpressure.
-    pn = max(0.0, pe - pb)               # nozzle pressure.
-    return pn/self.Kf if self.Kf else self.ve if pe>=pb else 0.0
+    return self.pn/self.Kf if self.Kf else self.ve if self.pe>=self.pb else 0.0
 
   @property
   def w(self):
@@ -1021,14 +1043,11 @@ M18
     # Note filament doesn't get sucked back into the nozzle if the pressure
     # advance is negative, and the bead cannot give negative backpressure.
     # Get filament extruded into the nozzle and height.
-    pe, eb, db, h = self.pe, self.eb, self.db, self.h
-    pe += de
-    pb = max(0, self.Kb * db)                 # bead backpressure.
-    pn = max(0, pe - pb)                      # nozzle pressure.
-    en = pn * dt/(self.Kf + dt)               # filament extruded out the nozzle.
-    el = min(db * h * dl / self.Fa, eb + en)  # fillament removed from bead to line,
-    self.pe = pe - en
-    self.eb = max(0.0, eb + en - el)
+    self.pe += de
+    en = self.pn * dt/(self.Kf + dt)          # filament extruded out the nozzle.
+    el = min(self.db * self.h * dl / self.Fa, self.eb + en)  # fillament removed from bead to line,
+    self.pe -= en
+    self.eb = max(0.0, self.eb + en - el)  # Need to make sure float errors don't make this negative.
     self.dt += dt
     self.de += de
     self.en += en
@@ -1220,17 +1239,15 @@ M18
       # self.log(f'adjusting {c} for {pe=:.4f} {eb=:.4f}')
       # Using P control with Kp=0.8 for restores was contributing to
       # underrestores without dynext, so only do that if dynext is on.
-      if self.dynext:
-        m = m.change(de=0.8*pe - self.pe + eb)
-      else:
-        m = m.change(de=pe - self.pe + eb)
+      if self.dynext: pe *= 0.8
+      m = m.change(de=pe - self.pe + eb)
       # If de is zero, skip adding this.
       if not m.de:
         self.log('skipping empty restore.')
         return
     elif m.isdraw and self.dynext:
       # For calculating the pressure pe needed, use the ending ve1.
-      pe = self._calc_pe(m.ve1, m.db)
+      pe = self.Pe(m.ve1, m.db)
       # Adjust de to include required change in pe over the move.
       # self.log(f'adjusting {c} {c.ve=:.4f}({c.ve0:.4f}<{c.vem:.4f}>{c.ve1:.4f}) {c.isaccel=}')
       # TODO: This tends to oscillate, change to a PID or PD controller.
@@ -1446,12 +1463,6 @@ M18
     """ Do a pause. """
     self.cmd('G4', P=round(t*1000))
 
-  def _calc_pe(self, ve, db):
-    """ Get steady-state pressure advance pe needed for target ve and db. """
-    pn = max(0, self.Kf*ve)
-    pb = max(0, self.Kb*db)
-    return pn+pb
-
   def _getNextPeEb(self):
     "Get pe and eb for the next draws."
     dt = dl = vedl = dbdl = eb = 0.0
@@ -1469,7 +1480,7 @@ M18
         if self.dynext: break
     if dl:
       # Calculate pe using the line-average ve and db.
-      return self._calc_pe(vedl/dl, dbdl/dl), eb
+      return self.Pe(vedl/dl, dbdl/dl), eb
     return 0.0, 0.0
 
   def modjoin(self):
