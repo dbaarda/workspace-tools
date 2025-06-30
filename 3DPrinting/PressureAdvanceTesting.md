@@ -1458,3 +1458,197 @@ less than that there is a pretty linear increase in the backlash up to 1.3mm.
 A rough guestimate at the settings to match this is `Kf=1.6,Kb=3.2,Re=1.5`.
 This should slightly underestimate pressures by about the same amount for all
 widths, but give some additional retraction to take up the difference.
+
+
+## SpStartStopTest6
+
+Just one more test to validate the last conclusions I thought. It all looked
+great, the dial is nearly perfect, the first two tests exactly matched, then
+the third... and forth. Sigh.
+
+The tests were run with the cmdline;
+
+```bash
+$ ./gcodetest.py -Te=210 -Tp=50 -Fe=1.0 -Fc=1.0 -Kf=1.6 -Kb=3.2 -Re=1.5 -R >test.g
+```
+
+For the test arguments I chose these;
+
+* common: ve=1.0, h=0.3, dynret=False
+* test1: Re=(2.7,3.7), Be=1.1, w=0.4
+* test2: Re=(3.5,4.5), Be=0.4, w=0.6
+* test3: Re=(4.0,5.0), Be=0.0, w=0.8
+* test4: Re=(4.5,5.5), Be=-0.2, w=1.6
+
+The results were;
+
+![SpStartStopTest6 Result](SpStartStopTest6.jpg "SpStartStopTest6 Result")
+
+The commented version of gcode output for this is in
+[SpStartStopTest6_Te210Tp50Fe10Fc10Kf16Kb32Re15Rv.g](./SpStartStopTest6_Te210Tp50Fe10Fc10Kf16Kb32Re15Rv.g).
+
+### Observations
+
+The cooldowns for test three and four completely failed to print anything
+apart from a tiny whisp at the end of the last line of test4. The figures
+chosen were expected to under-estimate the pressure for thicker lines, and yet
+it looks like it severly over-estimated them.
+
+I've got three theories for what is happening;
+
+1. The extruder is slipping or skipping, either in restores when re-applying
+   pressure, or (more likely?) during the draw under high pressure, or when
+   retracting failing to stop at the end of retraction when the momentum of
+   the filament hits the end of the backlash (most likely). Note we are
+   retracting at 40mm/sec which might be too high.
+
+2. The pressure at the end of the line is lower than predicted because more
+   filament bleeds out into the line during deceleration and the ending dot
+   during retraction. I've assumed extra filament is needed for the starting
+   dot in restores which does seem to be reflected in the tests so far, but
+   actually a half-dot is required at the start and end of the line. During
+   restore the extra half-dot is extra pressure which bleeds away during the
+   line as it converges on the steady-state extrusion rate and pressure. At the end
+   of the line the deceleration phase decelerates the ve extrusion rate while
+   the existing pressure pushes out too much filament giving you the classic
+   no-PA thick-line-end artifact, which also reduces the pressure below the
+   line's steady-state pressure. Finally during the retract the excess
+   pressure continues to push out filament that completes the end-of-line
+   half-dot. This all means more filament is pushed out at the end-of-line
+   than we've accounted for, which significantly lowers the final pressure
+   below the line's steady-state pressure. The current model should account
+   for the deceleration phase extra extrusion, but the restore/retract part of
+   the model doesn't include extruder acceleration limits, so it
+   under-estimates the extrusion during those actions.
+
+3. The firmware is doing it's own fiddling with the extrusion rates that our
+   model doesn't know about. The Adventurer3 doesn't appear to support PA, but
+   it might include it's own internal primitive attempts to do the same thing.
+   As a boden printer it's highly vulnerable to PA artifacts, and although they
+   are visible, it does do remarkably well most of the time. Maybe it does so
+   well because it does include some PA compensation?
+
+Or it could be a combination of these factors. I suspect at least 2 is
+contributing and needs to be addressed. We need to look closer at these to see
+whats going on. Looking closely at test4 line0 as an example;
+
+PA settings: Kf,Kb,Re=1.6,3.2,1.5
+Test4 line0: ve=1.0 dynret=0 Re=4.5 Be=-0.2 h=0.3 w=1.6 r=1.0
+
+Previous testing suggests this requires a 5.0mm restore and 4.8mm retract,
+with a 0.25mm bead suggesting Pe=4.75mm during steady-state-draw. The Pa
+settings used should estimate Pe=4.16mm with 4.41mm restore and 5.66mm retract.
+
+test line: spiral RC0=(55.9,-0.444) dRC=(-0.1,0.057) dl=20.0@5 de=4.000@1.0 l=0.30x1.60x1.00
+vl = ve*Fa/(h*w*r) = 5.01
+eb = h*pi*(w/2)**2/Fa = 0.251
+Pn,Pb = Kf*ve,min(w,0.8)*Kb = 1.600, 2.560
+Pe = Pn+Pb = 4.160
+-(Re + Be) = -4.3
+
+cooldown line: spiral RC0=(55.7,-0.330) dRC=(-0.1,0.042) dl=14.6@1 de=0.908@0.1 l=0.30x0.50x1.00
+vl=1
+h,w,r=0.3,0.5,1.0
+ve = vl*h*w*r/Fa = 0.062
+eb = h*pi*(w/2)**2 = 0.059
+Pn,Pb = Kf*ve,min(w,0.8)*Kb = 0.100, 1.600
+Pe = Pn+Pb = 1.700
+-(Re + Be) = -2.7
+
+The verbose gcode output trimmed to only include relevant details and annotated looks like this;
+
+```gcode
+;00:18:58.246: pe=-1.5041 eb=0.0000 ve=0.0000 vn=0.0000 vl=0.000 db=0.00
+; 1. This is the restore before the warmup extrude line.
+G1 E233.5891 F1800                      ; restore de=2.5001@30.0 r=0.40
+;00:18:58.330: pe=0.9920 eb=0.0040 ve=30.0000 vn=0.2177 vl=0.000 db=0.20
+; 2. This is the warmup extrude line. This extruded OK for the first line.
+;00:18:58.330: spiral RC0=(56.0,0.500) dRC=(-0.0,0.014) dl=4.9@1 de=0.305@0.1 l=0.30x0.50x1.00
+G1 X-55.76 Y-4.88 E233.8937 F60         ; draw dl=4.9@1(0<1>1) de=0.305@0.06(0.0<0.06>0.06) l=0.30x0.50x1.00 r=0.64
+;00:19:03.215: pe=1.1030 eb=0.0103 ve=0.0624 vn=0.0408 vl=1.000 db=0.32
+; 3. This is the warmup drain line. It had a thin trail to the start of the test line.
+;00:19:03.215: spiral RC0=(56.0,-0.486) dRC=(-0.1,0.042) dl=14.6@1 de=0.000@0.0 l=0.30x0.50x0.00
+...
+;00:19:17.854: pe=0.6493 eb=0.0036 ve=0.0000 vn=0.0223 vl=0.000 db=0.19
+; 4. This is the restore before the test line. It looked under-restored for this line.
+G1 E238.3937 F1800                      ; restore de=4.5000@30.0 r=2.10
+;00:19:18.004: pe=5.0451 eb=0.1078 ve=30.0000 vn=1.5532 vl=0.000 db=1.05
+; 5. This is the test line. It got thicker as it went and looked about right at the end.
+;00:19:18.004: spiral RC0=(55.9,-0.444) dRC=(-0.1,0.057) dl=20.0@5 de=4.000@1.0 l=0.30x1.60x1.00
+...
+G1 X-42.37 Y-36.27 E242.3926            ; draw dl=0.6@5(5<5>0) de=0.111@0.96(1.0<1.0>0.0) l=0.30x1.60x1.00 r=1.09
+;00:19:22.013: pe=4.2269 eb=0.2913 ve=0.0000 vn=1.0418 vl=0.000 db=1.72
+; 6. This is the retract at the end of the test line. It looked clean.
+G1 E238.0926 F2400                      ; retract de=-4.3000@-40.0 r=1.12
+;00:19:22.120: pe=-0.0939 eb=0.3122 ve=-40.0000 vn=0.0000 vl=0.000 db=1.79
+; 7. This is the cooldown drool check line. It showed no drool.
+;00:19:22.120: spiral RC0=(55.8,-0.387) dRC=(-0.1,0.057) dl=20.0@5 de=0.000@0.0 l=0.30x1.60x0.00
+...
+;00:19:26.129: pe=-0.0939 eb=0.0000 ve=0.0000 vn=0.0000 vl=0.000 db=0.00
+; 8. This is the restore before the cooldown draw line. There is no sign any extrusion for this.
+G1 E239.2061 F1800                      ; restore de=1.1136@30.0 r=0.13
+;00:19:26.166: pe=1.0155 eb=0.0042 ve=30.0000 vn=0.2230 vl=0.000 db=0.21
+; 9. This is the cooldown draw line. There is no sign of any extrusion for this.
+;00:19:26.166: spiral RC0=(55.7,-0.330) dRC=(-0.1,0.042) dl=14.6@1 de=0.908@0.1 l=0.30x0.50x1.00
+...
+G1 X-13.32 Y-53.96 E240.1139            ; draw dl=4.8@1(1<1>0) de=0.302@0.06(0.06<0.06>0.0) l=0.30x0.50x1.00 r=0.74
+;00:19:40.725: pe=1.2921 eb=0.0142 ve=0.0000 vn=0.0464 vl=0.000 db=0.38
+; 10. This is the retract at the end of the whole test line. Again, nothing extruded.
+G1 E237.3332 F2400                      ; retract de=-2.7807@-40.0 r=0.76
+;00:19:40.794: pe=-1.4886 eb=0.0142 ve=-40.0000 vn=0.0000 vl=0.000 db=0.38
+; ----------------------------------------------
+; This is the start of the next test line.
+;00:19:40.823: Test Line startstop ve=1.0 h=0.3 dynret=0 Re=4.7 Be=-0.2 w=1.6
+; 11. This is the restore before the warmup draw. There is a bit of drool mess here.
+G1 E239.8332 F1800                      ; restore de=2.5000@30.0 r=0.41
+;00:19:41.811: pe=1.0073 eb=0.0041 ve=30.0000 vn=0.2212 vl=0.000 db=0.20
+; 12. This is the warmup draw. There is a faint drool line after the restore mess.
+;00:19:41.811: spiral RC0=(54.0,0.500) dRC=(-0.0,0.014) dl=4.7@1 de=0.294@0.1 l=0.30x0.50x1.00
+G1 X-53.77 Y-4.70 E240.1269 F60         ; draw dl=4.7@1(0<1>1) de=0.294@0.06(0.0<0.06>0.06) l=0.30x0.50x1.00 r=0.64
+;00:19:46.521: pe=1.1120 eb=0.0105 ve=0.0624 vn=0.0412 vl=1.000 db=0.33
+; 13. This is the warmup drain line. A faint drool line to the start of the line.
+;00:19:46.521: spiral RC0=(54.0,-0.486) dRC=(-0.1,0.042) dl=14.1@1 de=0.000@0.0 l=0.30x0.50x0.00
+;00:20:00.637: pe=0.6672 eb=0.0038 ve=0.0000 vn=0.0230 vl=0.000 db=0.20
+; 14. This is the restore before the test line. It looks a little bit under-restored.
+G1 E244.8269 F1800                      ; restore de=4.7000@30.0 r=2.21
+;00:20:00.794: pe=5.2514 eb=0.1196 ve=30.0000 vn=1.6821 vl=0.000 db=1.11
+```
+
+The E239.2061 after the restore for the cooldown draw at 8. is -3.1865 behind
+E242.3926 a the end of the test line at 5. However, earlier testing suggests
+the line's steady state pressure was pe=4.75mm, so assuming that was the
+pressure at 5. means the pressure at 9. should have been
+pe=4.75-3.1865=1.5635mm, which should have been enough to start even just a
+drool line at 1mm/s. By the end of the cooldown draw at 9. we are at E240.1139
+where the pressure should have advanced to pe=4.75-2.2787=2.4713mm and still
+no line. Only at the restore before the next test line do we see that there
+was some drool mess, suggesting there had been some extrusion during the
+cooldown draw, but not enough to touch the bed at even 1mm/sec.
+
+Note the PA settings of `Kf=1.6,Kb=3.2` were expected to estimate the steady
+state pressure lower at `pe=4.16mm`, and we see at the end of the test line it
+reports `pe=4.2269` which is pretty close but higher because it sees the bead
+diameter as `db=1.72` larger than the target `w=1.6mm`, and also sees
+`vn=1.0418` which is larger than the target `vn=1.0mm`. The bead being larger
+makes sense as the no-PA artifact, but `vn` should be lower.
+
+Looking closer this is because the restore includes the whole initial bead but
+because it doesn't include extruder acceleration/deceleration phases it
+underestimates the time so the extruded bead is modeled as reaching only
+`db=1.05` which means the line starts over-pressure. Although the pressure
+does decay towards the steady-state pressure, it's still over-pressure at the
+end of the line, hence `vn` is still over the target `vn=1` flow rate. The
+retraction model has an additional de=0.021 of extrusion into the bead, but
+that is also underestimated because the retraction time is underestimated.
+
+This all suggests the pressure after retracting at the end of the test line
+draw is over estimated by 1mm to 2mm, which means our retraction should be
+lower than the previous tests suggest. But what changed since the last test?
+The only things that changed were slightly higher Re values and lower Be
+values to try and center the tests better, the different Kf and Kb values, and
+the reduced cooldown draw restore from pe=3.0 to pe=1.0. I think maybe the
+higher cooldown restore was boosting the pressure between tests so maybe they
+all just ran at higher pressures than estimated?
+
+I think we need to repeat the previous test to find what the retract/restore
+distances are with these settings.
