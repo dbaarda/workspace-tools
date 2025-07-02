@@ -1466,6 +1466,9 @@ Just one more test to validate the last conclusions I thought. It all looked
 great, the dial is nearly perfect, the first two tests exactly matched, then
 the third... and forth. Sigh.
 
+For the test sequence the only change is I reduced the restore for the
+cooldown draw from pe=3.0 to pe=1.0 because it was very over-extruded.
+
 The tests were run with the cmdline;
 
 ```bash
@@ -1652,3 +1655,71 @@ all just ran at higher pressures than estimated?
 
 I think we need to repeat the previous test to find what the retract/restore
 distances are with these settings.
+
+## SpStartStopTest7
+
+This was a re-run of previous tests to validate them with some tiny changes.
+For the test sequence the only change is I increased the restore for the
+cooldown draw from pe=1.0 to pe=2.0 because it failed to render before and in
+retrospect pe=2.0 is what would be required for a l=0.3x0.5x1.0 line even at
+1mm/sec.
+
+The tests were run with the same cmdline;
+
+```bash
+$ ./gcodetest.py -Te=210 -Tp=50 -Fe=1.0 -Fc=1.0 -Kf=1.6 -Kb=3.2 -Re=1.5 -R >test.g
+```
+
+For the test arguments I chose these;
+
+* common: ve=1.0, h=0.3, dynret=False
+* test1: Re=(4.0,5.0), Be=-0.1, w=0.8
+* test2: Re=(4.1,5.1), Be=-0.2, w=1.0
+* test3: Re=(4.2,5.2), Be=-0.3, w=1.2
+* test4: Re=(4.5,5.5), Be=-0.5, w=1.6
+
+The results were;
+
+![SpStartStopTest7a Result](SpStartStopTest7a.jpg "SpStartStopTest7a Result")
+
+Because I was concerned that maybe the bowden tube setup from my drybox to the
+printer was causing too much friction I removed most of it and re-ran the test
+with this result;
+
+![SpStartStopTest7b Result](SpStartStopTest7b.jpg "SpStartStopTest7b Result")
+
+The commented version of gcode output for this is in
+[SpStartStopTest7_Te210Tp50Fe10Fc10Kf16Kb32Re15Rv.g](./SpStartStopTest7_Te210Tp50Fe10Fc10Kf16Kb32Re15Rv.g).
+
+### Observations
+
+I dunno what's happening with retractions, but it seems like every test I run
+I need less and less.
+
+The second run with the reduced drybox bowden path is very similar but shows
+no retraction drool after the test line for any test, even when only
+retracting 4.0mm after a w=1.6 line.
+
+The cooldown lines look OK, but the warmup lines are nearly missing. I note
+the Adventurer3's side blowing fan seems to be blowing the thin drool to one
+side so it's not sticking to the bed. This gives different drool results
+depending on the line angle, and possibly also the previous extrusion rates
+since the fan speed varies with how hot the hotend heatbreak is.
+
+I keep re-discovering the fact that 1mm/sec lines are too slow for a
+meaningful draw, and are probably only useful for checking/draining vestigial
+pressure.
+
+The other thing is the lines all look really similar, with the only clear
+things being a restore less than de=4.4 is too little for w=0.8, and more than
+de=5.1 is too much for w=1.6. With the model assumption that the bead
+backpressure flatlines after w is 2x the nozzle diameter, this kinda makes
+sense since the required restore differences are reduced to the initial bead
+size and any over/under pressure is spread over the line for the next Kf*pi
+seconds which is somewhere between 1.5 to 6 seconds. With fixed ve that means
+the distance gets longer as the target w gets smaller, so it looks about the
+same for the different target widths. At vl=5mm/s,h=0.3, 0.5mm of
+over-restore spread over 4secs of line makes it only 12% wider.
+
+I think this is enough bead backpressure testing. Time to see how things vary
+with flowrate ve to get a better estimate for Kf.

@@ -435,7 +435,7 @@ class ExtrudeTest(gcodegen.GCodeGen):
       dict(dC=1/72, vl=1, h=self.layer.h, w=self.layer.w, r=1.0),
       dict(dC=3/72, vl=1, h=self.layer.h, w=self.layer.w, r=0.0)]
     cooldn = [
-      dict(dl=0, pe=1.0),
+      dict(dl=0, pe=2.0),
       dict(dC=3/72, vl=1,  h=self.layer.h, w=self.layer.w, r=1.0)]
     lines = warmup + lines + cooldn
     testargs = {k:self._getstep(ln, v) for k,v in kwargs.items()}
@@ -765,10 +765,10 @@ if __name__ == '__main__':
   spiralStartStopargs = dict(name="startstop", lines=startstopspirl,
     ve=1.0, h=0.3, dynret=False,
     tests=(
-      dict(Re=(2.7,3.7), Be=1.1, w=0.4),
-      dict(Re=(3.5,4.5), Be=0.4, w=0.6),
-      dict(Re=(4.0,5.0), Be=0.0, w=0.8),
-      dict(Re=(4.5,5.5), Be=-0.2, w=1.6)))
+      dict(Re=(4.0,5.0), Be=-0.1, w=0.8),
+      dict(Re=(4.1,5.1), Be=-0.2, w=1.0),
+      dict(Re=(4.2,5.2), Be=-0.3, w=1.2),
+      dict(Re=(4.5,5.5), Be=-0.5, w=1.6)))
 
   gen.startFile()
   #gen.doTests(n=args.n, **backpressure1args)
