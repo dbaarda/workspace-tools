@@ -399,9 +399,11 @@ class ExtrudeTest(gcodegen.GCodeGen):
     R0+=self.dRdC; R1-=self.dRdC
     # Do tests
     Rl,Cl = R0,C0
-    self.dialStart(Cl)
     for tn,t in enumerate(tests):
       self.settings([0,-30,-30,0][tn],[25,25,0,0][tn], **t)
+      # Draw the dial start if this is the outer radius test.
+      if Rl == R0:
+        self.dialStart(Cl)
       self.doSpiralTest(tn, name, Rl, Cl, lines, ln, **(kwargs|t))
       # Get the R,C position of the end of the last test and updated it for the next test.
       Rf,Cf = self.xy2rc()
@@ -412,7 +414,6 @@ class ExtrudeTest(gcodegen.GCodeGen):
         # Start next test on the next quarter.
         Rl,Cl = R0, roundup(Cf,1/4)
         if Cl >= 1: break
-        self.dialStart(Cl)
     self.endLayer()
 
   def doSpiralTest(self, tn, name, R, C, lines=None, ln=5, **kwargs):
@@ -432,15 +433,21 @@ class ExtrudeTest(gcodegen.GCodeGen):
     """
     R1 = self.R1 - self.dRdC
     warmup = [
-      dict(dC=1/72, vl=1, h=self.layer.h, w=self.layer.w, r=1.0),
+      dict(dC=1/72, vl=5, h=self.layer.h, w=self.layer.w, r=1.0),
       dict(dC=3/72, vl=1, h=self.layer.h, w=self.layer.w, r=0.0)]
     cooldn = [
-      dict(dl=0, pe=2.0),
-      dict(dC=3/72, vl=1,  h=self.layer.h, w=self.layer.w, r=1.0)]
+      dict(dl=0, pe=2.5),
+      dict(dC=3/72, vl=5,  h=self.layer.h, w=self.layer.w, r=1.0)]
     lines = warmup + lines + cooldn
     testargs = {k:self._getstep(ln, v) for k,v in kwargs.items()}
     assert any(dv for _,_,dv in testargs.values()), 'At least one arg in {kwargs} must be a range.'
     self.log(f'Test{tn} {name} {self._fset(**kwargs)}')
+    # Adjust the retraction from the last hopup to what it would be for a
+    # de=-5.0 retraction from the last pre-test draw. This is the retraction
+    # performed after each line cooldown, which we try to match for the start
+    # of the first line. For vl=5mm/s ve=0.5mm/s l=0.3x0.5x1.0 and Kf=1.6,
+    # Kb=3.2 we get pe=2.5, so a de=-0.5 retract should have pe=-2.5.
+    self.retract(pe=-2.5)
     # Push the config arguments without applying changes before the test.
     self.pushconf()
     self.cmt(f'structure:shell-inner')
@@ -450,14 +457,14 @@ class ExtrudeTest(gcodegen.GCodeGen):
       confargs={k:v for k,v in lineargs.items() if k in self._CONF_ARGS}
       self.log(f'Test Line {name} {self._fset(**lineargs)}')
       self.setconf(**confargs)
-      self.hopdnrc(R,C, h=lineargs.get('h',self.layer.h), pe=1.0)
+      self.hopdnrc(R,C, h=lineargs.get('h',self.layer.h), de=5.0)
       for l in lines:
         # Replace any name values in l with the corresponding value in lineargs.
         sargs={k:(eval(v,locals=lineargs) if isinstance(v,str) else v) for k,v in l.items()}
         self.spiral(dRdC=self.dRdC,**sargs)
         R, _ = self.xy2rc()
         if R <= R1: break
-      self.hopup(pe=-1.5)
+      self.hopup(de=-5.0)
       # Get the R,C position of the start of the next 1/4 spiral
       R = roundup(R,self.dRdC)
       # Update the testargs for the next lines.
