@@ -223,9 +223,10 @@ def acircle(d):
 
 def solveqe(a,b,c):
   """ Return the two roots of a quadratic eqn. """
-  d = 0.5/a
-  v1 = -b*d
-  v2 = sqrt(b**2 - 4*a*c)*d
+  # (-b +- sqrt(b^2 - 4*a*c))/(2*a)
+  d = 0.5/a   # 1/(2*a)
+  v1 = -b*d   # -b/(2*a)
+  v2 = sqrt(b**2 - 4*a*c)*d  # sqrt(b^2 - 4*a*c)/(2*a)
   return v1 - v2, v1 + v2
 
 
