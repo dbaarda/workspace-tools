@@ -266,6 +266,7 @@ class Move(MoveBase):
   Ae = 1000 # extruder acceleration in mm/s^2.
   Ve = 40   # extruder max velocity in mm/s.
   Gp = 0.1  # printer cornering deviation distance in mm.
+  Je = 1.0  # extruder "jerk" speed deviation in mm/s.
   Fa = acircle(Fd)  # Fillament area in mm^2.
   Na = acircle(Nd)  # Nozzle area in mm^2.
   # These are constant middle phase acceleration and velocity change attributes.
@@ -274,9 +275,9 @@ class Move(MoveBase):
   # The cached properties that depend on velocity attributes.
   __vprops = frozenset('vm dt dt0 dt1 dtm dl0 dl1 dlm ve0 vem ve1 de0 dem de1'.split())
 
-  def __init_subclass__(cls, Fd=Fd, Nd=Nd, Ap=Ap, Vp=Vp, Gp=Gp):
+  def __init_subclass__(cls, Fd=Fd, Nd=Nd, Ap=Ap, Vp=Vp, Gp=Gp, Ae=Ae, Ve=Ve, Je=Je):
     super().__init_subclass__()
-    cls.Fd, cls.Nd, cls.Ap, cls.Vp, cls.Gp = Fd, Nd, Ap, Vp, Gp
+    cls.Fd, cls.Nd, cls.Ap, cls.Vp, cls.Gp, cls.Ae, cls.Ve, cls.Je = Fd, Nd, Ap, Vp, Gp, Ae, Ve, Je
     cls.Fa = acircle(Fd)
     cls.Na = acircle(Nd)
 
@@ -308,8 +309,8 @@ class Move(MoveBase):
     dz, dl, de, h, w, r = self.dz, self.dl, self.de, self.h, self.w, self.r
     v, v0, v1, vm = round(self.v), round(self.v0), round(self.v1), round(self.vm)
     ve, ve0, ve1, vem = round(self.ve, 2), round(self.ve0, 2), round(self.ve1, 2), round(self.vem, 2)
-    estr = f'{de=:.3f}@{ve}({ve0}<{vem}>{ve1})'
-    lstr = f'{dl=:.1f}@{vl}({v0}<{vm}>{v1})'
+    estr = f'{de=:.4f}@{ve}({ve0}<{vem}>{ve1})'
+    lstr = f'{dl=:.1f}@{v}({v0}<{vm}>{v1})'
     gostr=f'{lstr} {estr} l={h:.2f}x{w:.2f}x{r:.2f}'
     if self.isdraw:
       return f'draw {gostr}'
@@ -687,6 +688,19 @@ class Move(MoveBase):
     vmax = sqrt(self.Ap*R)
     return min(vmax, self.v, m.v)
 
+  def extruderv(self, m):
+    """ Calculate the max velocity for extruder 'jerk' between two moves.
+
+    This calculates the max velocity between two moves so extrusion velocity
+    ve changes instantly by at most `Je`. We ignore dz as insignificant and
+    use horizontal velocities only. This matches the marlin 'jerk' mechanism
+    for handling sudden extruder velocity changes.
+    """
+    # vmax = Je/abs(self.de/self.dl - m.de/m.dl)
+    dedl = abs(self.de*m.dl - m.de*self.dl)
+    vmax = self.Je*self.dl*m.dl/dedl if dedl else inf
+    return min(vmax, self.v, m.v)
+
   def join(self, m):
     """ Add two moves together. """
     return self.change(dx=self.dx+m.dx, dy=self.dy+m.dy, dz=self.dz+m.dz,
@@ -745,12 +759,12 @@ class Move(MoveBase):
     provided velocities or moves if necessary to fit within the Ap
     acceleration and deceleration limits.
 
-    if m0 is set the v0 start velocity is set to the corner velocity.
-    If m1 is set the v1 end velocity is set to the corner velocity.
+    if m0 is set the v0 start velocity is set to the max corner/extruder velocity.
+    If m1 is set the v1 end velocity is set to the max corner/extruder velocity.
     If v0, or v1 are still not set they default to 0.0.
     """
-    if m0 is not None: v0 = m0.cornerv(self)
-    if m1 is not None: v1 = self.cornerv(m1)
+    if m0 is not None: v0 = min(m0.cornerv(self), m0.extruderv(self))
+    if m1 is not None: v1 = min(self.cornerv(m1), self.extruderv(m1))
     dl = self.dl
     if not dl:
       # A stop move, v0, v1, and vm are zero.
@@ -1179,9 +1193,8 @@ M18
     h1 = self.h + m.dz
     # Check that the start states are as expected.
     assert isneareq(self.vl, m.v0)
-    # TODO(abo): add proper support for ve1->ve0 transition between moves.
-    self.ve = m.ve0 # hack to jump ve from the previous ve1 to ve0.
-    assert isneareq(self.ve, m.ve0), f'{self.ve=} {m.ve0=} {self.m!s} -> {m!s}'
+    assert isnearle(abs(self.ve - m.ve0), self.GMove.Je), f'{self.ve=} {m.ve0=} {self.m!s} -> {m!s}'
+    self.ve = m.ve0 # "jerk" ve from the previous ve1 to ve0.
     # Update the state for the three move phases.
     if m.dt0: self.incstate(m.dt0, m.dl0, m.de0, m.dh0, m.dv0, m.dve0)
     if m.dtm: self.incstate(m.dtm, m.dlm, m.dem, m.dhm, m.dvm, m.dvem)
