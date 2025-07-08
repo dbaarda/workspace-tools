@@ -163,7 +163,7 @@ Re=3.0
 import argparse
 import re
 import sys
-from math import e, pi, inf, sqrt
+from math import e, pi, inf, sqrt, copysign
 import vtext
 from typing import NamedTuple
 from functools import cached_property
@@ -263,19 +263,22 @@ class Move(MoveBase):
   Nd = 0.4   # Nozzle diameter.
   Ap = 500  # printer acceleration in mm/s^2.
   Vp = 100  # printer max velocity in mm/s.
+  Ae = 1000 # extruder acceleration in mm/s^2.
+  Ve = 40   # extruder max velocity in mm/s.
   Gp = 0.1  # printer cornering deviation distance in mm.
   Fa = acircle(Fd)  # Fillament area in mm^2.
   Na = acircle(Nd)  # Nozzle area in mm^2.
+  # These are constant middle phase acceleration and velocity change attributes.
+  am = aem = dvm = dvem = 0.0
 
   # The cached properties that depend on velocity attributes.
-  __vprops = frozenset('vm dt dt0 dt1 dtm dl0 dl1 dlm'.split())
+  __vprops = frozenset('vm dt dt0 dt1 dtm dl0 dl1 dlm ve0 vem ve1 de0 dem de1'.split())
 
   def __init_subclass__(cls, Fd=Fd, Nd=Nd, Ap=Ap, Vp=Vp, Gp=Gp):
     super().__init_subclass__()
     cls.Fd, cls.Nd, cls.Ap, cls.Vp, cls.Gp = Fd, Nd, Ap, Vp, Gp
     cls.Fa = acircle(Fd)
     cls.Na = acircle(Nd)
-    cls.a0, cls.a1, cls.am = Ap, -Ap, 0.0
 
   def __new__(cls, *args, v0=None, v1=None, **kwargs):
     """ Create a new Move. """
@@ -305,7 +308,9 @@ class Move(MoveBase):
     dz, dl, de, h, w, r = self.dz, self.dl, self.de, self.h, self.w, self.r
     v, v0, v1, vm = round(self.v), round(self.v0), round(self.v1), round(self.vm)
     ve, ve0, ve1, vem = round(self.ve, 2), round(self.ve0, 2), round(self.ve1, 2), round(self.vem, 2)
-    gostr=f'{dl=:.1f}@{v}({v0}<{vm}>{v1}) {de=:.3f}@{ve}({ve0}<{vem}>{ve1}) l={h:.2f}x{w:.2f}x{r:.2f}'
+    estr = f'{de=:.3f}@{ve}({ve0}<{vem}>{ve1})'
+    lstr = f'{dl=:.1f}@{vl}({v0}<{vm}>{v1})'
+    gostr=f'{lstr} {estr} l={h:.2f}x{w:.2f}x{r:.2f}'
     if self.isdraw:
       return f'draw {gostr}'
     elif self.ishopup:
@@ -313,9 +318,9 @@ class Move(MoveBase):
     elif self.ishopdn:
       return f'hopdn {dz=:.2f}@{v} {h=}'
     elif self.isretract:
-      return f'retract {de=:.4f}@{ve}'
+      return f'retract {estr}'
     elif self.isrestore:
-      return f'restore {de=:.4f}@{ve}'
+      return f'restore {estr}'
     else:
       return f'move {gostr}'
     #return f'{self.__class__.__name__}({dx=:.2f}, {dy=:.2f}, {dz=:.2f}, {de=:.4f}, {v=:.2f}, {v0=:.2f}, {v1=:.2f}, {h=:.2f}, {w=:.2f})'
@@ -346,33 +351,83 @@ class Move(MoveBase):
     """ Volume in filament length of bead."""
     return h * acircle(w*r) / cls.Fa
 
-  @property
-  def f(self):
-    """ The 'f' mm/min speed of a move. """
-    return round(self.v * 60)
-
-  @cached_property
-  def vm(self):
-    """ The speed of the middle phase of a move. """
-    if not self.isgo:
-      return 0.0
-    v, v0, v1 = self.v, self.v0, self.v1
-    # This is the limit velocity assuming constant acceleration at a/2.
-    # This implements smoothed look-ahead to reduce spikey velocity.
-    vm = sqrt((self.dl*self.Ap + v0**2 + v1**2)/2)
-    # If vm is less than v0 or v1, we don't need acceleration at both ends,
-    # don't set vm higher than the move's speed, and round it.
-    vm = getnear(min(v, max(v0, v1, vm)))
-    assert v0 <= vm <= v
-    assert v1 <= vm <= v
-    return vm
-
   @cached_property
   def r(self):
     """ The extrusion ratio of a move. """
     if self.isdraw:
       return getnear(self.de/self.el)
     return 0.0
+
+  @property
+  def f(self):
+    """ The 'f' mm/min speed of a move. """
+    return round(self.v * 60)
+
+  @cached_property
+  def dt0(self):
+    """Duration of acceleration phase."""
+    dt0 = self.dv0 / self.a0 if self.dl else self.dve0 / self.ae0 if self.de else 0.0
+    assert dt0 >= 0.0, f'{self.dv0=} {self.a0=} {self.dl=} {self.dve0=} {self.ae0=} {self.de=} {self!r}'
+    return dt0
+
+  @cached_property
+  def dt1(self):
+    """Duration of deceleration phase."""
+    dt1 = self.dv1 / self.a1 if self.dl else self.dve1 / self.ae1 if self.de else 0.0
+    assert dt1 >= 0.0, f'{self.dv1=} {self.a1=} {self.dl=} {self.dve1=} {self.ae1=} {self.de=} {self!r}'
+    return dt1
+
+  @cached_property
+  def dtm(self):
+    """Duration of middle phase."""
+    dtm = self.dlm/self.vm if self.vm else self.dem/self.vem if self.vem else abs(self.dz/self.v)
+    assert dtm >= 0.0, f'{self.dlm=} {self.vm=} {self.dem=} {self.vem=} {self!r}'
+    return dtm
+
+  @cached_property
+  def dt(self):
+    """ Get the execution time for a move. """
+    return self.dt0 + self.dtm + self.dt1
+
+  @property
+  def a0(self):
+    """ The acceleration phase change in velocity. """
+    # Line acceleration should never be limited by extruder acceleration, even with PA compensating moves.
+    return self.Ap if self.dl else 0.0
+
+  @property
+  def a1(self):
+    """ The acceleration phase change in velocity. """
+    return -self.a0
+
+  @property
+  def vl(self):
+    """ The target line speed of a move. """
+    return self.v if self.dl else 0.0
+
+  @cached_property
+  def vm(self):
+    """ The speed of the middle phase of a move. """
+    vl, v0, v1 = self.vl, self.v0, self.v1
+    # This is the limit velocity assuming constant acceleration at a/2.
+    # This implements smoothed look-ahead to reduce spikey velocity.
+    vm = sqrt((self.dl*self.Ap + v0**2 + v1**2)/2)
+    # If vm is less than v0 or v1, we don't need acceleration at both ends,
+    # don't set vm higher than the move's speed, and round it.
+    vm = getnear(min(vl, max(v0, v1, vm)))
+    assert v0 <= vm <= vl
+    assert v1 <= vm <= vl
+    return vm
+
+  @property
+  def dv0(self):
+    """ The acceleration phase change in velocity. """
+    return self.vm - self.v0
+
+  @property
+  def dv1(self):
+    """ The decceleration phase change in velocity. """
+    return self.v1 - self.vm
 
   @cached_property
   def dl(self):
@@ -400,79 +455,88 @@ class Move(MoveBase):
     assert 0.0 <= dlm <= self.dl, f'0.0 <= {dlm=} <= {self.dl=}, {self.dl0=} {self.dl1=} {self!r}'
     return dlm
 
-  @cached_property
-  def dt0(self):
-    """Duration of acceleration phase."""
-    return self.dv0 / self.a0
-
-  @cached_property
-  def dt1(self):
-    """Duration of deceleration phase."""
-    return self.dv1 / self.a1
-
-  @cached_property
-  def dtm(self):
-    """Duration of middle phase."""
-    return self.dlm/self.vm if self.vm else abs(self.dz if self.dz else self.de)/self.v
-
-  @cached_property
-  def dt(self):
-    """ Get the execution time for a move. """
-    return self.dt0 + self.dtm + self.dt1
+  @property
+  def ae0(self):
+    """ The extrusion acceleration rate at the start of a move. """
+    dl, de = self.dl, self.de
+    return de/dl * self.a0 if dl else copysign(self.Ae, de) if de else 0.0
 
   @property
-  def dv0(self):
-    """ The acceleration phase change in velocity. """
-    return self.vm - self.v0
-
-  @property
-  def dv1(self):
-    """ The decceleration phase change in velocity. """
-    return self.v1 - self.vm
-
-  @property
-  def dvm(self):
-    """ The mid phase change in velocity. """
-    return 0.0
-
-  @property
-  def de0(self):
-    """ The acceleration phase change in e. """
-    return self.de * self.dl0/self.dl if self.dl else 0.0
-
-  @property
-  def de1(self):
-    """ The decceleration phase change in e. """
-    return self.de * self.dl1/self.dl if self.dl else 0.0
-
-  @property
-  def dem(self):
-    """ The mid phase change in e. """
-    return self.de * self.dlm/self.dl if self.dl else self.de
+  def ae1(self):
+    """ The extrusion acceleration rate at the end of a move. """
+    dl, de = self.dl, self.de
+    return de/dl * self.a1 if dl else -copysign(self.Ae, de) if de else 0.0
 
   @property
   def ve(self):
-    """ The average extrusion rate of a move. """
-    dt = self.dt
-    return self.de/dt if dt else 0.0
+    """ The target extrusion rate of a move. """
+    return self.de/self.dl * self.v if self.dl else copysign(self.v, self.de) if self.de else 0.0
 
-  @property
+  @cached_property
   def ve0(self):
     """ The extrusion rate at the start of a move. """
     dl = self.dl
-    return self.de/dl * self.v0 if dl else self.ve
+    # We assume pure retract/restore moves have to start with ve=0
+    return self.de/dl * self.v0 if dl else 0.0
 
-  @property
-  def vem(self):
-    """ The extrusion rate at the middle of a move. """
-    dl = self.dl
-    return self.de/dl * self.vm if dl else self.ve
-
-  @property
+  @cached_property
   def ve1(self):
     """ The extrusion rate at the end of a move. """
     dl = self.dl
-    return self.de/dl * self.v1 if dl else self.ve
+    # We assume pure retract/restore moves have to end with ve=0
+    return self.de/dl * self.v1 if dl else 0.0
+
+  @cached_property
+  def vem(self):
+    """ The extrusion rate at the middle of a move. """
+    dl, de = self.dl, self.de
+    # We assume there are no vertical extruding moves.
+    if dl:
+      return de/dl * self.vm
+    ve, ve0, ve1 = self.ve, self.ve0, self.ve1
+    # This is the limit velocity assuming constant acceleration at a/2.
+    # This implements smoothed look-ahead to reduce spikey velocity.
+    vem = copysign(sqrt((self.de*self.ae0 + ve0**2 + ve1**2)/2), self.de)
+    # If vm is less than v0 or v1, we don't need acceleration at both ends,
+    # don't set vm higher than the move's speed, and round it.
+    if ve >= 0:
+      vem = getnear(min(ve, max(ve0, ve1, vem)))
+      assert 0 <= ve0 <= vem <= ve
+      assert 0 <= ve1 <= vem <= ve
+    else:
+      vem = getnear(max(ve, min(ve0, ve1, vem)))
+      assert ve <= vem <= ve0 <= 0
+      assert ve <= vem <= ve1 <= 0
+    return vem
+
+  @property
+  def dve0(self):
+    return self.vem - self.ve0
+
+  @property
+  def dve1(self):
+    return self.ve1 - self.vem
+
+  @cached_property
+  def de0(self):
+    """ The acceleration phase change in e. """
+    de0 = self.de * self.dl0/self.dl if self.dl else 0.5*(self.ve0+self.vem)*self.dt0
+    assert 0 <= de0 <= self.de or self.de <= de0 <= 0, f'0.0 <= {de0=} <= {self.de=}, {self.dt0=} {self!r}'
+    return de0
+
+  @cached_property
+  def de1(self):
+    """ The decceleration phase change in e. """
+    de1 = self.de * self.dl1/self.dl if self.dl else 0.5*(self.vem + self.ve1)*self.dt1
+    assert 0 <= de1 <= self.de or self.de <= de1 <= 0, f'0 <= {de1=} <= {self.de=}, {self.dt1=} {self!r}'
+    return de1
+
+  @cached_property
+  def dem(self):
+    """ The mid phase change in e. """
+    dem = self.de - self.de0 - self.de1
+    assert 0 <= dem <= self.de or self.de <= dem <= 0, f'0 <= {dem=} <= {self.de=}, {self.de0=} {self.de1=} {self!r}'
+    return dem
 
   @property
   def dh0(self):
@@ -488,12 +552,6 @@ class Move(MoveBase):
   def dhm(self):
     """ Change in height of mid phase."""
     return self.dz * self.dlm/self.dl if self.dl else self.dz
-
-  @property
-  def vl(self):
-    """ The average line speed of a move. """
-    dt = self.dt
-    return self.dl/dt if dt else 0.0
 
   @property
   def db(self):
@@ -1037,9 +1095,9 @@ M18
 
   def resetstate(self):
     """ Reset all move state variables. """
-    self.dt = self.de = self.dl = self.en = 0.0
+    self.dt = self.dl = self.de = self.en = 0.0
 
-  def iterstate(self, dt, de, dl, dv, dh):
+  def iterstate(self, dt, dl, de, dh, dvl, dve):
     """ Increment the state for a small dt interval. """
     # Note filament doesn't get sucked back into the nozzle if the pressure
     # advance is negative, and the bead cannot give negative backpressure.
@@ -1050,44 +1108,46 @@ M18
     self.pe -= en
     self.eb = max(0.0, self.eb + en - el)  # Need to make sure float errors don't make this negative.
     self.dt += dt
+    self.dl += dl
     self.de += de
     self.en += en
-    self.dl += dl
-    self.vl += dv
+    self.vl += dvl
+    self.ve += dve
     self.h += dh
 
-  def incstate(self, dt, de=0.0, dl=0.0, dv=0.0, dh=0.0):
+  def incstate(self, dt, dl=0.0, de=0.0, dh=0.0, dvl=0.0, dve=0.0):
     """ Increment the state for a large dt interval. """
     # Keep the expected final state to check against and use later.
-    dt1, de1, dl1, vl1, h1 = self.dt+dt, self.de+de, self.dl+dl, self.vl+dv, self.h+dh
+    dt1, dl1, de1, h1, vl1, ve1 = self.dt+dt, self.dl+dl, self.de+de, self.h+dh, self.vl+dvl, self.ve+dve
     t, idt = dt, 0.001
-    if dl:
-      # integrate a horizontal move.
-      al, de_dl, dh_dl = dv/dt, de/dl, dh/dl
+    if dl or de:
+      # integrate a horizontal or extruding move.
+      al, ae, dh_dle = dvl/dt, dve/dt, dh/dl if dl else dh/de
       while t > 0.0:
         idt = min(idt, t)
-        idv = al * idt
-        idl = (self.vl + idv/2) * idt  # Do trapezoidal integration for dl.
-        ide = idl * de_dl
-        idh = idl * dh_dl
-        self.iterstate(idt, ide, idl, idv, idh)
+        idvl = al * idt
+        idve = ae * idt
+        idl = (self.vl + idvl/2) * idt  # Do trapezoidal integration for dl.
+        ide = (self.ve + idve/2) * idt  # Do trapezoidal integration for de.
+        idh = idl * dh_dle if dl else ide * dh_dle
+        self.iterstate(idt, idl, ide, idh, idvl, idve)
         t -= idt
     else:
-      # integrate a non-horizontal change.
-      ve, vz = de/dt, dh/dt
+      # integrate a vertical move.
+      vz = dh/dt
       while t > 0.0:
         idt = min(idt, t)
-        ide = ve * idt
         idh = vz * idt
-        self.iterstate(idt, ide, 0.0, 0.0, idh)
+        self.iterstate(idt, 0.0, 0.0, idh, 0.0, 0.0)
         t -= idt
-    assert isneareq(self.dt, dt1)
-    assert isneareq(self.de, de1)
-    assert isneareq(self.dl, dl1)
-    assert isneareq(self.vl, vl1)
-    assert isneareq(self.h, h1)
+    assert isneareq(self.dt, dt1), f'{self.dt=} {dt1=}'
+    assert isneareq(self.dl, dl1), f'{self.dl=} {dl1=}'
+    assert isneareq(self.de, de1), f'{self.de=} {de1=}'
+    assert isneareq(self.h, h1), f'{self.h=} {h1=}'
+    assert isneareq(self.vl, vl1), f'{self.vl=} {vl1=}'
+    assert isneareq(self.ve, ve1), f'{self.ve=} {ve1=}'
     # Use the expected final states to remove small integration errors.
-    self.dt, self.de, self.dl, self.vl, self.h = dt1, de1, dl1, vl1, h1
+    self.dt, self.dl, self.de, self.h, self.vl, self.ve = dt1, dl1, de1, h1, vl1, ve1
 
   def inc(self, code):
     if self.islayer(code):
@@ -1117,15 +1177,21 @@ M18
     self.resetstate()
     # Save the expected final h to assert against later.
     h1 = self.h + m.dz
+    # Check that the start states are as expected.
+    assert isneareq(self.vl, m.v0)
+    # TODO(abo): add proper support for ve1->ve0 transition between moves.
+    self.ve = m.ve0 # hack to jump ve from the previous ve1 to ve0.
+    assert isneareq(self.ve, m.ve0), f'{self.ve=} {m.ve0=} {self.m!s} -> {m!s}'
     # Update the state for the three move phases.
-    if m.dt0: self.incstate(m.dt0, m.de0, m.dl0, m.dv0, m.dh0)
-    if m.dtm: self.incstate(m.dtm, m.dem, m.dlm, m.dvm, m.dhm)
-    if m.dt1: self.incstate(m.dt1, m.de1, m.dl1, m.dv1, m.dh1)
+    if m.dt0: self.incstate(m.dt0, m.dl0, m.de0, m.dh0, m.dv0, m.dve0)
+    if m.dtm: self.incstate(m.dtm, m.dlm, m.dem, m.dhm, m.dvm, m.dvem)
+    if m.dt1: self.incstate(m.dt1, m.dl1, m.de1, m.dh1, m.dv1, m.dve1)
     # Check that the end states are as expected.
     assert isneareq(self.dt, m.dt)
-    assert isneareq(self.de, m.de)
     assert isneareq(self.dl, m.dl)
+    assert isneareq(self.de, m.de)
     assert isneareq(self.vl, m.v1)
+    assert isneareq(self.ve, m.ve1)
     assert isneareq(self.h, h1)
     # Update and round positions to remove floating point errors.
     self.x = getnear(self.x+m.dx)
@@ -1408,10 +1474,10 @@ M18
     ignoring the current pressure. Note compensation for advance pressure is
     adjusted in post processing if enabled.
     """
-    if pe is None: pe = -self.Re
-    if de is None: de = -self.pe + pe
-    #if de is None:
-    #  de = -self.Re if pe is None else -self.pe + pe
+    #if pe is None: pe = -self.Re
+    #if de is None: de = -self.pe + pe
+    if de is None:
+      de = -self.Re if pe is None else -self.pe + pe
     # If dynamic retraction is enabled and de is zero or more, set de to a
     # tiny retraction so that it doesn't get optimized away or seen as a
     # restore and can be dynamically adjusted later.
@@ -1426,10 +1492,10 @@ M18
     restore ignoring current retraction. Note adding starting dots and
     compensating for advance pressure is added in post-processing if enabled.
     """
-    if pe is None: pe = 0.0
-    if de is None: de = -self.pe + pe
-    #if de is None:
-    #  de = self.Re if pe is None else -self.pe + pe
+    #if pe is None: pe = 0.0
+    #if de is None: de = -self.pe + pe
+    if de is None:
+      de = self.Re if pe is None else -self.pe + pe
     # If dynamic retraction is enabled and de is zero or less, set de to a
     # tiny restore so that it doesn't get optimized away or seen as a
     # retraction and can be dynamicly adjusted later.
@@ -1472,7 +1538,7 @@ M18
       if not m1.isdraw or (dl > 10 and dt > 1.0): break
       dt+=m1.dt
       dl+=m1.dl
-      vedl+=m1.ve*m1.dl
+      vedl+=m1.de/m1.dt*m1.dl
       dbdl+=m1.db*m1.dl
       # Get eb from the first move.
       if not eb:
