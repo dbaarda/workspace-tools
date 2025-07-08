@@ -299,11 +299,11 @@ class Printer(gcodegen.GCodeGen):
     self.fe = 0.0  # filtered nozzle flow rate over past Tf.
     self.ft = 0.0  # time since last fan pwm cycle.
 
-  def iterstate(self, dt, de, dl, dv, dh):
+  def iterstate(self, dt, dl, de, dh, dvl, dve):
     """ Increment the state for a small dt interval. """
     # We need the change in en filters.
     dn = self.en
-    super().iterstate(dt, de, dl, dv, dh)
+    super().iterstate(dt, dl, de, dh, dvl, dve)
     dn = self.en - dn
     # Get filtered extrusion rate fe.
     self.fe = (dn + self.Tf*self.fe)/(self.Tf + dt)
