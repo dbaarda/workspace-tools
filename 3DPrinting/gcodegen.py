@@ -309,21 +309,22 @@ class Move(MoveBase):
     dz, dl, de, h, w, r = self.dz, self.dl, self.de, self.h, self.w, self.r
     v, v0, v1, vm = round(self.v), round(self.v0), round(self.v1), round(self.vm)
     ve, ve0, ve1, vem = round(self.ve, 2), round(self.ve0, 2), round(self.ve1, 2), round(self.vem, 2)
+    pstr = f'{dl=:.1f}@{v}({v0}<{vm}>{v1})'
     estr = f'{de=:.4f}@{ve}({ve0}<{vem}>{ve1})'
-    lstr = f'{dl=:.1f}@{v}({v0}<{vm}>{v1})'
-    gostr=f'{lstr} {estr} l={h:.2f}x{w:.2f}x{r:.2f}'
+    hstr = f'{dz=:.2f}@{v}'
+    lstr = f'l={h:.2f}x{w:.2f}x{r:.2f}'
     if self.isdraw:
-      return f'draw {gostr}'
+      return f'draw {pstr} {estr} {lstr}'
     elif self.ishopup:
-      return f'hopup {dz=:.2f}@{v} {h=}'
+      return f'hopup {hstr} {lstr}'
     elif self.ishopdn:
-      return f'hopdn {dz=:.2f}@{v} {h=}'
+      return f'hopdn {hstr} {lstr}'
     elif self.isretract:
-      return f'retract {estr}'
+      return f'retract {estr} {lstr}'
     elif self.isrestore:
-      return f'restore {estr}'
+      return f'restore {estr} {lstr}'
     else:
-      return f'move {gostr}'
+      return f'move {pstr} {lstr}'
     #return f'{self.__class__.__name__}({dx=:.2f}, {dy=:.2f}, {dz=:.2f}, {de=:.4f}, {v=:.2f}, {v0=:.2f}, {v1=:.2f}, {h=:.2f}, {w=:.2f})'
 
   def setv(self, v0=None, v1=None):
@@ -917,14 +918,15 @@ class GCodeGen(object):
     pb: current bead backpressure (property).
     eb: current extruded bead volume.
     db: current extruded bead diameter (property).
-    vn: nozzle flow velocity (property).
+    vn: current nozzle flow velocity (property).
     ve: current extruder velocity.
     vl: current line velocity.
     dt: the execution time of the last command.
     dl: the line length of the last command.
     de: the extruder change of the last command.
     en: the extruded volume of the last command.
-    c: the last command.
+    db0: the bead diameter at the start of the last move.
+    c: the last non-comment command.
     m: the last move command.
     d: the last move command that was a draw.
     x,y,z,e,f: Current x,y,z,e,f position values.
@@ -1170,7 +1172,8 @@ M18
       self.incmove(code)
     elif self.iscmd(code):
       self.inccmd(code)
-    self.c = code
+    if not self.isstr(code):
+      self.c = code
 
   def inct(self, dt):
     """ Increment time. """
@@ -1186,15 +1189,16 @@ M18
 
   def incmove(self, m):
     """ Increment state for executing a Move. """
+    # Check that the start states are as expected.
     assert isneareq(self.h, self.z - self.layer.z), f'{self.h=} != {self.z - self.layer.z}'
     assert isneareq(self.vl, m.v0), f'{self.vl=} != {m.v0=} for {m} at {ftime(self.f_t)}'
+    assert isnearle(abs(self.ve - m.ve0), self.GMove.Je), f'{self.ve=} {m.ve0=} {self.m!s} -> {m!s}'
+    self.db0 = self.db
     self.resetstate()
     # Save the expected final h to assert against later.
     h1 = self.h + m.dz
-    # Check that the start states are as expected.
-    assert isneareq(self.vl, m.v0)
-    assert isnearle(abs(self.ve - m.ve0), self.GMove.Je), f'{self.ve=} {m.ve0=} {self.m!s} -> {m!s}'
-    self.ve = m.ve0 # "jerk" ve from the previous ve1 to ve0.
+    # "jerk" ve from the previous ve1 to ve0.
+    self.ve = m.ve0
     # Update the state for the three move phases.
     if m.dt0: self.incstate(m.dt0, m.dl0, m.de0, m.dh0, m.dv0, m.dve0)
     if m.dtm: self.incstate(m.dtm, m.dlm, m.dem, m.dhm, m.dvm, m.dvem)
@@ -1273,7 +1277,8 @@ M18
     cmd = self.fcmd('G1', X=x, Y=y, Z=z, E=e, F=f)
     if self.verb:
       # Add additional command comment suffix.
-      cmd = f'{cmd:40s}; {{m}} r={{en/m.el if m.el else db/m.w:.2f}}'
+      cmt = '({db0/m.w:.2f}<{en/m.el if m.el else 0.0:.2f}>{db/m.w:.2f})' if m.dl else '{db/m.w:.2f}'
+      cmd = f'{cmd:40s}; {{dt=:.3f}} {{m}} r={cmt}'
     return cmd
 
   def fcmd(self, cmd, **kwargs):
