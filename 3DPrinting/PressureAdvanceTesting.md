@@ -1447,8 +1447,8 @@ significant volume which is immediately subtracted from the pressure.
 When we factor this in and plot the graphs for what we have so far, it looks
 like this;
 
-![SpStartStopTest3 Retract and Restore Distances](SpStartStopTest3Graph.png
-"SpStartStopTest3 Retract and Restore Distances")
+![SpStartStopTest5 Retract and Restore Distances](SpStartStopTest5Graph.png
+"SpStartStopTest5 Retract and Restore Distances")
 
 You can see the estimated pressure from the restore distance minus the initial
 bead almost exactly matches the retract distances for w>=0.8 because the
@@ -1667,7 +1667,7 @@ retrospect pe=2.0 is what would be required for a l=0.3x0.5x1.0 line even at
 The tests were run with the same cmdline;
 
 ```bash
-$ ./gcodetest.py -Te=210 -Tp=50 -Fe=1.0 -Fc=1.0 -Kf=1.6 -Kb=3.2 -Re=1.5 -R >test.g
+$ ./gcodetest.py -Te=210 -Tp=50 -Fe=1.0 -Fc=1.0 -Kf=1.6 -Kb=3.2 -Re=1.7 -R >test.g
 ```
 
 For the test arguments I chose these;
@@ -1689,7 +1689,7 @@ with this result;
 ![SpStartStopTest7b Result](SpStartStopTest7b.jpg "SpStartStopTest7b Result")
 
 The commented version of gcode output for this is in
-[SpStartStopTest7_Te210Tp50Fe10Fc10Kf16Kb32Re15Rv.g](./SpStartStopTest7_Te210Tp50Fe10Fc10Kf16Kb32Re15Rv.g).
+[SpStartStopTest7_Te210Tp50Fe10Fc10Kf16Kb32Re17Rv.g](./SpStartStopTest7_Te210Tp50Fe10Fc10Kf16Kb32Re17Rv.g).
 
 ### Observations
 
@@ -1723,3 +1723,47 @@ over-restore spread over 4secs of line makes it only 12% wider.
 
 I think this is enough bead backpressure testing. Time to see how things vary
 with flowrate ve to get a better estimate for Kf.
+
+
+## SpStartStopTest8
+
+Actually, one more backpressure test. I realized I hadn't yet validated the
+theory with these tests that the backpressure is independent of the layer
+height. This test ran with the optimal restore/retract distances from earlier
+tests for layer widths 0.3mm -> 0.8mm at layer heights 0.18mm -> 3.8mm.
+
+The tests were run with the cmdline;
+
+```bash
+$ ./gcodetest.py -Te=210 -Tp=50 -Fe=1.0 -Fc=1.0 -Kf=1.6 -Kb=3.2 -Re=1.7 -R >test.g
+```
+
+For the test arguments I chose these;
+
+* common: ve=1.0, h=(0.18,0.38), dynret=False
+* test1: Re=2.9, Be=1.3, w=0.3
+* test2: Re=3.2, Be=1.1, w=0.4
+* test3: Re=4.0, Be=0.4, w=0.6
+* test4: Re=4.5, Be=0.0, w=0.8
+
+The results were;
+
+![SpStartStopTest8 Result](SpStartStopTest8.jpg "SpStartStopTest8 Result")
+
+The commented version of gcode output for this is in
+[SpStartStopTest8_Te210Tp50Fe10Fc10Kf16Kb32Re17Rv.g](./SpStartStopTest7_Te210Tp50Fe10Fc10Kf16Kb32Re17Rv.g).
+
+### Observations
+
+This does seem to show that layer height doesn't matter, right up until you
+reach the last line with h=0.38mm w=0.8, which is clearly too wide, which
+means the pressure required is lower. This suggests that the inflection point
+where backpressure starts to "flatline" no matter how wide the bead is drops
+as layer height increases. However, this is beyond the normal operating layer
+heights and line widths, so I'm not sure it's worth characterizing in detail.
+
+The only other thing is all the retractions are clean, which tells us the
+retraction distances are sufficient, but this test doesn't tell us if they are
+excessive. However, with the restores all looking so clean with the previously
+identified optimal distances, I think it's unlikely the required retraction
+distances would have changed.
