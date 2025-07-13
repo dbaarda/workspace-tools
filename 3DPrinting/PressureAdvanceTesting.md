@@ -11,10 +11,10 @@ Kf value, and scales the retract/restore actions to relieve/preapply the
 necessary pressure advance based on the prev/next commands. The printed result
 looks like this.
 
-![StartStopTest1 -Kf=1 -Re=1 Result Annotated](StartStopTest1A.jpg "StartStopTest1 Result")
+![StartStopTest1 -Kf=1 -Re=1 Result Annotated](data/StartStopTest1A.jpg "StartStopTest1 Result")
 
 The commented version of gcode output for this is in
-[StartStopTest1_Kf1_Re1.g](./StartStopTest1_Kf1_Re1.g).
+[StartStopTest1_Kf1_Re1.g](data/StartStopTest1_Kf1_Re1.g).
 
 Each test line has the following sequence (blue markers);
 
@@ -158,10 +158,10 @@ So it looks like the following settings would be about right;
 
 ## StartStopTest2
 
-![StartStopTest2 Result](StartStopTest2.jpg "StartStopTest2 Result")
+![StartStopTest2 Result](data/StartStopTest2.jpg "StartStopTest2 Result")
 
 The commented version of gcode output for this is in
-[StartStopTest2_Kf085_Re15.g](./StartStopTest2_Kf085_Re15.g).
+[StartStopTest2_Kf085_Re15.g](data/StartStopTest2_Kf085_Re15.g).
 
 Second test points;
 
@@ -235,7 +235,7 @@ This was a rough ad-hock test in the middle of testing if pending code changes
 worked or made sense. Appologies to future me for not keeping all the details
 better.
 
-![RetractTest1 -Kf=0.4 -Kb=3.0 -Re=1.0 result](RetractTest1.jpg "RetractTest1 result")
+![RetractTest1 -Kf=0.4 -Kb=3.0 -Re=1.0 result](data/RetractTest1.jpg "RetractTest1 result")
 
 This test was run with the default width changed to `w=0.4mm` so the lines are
 thinner;
@@ -245,7 +245,7 @@ thinner;
 ```
 
 The verbose commented version of gcode output for this is in
-[RetractTest1_Kf04_Kb20_Cb00_Re10_RPv.g](./RetractTest1_Kf04_Kb20_Cb00_Re10_RPv.g)
+[RetractTest1_Kf04_Kb20_Cb00_Re10_RPv.g](data/RetractTest1_Kf04_Kb20_Cb00_Re10_RPv.g)
 
 Note that this does have `-P` pressure advance compensation on, and the `-v`
 version of the output shows it has split the draw's into acceleration and
@@ -412,9 +412,9 @@ https://docs.google.com/spreadsheets/d/1lqm9OUPRjJmuuPAP1AJQVks3GbTPaaQwL20jl991
 ## RetractTest2
 
 This was a more thorough test to see how pressure varied with different
-parameters as documented under [#backpressure-testing](#backpressure-testing).
+parameters as documented under [#backpressure-testing](3DPrinting.md#backpressure-testing).
 
-![RetractTest2 -Kf=0.4 -Kb=3.0 -Re=1.0 result](RetractTest2.jpg "RetractTest2 result")
+![RetractTest2 -Kf=0.4 -Kb=3.0 -Re=1.0 result](data/RetractTest2.jpg "RetractTest2 result")
 
 This `gcodegen.py` was changed to have the following defaults for ASA filament;
 
@@ -442,7 +442,7 @@ And was run with these arguments;
 ```
 
 The verbose commented version of gcode output for this is in
-[RetractTest2_Kf04_Kb30_Cb00_Re10_Rv.g](./RetractTest2_Kf04_Kb30_Cb00_Re10_Rv.g)
+[RetractTest2_Kf04_Kb30_Cb00_Re10_Rv.g](data/RetractTest2_Kf04_Kb30_Cb00_Re10_Rv.g)
 
 Note the test phases are;
 
@@ -538,10 +538,10 @@ un-compensated backlash.
 
 ## StartStopTest3
 
-![StartStopTest3 Result](StartStopTest3.jpg "StartStopTest3 Result")
+![StartStopTest3 Result](data/StartStopTest3.jpg "StartStopTest3 Result")
 
 The commented version of gcode output for this is in
-[StartStopTest3_Kf08_Kb10_Re10_Lh03_Lw05_Rv.g](./StartStopTest3_Kf08_Kb10_Re10_Lh03_Lw05_Rv.g).
+[StartStopTest3_Kf08_Kb10_Re10_Lh03_Lw05_Rv.g](data/StartStopTest3_Kf08_Kb10_Re10_Lh03_Lw05_Rv.g).
 
 ### Observations
 
@@ -566,10 +566,10 @@ retract/restore distances of `de=1.9671` compared to `de=2.3919` in
 I had to switch fillaments to PLA for a different print, and while it was
 there I thought I'd run some of these tests with it.
 
-![StartStopTestPLA1 Result](StartStopTestPLA1.jpg "StartStopTestPLA1 Result")
+![StartStopTestPLA1 Result](data/StartStopTestPLA1.jpg "StartStopTestPLA1 Result")
 
 The commented version of gcode output for this is in
-[StartStopTestPLA1_Kf10_Kb20_Re10_RPv.g](./StartStopTestPLA1_Kf10_Kb20_Re10_RPv.g).
+[StartStopTestPLA1_Kf10_Kb20_Re10_RPv.g](data/StartStopTestPLA1_Kf10_Kb20_Re10_RPv.g).
 
 And was run with these arguments;
 
@@ -601,10 +601,10 @@ problems;
 This was a quick attempt to do the previous test again with `-P` turned off
 and retraction turned up a bit to try and reduce the stringing.
 
-![StartStopTestPLA2 Result](StartStopTestPLA2.jpg "StartStopTestPLA2 Result")
+![StartStopTestPLA2 Result](data/StartStopTestPLA2.jpg "StartStopTestPLA2 Result")
 
 The commented version of gcode output for this is in
-[StartStopTestPLA2_Kf10_Kb20_Re15_RPv.g](./StartStopTestPLA2_Kf10_Kb20_Re15_RPv.g).
+[StartStopTestPLA2_Kf10_Kb20_Re15_RPv.g](data/StartStopTestPLA2_Kf10_Kb20_Re15_RPv.g).
 
 ```bash
 ./gcodegen.py -Te 210 -Tp 50 -Fe 1.0 -Fc 1.0 -Kf 1.0 -Kb 2.0 -Re 1.5 -R >StartStopTestPLA2_Kf10_Kb20_Re15_R.g
@@ -637,10 +637,10 @@ following phases;
 ./gcodegen.py -Kf=0.5 -Kb=2.0 -Re=1.5 -Lh=0.3 -Lw=0.5 -R >BacklashTest1_Kf05_Kb20_Re15_Lh03_Lw05_R.g
 ```
 
-![BacklashTest1 Result](BacklashTest1.jpg "BacklashTest1 Result")
+![BacklashTest1 Result](data/BacklashTest1.jpg "BacklashTest1 Result")
 
 The commented version of gcode output for this is in
-[BacklashTest1_Kf05_Kb20_Re15_Lh03_Lw05_Rv.g](./BacklashTest1_Kf05_Kb20_Re15_Lh03_Lw05_Rv.g).
+[BacklashTest1_Kf05_Kb20_Re15_Lh03_Lw05_Rv.g](data/BacklashTest1_Kf05_Kb20_Re15_Lh03_Lw05_Rv.g).
 
 ### Observations
 
@@ -818,10 +818,10 @@ The cmdline run was;
 ./gcodegen.py -Fe=0.0 -Kf=0.6 -Kb=3.0 -Re=2.5 -R -V -E -v >BacklashTest2_Fe00Kf06Kb30Re25RVEv.g
 ```
 
-![BacklashTest2 Result](BacklashTest2.jpg "BacklashTest2 Result")
+![BacklashTest2 Result](data/BacklashTest2.jpg "BacklashTest2 Result")
 
 The commented version of gcode output for this is in
-[BacklashTest2_Fe00Kf06Kb30Re25RVEv.g](./BacklashTest2_Fe00Kf06Kb30Re25RVEv.g).
+[BacklashTest2_Fe00Kf06Kb30Re25RVEv.g](data/BacklashTest2_Fe00Kf06Kb30Re25RVEv.g).
 
 ### Observations
 
@@ -889,7 +889,7 @@ see the retraction required for the wider lines. It added an optional `r0`
 initial retraction to apply that would be executed over the first 1mm of the
 moving retract. The results are WTF!
 
-![BacklashTest3 Result](BacklashTest3.jpg "BacklashTest3 Result")
+![BacklashTest3 Result](data/BacklashTest3.jpg "BacklashTest3 Result")
 
 I'm not going to bother including details.
 
@@ -949,14 +949,14 @@ test does;
 
 The results were;
 
-![fKfTest1 Result](fKfTest1.jpg "fKfTest1 Result")
+![fKfTest1 Result](data/fKfTest1.jpg "fKfTest1 Result")
 
 The commented version of gcode output for this is in
 
-* [fKfTest1_Te210Tp50Fe10Fc10Kf00Kb00Re50n0v.g](./fKfTest1_Te210Tp50Fe10Fc10Kf00Kb00Re50n0v.g).
-* [fKfTest1_Te210Tp50Fe10Fc10Kf00Kb00Re50n1v.g](./fKfTest1_Te210Tp50Fe10Fc10Kf00Kb00Re50n1v.g).
-* [fKfTest1_Te210Tp50Fe10Fc10Kf00Kb00Re50n2v.g](./fKfTest1_Te210Tp50Fe10Fc10Kf00Kb00Re50n2v.g).
-* [fKfTest1_Te210Tp50Fe10Fc10Kf00Kb00Re50n3v.g](./fKfTest1_Te210Tp50Fe10Fc10Kf00Kb00Re50n3v.g).
+* [fKfTest1_Te210Tp50Fe10Fc10Kf00Kb00Re50n0v.g](data/fKfTest1_Te210Tp50Fe10Fc10Kf00Kb00Re50n0v.g).
+* [fKfTest1_Te210Tp50Fe10Fc10Kf00Kb00Re50n1v.g](data/fKfTest1_Te210Tp50Fe10Fc10Kf00Kb00Re50n1v.g).
+* [fKfTest1_Te210Tp50Fe10Fc10Kf00Kb00Re50n2v.g](data/fKfTest1_Te210Tp50Fe10Fc10Kf00Kb00Re50n2v.g).
+* [fKfTest1_Te210Tp50Fe10Fc10Kf00Kb00Re50n3v.g](data/fKfTest1_Te210Tp50Fe10Fc10Kf00Kb00Re50n3v.g).
 
 ### Observations
 
@@ -970,14 +970,14 @@ to 2.0.
 
 The results were;
 
-![fKfTest2 Result](fKfTest2.jpg "fKfTest2 Result")
+![fKfTest2 Result](data/fKfTest2.jpg "fKfTest2 Result")
 
 The commented version of gcode output for this is in
 
-* [fKfTest2_Te210Tp50Fe10Fc10Kf00Kb00Re50n0v.g](./fKfTest2_Te210Tp50Fe10Fc10Kf00Kb00Re50n0v.g).
-* [fKfTest2_Te210Tp50Fe10Fc10Kf00Kb00Re50n1v.g](./fKfTest2_Te210Tp50Fe10Fc10Kf00Kb00Re50n1v.g).
-* [fKfTest2_Te210Tp50Fe10Fc10Kf00Kb00Re50n2v.g](./fKfTest2_Te210Tp50Fe10Fc10Kf00Kb00Re50n2v.g).
-* [fKfTest2_Te210Tp50Fe10Fc10Kf00Kb00Re50n3v.g](./fKfTest2_Te210Tp50Fe10Fc10Kf00Kb00Re50n2v.g).
+* [fKfTest2_Te210Tp50Fe10Fc10Kf00Kb00Re50n0v.g](data/fKfTest2_Te210Tp50Fe10Fc10Kf00Kb00Re50n0v.g).
+* [fKfTest2_Te210Tp50Fe10Fc10Kf00Kb00Re50n1v.g](data/fKfTest2_Te210Tp50Fe10Fc10Kf00Kb00Re50n1v.g).
+* [fKfTest2_Te210Tp50Fe10Fc10Kf00Kb00Re50n2v.g](data/fKfTest2_Te210Tp50Fe10Fc10Kf00Kb00Re50n2v.g).
+* [fKfTest2_Te210Tp50Fe10Fc10Kf00Kb00Re50n3v.g](data/fKfTest2_Te210Tp50Fe10Fc10Kf00Kb00Re50n2v.g).
 
 ### Observations
 
@@ -1038,10 +1038,10 @@ The tests were run with;
 
 The results were;
 
-![BacklashTest4 Result](BacklashTest4.jpg "BacklashTest4 Result")
+![BacklashTest4 Result](data/BacklashTest4.jpg "BacklashTest4 Result")
 
 The commented version of gcode output for this is in
-[BacklashTest4_Te210Tp50Fe10Fc10Kf00Kb00Re40v.g](./BacklashTest4_Te210Tp50Fe10Fc10Kf00Kb00Re40v.g).
+[BacklashTest4_Te210Tp50Fe10Fc10Kf00Kb00Re40v.g](data/BacklashTest4_Te210Tp50Fe10Fc10Kf00Kb00Re40v.g).
 
 ### Observations
 
@@ -1109,10 +1109,10 @@ those settings without changing anything. The test args were;
 
 The results were;
 
-![SpStartStopTest1 Result](SpStartStopTest1.jpg "SpStartStopTest1 Result")
+![SpStartStopTest1 Result](data/SpStartStopTest1.jpg "SpStartStopTest1 Result")
 
 The commented version of gcode output for this is in
-[SpStartStopTest1_Te210Tp50Fe10Fc10Kf10Kb10Re10Rv.g](./SpStartStopTest1_Te210Tp50Fe10Fc10Kf10Kb10Re10Rv.g).
+[SpStartStopTest1_Te210Tp50Fe10Fc10Kf10Kb10Re10Rv.g](data/SpStartStopTest1_Te210Tp50Fe10Fc10Kf10Kb10Re10Rv.g).
 
 ### Observations
 
@@ -1174,10 +1174,10 @@ $ ./gcodetest.py -Te=210 -Tp=50 -Fe=1.0 -Fc=1.0 -Kf=0.4 -Kb=1.0 -Re=1.5 -R >test
 
 The results were;
 
-![SpStartStopTest2 Result](SpStartStopTest2.jpg "SpStartStopTest2 Result")
+![SpStartStopTest2 Result](data/SpStartStopTest2.jpg "SpStartStopTest2 Result")
 
 The commented version of gcode output for this is in
-[SpStartStopTest2_Te210Tp50Fe10Fc10Kf04Kb10Re15Rv.g](./SpStartStopTest2_Te210Tp50Fe10Fc10Kf04Kb10Re15Rv.g).
+[SpStartStopTest2_Te210Tp50Fe10Fc10Kf04Kb10Re15Rv.g](data/SpStartStopTest2_Te210Tp50Fe10Fc10Kf04Kb10Re15Rv.g).
 
 ### Observations.
 
@@ -1226,10 +1226,10 @@ $ ./gcodetest.py -Te=210 -Tp=50 -Fe=1.0 -Fc=1.0 -Kf=0.5 -Kb=2.0 -Re=2.0 -R >test
 
 The results were;
 
-![SpStartStopTest3 Result](SpStartStopTest3.jpg "SpStartStopTest3 Result")
+![SpStartStopTest3 Result](data/SpStartStopTest3.jpg "SpStartStopTest3 Result")
 
 The commented version of gcode output for this is in
-[SpStartStopTest3_Te210Tp50Fe10Fc10Kf05Kb20Re20Rv.g](./SpStartStopTest3_Te210Tp50Fe10Fc10Kf05Kb20Re20Rv.g).
+[SpStartStopTest3_Te210Tp50Fe10Fc10Kf05Kb20Re20Rv.g](data/SpStartStopTest3_Te210Tp50Fe10Fc10Kf05Kb20Re20Rv.g).
 
 ### Observations.
 
@@ -1269,7 +1269,7 @@ roughly right but somewhere near w=0.8 it flattens out. This matches what I
 expected, where once the bead exceeds the outer width of the nozzle it
 "bulges up" instead of having to push out, so the pressure stops building.
 
-![SpStartStopTest3 Retract and Restore Distances](SpStartStopTest3Graph.png
+![SpStartStopTest3 Retract and Restore Distances](data/SpStartStopTest3Graph.png
 "SpStartStopTest3 Retract and Restore Distances")
 
 The retract distances are interesting as they seem to be increasing slower
@@ -1333,10 +1333,10 @@ individually for each test.
 
 The results were;
 
-![SpStartStopTest4 Result](SpStartStopTest4.jpg "SpStartStopTest4 Result")
+![SpStartStopTest4 Result](data/SpStartStopTest4.jpg "SpStartStopTest4 Result")
 
 The commented version of gcode output for this is in
-[SpStartStopTest4_Te210Tp50Fe10Fc10Kf20Kb30Re10Rv.g](./SpStartStopTest4_Te210Tp50Fe10Fc10Kf20Kb30Re10Rv.g).
+[SpStartStopTest4_Te210Tp50Fe10Fc10Kf20Kb30Re10Rv.g](data/SpStartStopTest4_Te210Tp50Fe10Fc10Kf20Kb30Re10Rv.g).
 
 ### Observations.
 
@@ -1420,10 +1420,10 @@ For the test arguments I chose these;
 
 The results were;
 
-![SpStartStopTest5 Result](SpStartStopTest5.jpg "SpStartStopTest5 Result")
+![SpStartStopTest5 Result](data/SpStartStopTest5.jpg "SpStartStopTest5 Result")
 
 The commented version of gcode output for this is in
-[SpStartStopTest5_Te210Tp50Fe10Fc10Kf10Kb20Re20Rv.g](./SpStartStopTest4_Te210Tp50Fe10Fc10Kf10Kb20Re20Rv.g).
+[SpStartStopTest5_Te210Tp50Fe10Fc10Kf10Kb20Re20Rv.g](data/SpStartStopTest4_Te210Tp50Fe10Fc10Kf10Kb20Re20Rv.g).
 
 ### Observations.
 
@@ -1447,7 +1447,7 @@ significant volume which is immediately subtracted from the pressure.
 When we factor this in and plot the graphs for what we have so far, it looks
 like this;
 
-![SpStartStopTest5 Retract and Restore Distances](SpStartStopTest5Graph.png
+![SpStartStopTest5 Retract and Restore Distances](data/SpStartStopTest5Graph.png
 "SpStartStopTest5 Retract and Restore Distances")
 
 You can see the estimated pressure from the restore distance minus the initial
@@ -1485,10 +1485,10 @@ For the test arguments I chose these;
 
 The results were;
 
-![SpStartStopTest6 Result](SpStartStopTest6.jpg "SpStartStopTest6 Result")
+![SpStartStopTest6 Result](data/SpStartStopTest6.jpg "SpStartStopTest6 Result")
 
 The commented version of gcode output for this is in
-[SpStartStopTest6_Te210Tp50Fe10Fc10Kf16Kb32Re15Rv.g](./SpStartStopTest6_Te210Tp50Fe10Fc10Kf16Kb32Re15Rv.g).
+[SpStartStopTest6_Te210Tp50Fe10Fc10Kf16Kb32Re15Rv.g](data/SpStartStopTest6_Te210Tp50Fe10Fc10Kf16Kb32Re15Rv.g).
 
 ### Observations
 
@@ -1680,16 +1680,16 @@ For the test arguments I chose these;
 
 The results were;
 
-![SpStartStopTest7a Result](SpStartStopTest7a.jpg "SpStartStopTest7a Result")
+![SpStartStopTest7a Result](data/SpStartStopTest7a.jpg "SpStartStopTest7a Result")
 
 Because I was concerned that maybe the bowden tube setup from my drybox to the
 printer was causing too much friction I removed most of it and re-ran the test
 with this result;
 
-![SpStartStopTest7b Result](SpStartStopTest7b.jpg "SpStartStopTest7b Result")
+![SpStartStopTest7b Result](data/SpStartStopTest7b.jpg "SpStartStopTest7b Result")
 
 The commented version of gcode output for this is in
-[SpStartStopTest7_Te210Tp50Fe10Fc10Kf16Kb32Re17Rv.g](./SpStartStopTest7_Te210Tp50Fe10Fc10Kf16Kb32Re17Rv.g).
+[SpStartStopTest7_Te210Tp50Fe10Fc10Kf16Kb32Re17Rv.g](data/SpStartStopTest7_Te210Tp50Fe10Fc10Kf16Kb32Re17Rv.g).
 
 ### Observations
 
@@ -1748,10 +1748,10 @@ For the test arguments I chose these;
 
 The results were;
 
-![SpStartStopTest8 Result](SpStartStopTest8.jpg "SpStartStopTest8 Result")
+![SpStartStopTest8 Result](data/SpStartStopTest8.jpg "SpStartStopTest8 Result")
 
 The commented version of gcode output for this is in
-[SpStartStopTest8_Te210Tp50Fe10Fc10Kf16Kb32Re17Rv.g](./SpStartStopTest7_Te210Tp50Fe10Fc10Kf16Kb32Re17Rv.g).
+[SpStartStopTest8_Te210Tp50Fe10Fc10Kf16Kb32Re17Rv.g](data/SpStartStopTest7_Te210Tp50Fe10Fc10Kf16Kb32Re17Rv.g).
 
 ### Observations
 
