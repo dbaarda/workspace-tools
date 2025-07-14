@@ -1452,7 +1452,7 @@ M18
     dz = z - self.z if z is not None else dz if dz is not None else 0.0
     dl = sqrt(dx**2 + dy**2)
     # Note: setting h and z or dz means explicit h overrides z height for de calcs.
-    if h is None: h = self.z + dz - self.layer.z
+    if h is None: h = self.h + dz
     if w is None: w = self.w
     r = self.layer.r * r
     el = dl * w * h / self.Fa  # line filament volume not including extrusion ratio.
