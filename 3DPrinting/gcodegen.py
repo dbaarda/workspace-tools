@@ -994,7 +994,7 @@ M18
     return ' '.join(sys.argv)
 
   def _setFc(self, fc):
-    return f'M652 S{round(fc*255)}' if fc else 'M651'
+    return f'M651 S{round(fc*255)}' if fc else 'M652'
 
   def _setFe(self, fe):
     return f'M106' if fe == 1.0 else f'M106 S{round(fe*255)}' if fe else 'M107'
