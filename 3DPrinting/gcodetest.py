@@ -239,14 +239,14 @@ class ExtrudeTest(gcodegen.GCodeGen):
     # Derive h,w,r,vl,ve from each other.
     if vl and ve is not None:
       assert None in (h,w,r), 'cannot specify all h,w,r with vl and ve'
-      if h is None: h = self.layer.h if None in (w,r) else ve*self.Fa/(vl*w*r)
-      if w is None: w = self.layer.w if None in (h,r) else ve*self.Fa/(vl*h*r)
+      if h is None: h = self.h if None in (w,r) else ve*self.Fa/(vl*w*r)
+      if w is None: w = self.w if None in (h,r) else ve*self.Fa/(vl*h*r)
       if r is None: r = ve*self.Fa/(vl*h*w)
     # Set h,w to defaults because we don't have enough to derive them.
     else:
       assert r is not None, 'require r if without ve and vl'
-      if h is None: h = self.layer.h
-      if w is None: w = self.layer.w
+      if h is None: h = self.h
+      if w is None: w = self.w
     # Derive vl,de,dt from ve and dl.
     if vl is None:
       assert ve is not None, 'should have ve if without vl'
@@ -313,19 +313,13 @@ class ExtrudeTest(gcodegen.GCodeGen):
     R0,C0 = self.xy2rc(x0=x0,y0=y0)
     if dl == 0:
       # This is explicitly not a draw or move.
-      if de is not None:
-        # dl=0, de=<value> means apply a specific retract/restore distance.
-        self.move(de=de, v=ve)
-      elif pe is not None:
-        # dl=0, pe=<value> means do a pressure compensating restore.
-        self.restore(pe=pe)
-      elif h is not None:
-        # dl=0, h=<value> means apply a generic hopup() or hopdn().
-        self.hopup() if h > 0 else self.hopdn()
-      elif r is not None:
-        # dl=0, r=<value> means apply a generic retract() or restore().
-        self.retract() if r<0 else self.restore()
-      return R0, C0
+      if h is not None:
+        # hop up then down to compensate for backlash.
+        self.move(h=h+0.4)
+        self.hopdn(h=h, de=de, pe=pe, ve=ve)
+      else:
+        self.retract(de=de, pe=pe, ve=ve)
+      return
     R1,C1 = R,C
     if R1 is not None: dR = R1 - R0
     if C1 is not None: dC = C1 - C0
@@ -434,22 +428,24 @@ class ExtrudeTest(gcodegen.GCodeGen):
     R1 = self.R1 - self.dRdC
     warmup = [
       dict(dC=1/72, vl=5, h=self.layer.h, w=self.layer.w, r=1.0),
-      dict(dC=3/72, vl=1, h=self.layer.h, w=self.layer.w, r=0.0)]
+      dict(dC=4/72, vl=1, h=self.layer.h, w=self.layer.w, r=0.0)]
     cooldn = [
-      dict(dl=0, pe=2.5),
-      dict(dC=3/72, vl=5,  h=self.layer.h, w=self.layer.w, r=1.0)]
+      dict(dl=0, h=self.layer.h, pe=1.5),
+      dict(dl=5, vl=5, h=self.layer.h, w=self.layer.w, r=1.0)]
     lines = warmup + lines + cooldn
     testargs = {k:self._getstep(ln, v) for k,v in kwargs.items()}
     assert any(dv for _,_,dv in testargs.values()), 'At least one arg in {kwargs} must be a range.'
     self.log(f'Test{tn} {name} {self._fset(**kwargs)}')
+    # Push the config arguments without applying changes before the test.
+    self.pushconf()
     # Adjust the retraction from the last hopup to what it would be for a
     # de=-5.0 retraction from the last pre-test draw. This is the retraction
     # performed after each line cooldown, which we try to match for the start
-    # of the first line. For vl=5mm/s ve=0.5mm/s l=0.3x0.5x1.0 and Kf=1.6,
-    # Kb=3.2 we get pe=2.5, so a de=-0.5 retract should have pe=-2.5.
-    self.retract(pe=-2.5)
-    # Push the config arguments without applying changes before the test.
-    self.pushconf()
+    # of the first line. Each cooldown line is started with pe=1.5 so a
+    # de=-5.0 retract should have pe=-3.5. We need to do this by setting
+    # Re=3.5 so dynret adjusts it to that.
+    self.setconf(Re=3.5)
+    self.retract()
     self.cmt(f'structure:shell-inner')
     e=0.00001
     while all(v <= v1+e for (v,v1,dv) in testargs.values()) and R>R1:
@@ -457,7 +453,7 @@ class ExtrudeTest(gcodegen.GCodeGen):
       confargs={k:v for k,v in lineargs.items() if k in self._CONF_ARGS}
       self.log(f'Test Line {name} {self._fset(**lineargs)}')
       self.setconf(**confargs)
-      self.hopdnrc(R,C, h=lineargs.get('h',self.layer.h), de=5.0)
+      self.hopdnrc(R, C, de=5.0)
       for l in lines:
         # Replace any name values in l with the corresponding value in lineargs.
         sargs={k:(eval(v,locals=lineargs) if isinstance(v,str) else v) for k,v in l.items()}
@@ -765,10 +761,10 @@ if __name__ == '__main__':
   # different fixed ve values and various w values.
   # ve=1.0 w=0.3, h=0.2 vl=1
   startstopspirl = [
-      dict(dl=0, de='Re'),
+      dict(dl=0, h='h', de='Re'),
       dict(dt=4, ve='ve', h='h', w='w', r=1),
       dict(dl=0, de='-(Re+Be)'),
-      dict(dl=20, vl=5, h='h', w='w', r=0)]
+      dict(dl=10, vl=5, h='h', w='w', r=0)]
   spiralStartStopargs = dict(name="startstop", lines=startstopspirl,
     ve=1.0, h=(0.18,0.38), dynret=False,
     tests=(

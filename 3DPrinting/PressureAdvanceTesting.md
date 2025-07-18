@@ -1751,7 +1751,38 @@ The results were;
 ![SpStartStopTest8 Result](data/SpStartStopTest8.jpg "SpStartStopTest8 Result")
 
 The commented version of gcode output for this is in
-[SpStartStopTest8_Te210Tp50Fe10Fc10Kf16Kb32Re17Rv.g](data/SpStartStopTest7_Te210Tp50Fe10Fc10Kf16Kb32Re17Rv.g).
+[SpStartStopTest8_Te210Tp50Fe10Fc10Kf16Kb32Re17Rv.g](data/SpStartStopTest8_Te210Tp50Fe10Fc10Kf16Kb32Re17Rv.g).
+
+I then decided that I should have used a hopup/hopdown action for changing
+heights to correct for backlash and re-did the test. I also tweaked the test
+line lengths and pressures to;
+
+* Extend the warmup drool stage from dC=3/72 to dC=4/72. This gives it more
+  time/distance to drain the vestigial pressure before starting the test line,
+  ensuring the test lines all start closer to zero pressure.
+
+* Reduce the cooldown line from dC=3/72 to dl=5mm. We don't really need a long
+  line at the end of the test to see if there was over-retraction before it,
+  we only need to see the line start point to know if the restore starting it
+  was right.
+
+* Reduced the test's final retraction-drool check from dl=20mm to dl=10mm. We
+  don't need a long drool-check to see if there was under-retraction, there is
+  either drool or no drool and we don't care for how long.
+
+* Fixed the initial pressure setting retraction at the beginning of each test
+  to use a fixed Re value so it doesn't get adjusted by dynret to whatever the
+  cmdline arguments were.
+
+* Adjusted the various restore pressures to try and give better results.
+
+The last pressure adjustments appear to have been a mistake, since the results
+were a bit messed up compared to the first results.
+
+![SpStartStopTest8b Result](data/SpStartStopTest8b.jpg "SpStartStopTest8b Result")
+
+The commented version of gcode output for this is in
+[SpStartStopTest8b_Te210Tp50Fe10Fc10Kf16Kb32Re17Rv.g](data/SpStartStopTest8b_Te210Tp50Fe10Fc10Kf16Kb32Re17Rv.g).
 
 ### Observations
 
@@ -1767,3 +1798,40 @@ retraction distances are sufficient, but this test doesn't tell us if they are
 excessive. However, with the restores all looking so clean with the previously
 identified optimal distances, I think it's unlikely the required retraction
 distances would have changed.
+
+At least thats what the first run of this test showed. The second run that was
+supposed to include only minor tweakss shows something a bit different, at
+least as far as ideal retraction distances go.
+
+The second run mostly confirms the conclusions about backpressure being
+independent of height until you get to h=0.38mm w=0.8, with all the test line
+restores apart from that one looking perfect. The restores for the test warmup
+lines look much more consistent between test-lines, but they also are a bit
+thicker than the first run, and although the warmup drool line is longer, the
+drool line is at least as thick when the test line starts as in the first run.
+After the test lines we see insufficient retraction for w=0.4 h=0.18-0.34 and
+w=0.6-0.8 h=0.18-0.24, combined with insufficient restore for the cooldown
+draw for w=0.6-0.8 h=0.24-0.38. I think this is largely because the pressure
+adjustments were just wrong, but also that over restore errors are pretty
+forgiving and under retractions are not when getting the pressure wrong. I
+think in this case the test lines have not yet decayed to the natural
+pressures by the end of the line and are higher than what they were in earlier
+test runs, resulting in the previously good retraction distance being
+insufficient.
+
+The different sensitivity for restore/retract is because incorrect pressure
+estimates are over/under by an absolute error margin, but the flow error
+artifacts scale with the relative error, which is small after a restore when
+the pressure is high and very large after a retraction when the pressure is
+low. However, getting the restore pressure right is critical because restore
+pressure errors take so long to decay away that they still significantly
+impact the future retraction.
+
+However, looking closer at the commented gcode the model suggests the start
+and retraction pressures for the test lines should have been **lower** in the
+second run, not higher. This contradicts that theory. For the w=0.8 test the
+line-start post-restore pressures are 0.7->0.4 lower and the post-retract
+pressures are 0.05->0.03 lower. This suggests that retractions are highly
+sensitive to something else, like maybe me fiddling with the spool in its
+drybox/bowden (which I have done on occassion during these prints to check if
+there's resistance and try to reduce it), or just a bit random. Sigh.
