@@ -1111,7 +1111,9 @@ M18
     # Zero all positions so the first move's deltas are actually absolute.
     self.x, self.y, self.z, self.e, self.f = 0.0, 0.0, 0.0, 0.0, 0
     self.f_t = self.f_l = self.f_e  = 0.0
-    self.pe = self.eb = self.vl = self.ve = self.h = 0.0
+    # We assume prints start retracted.
+    self.pe = -self.Re
+    self.eb = self.vl = self.ve = self.h = 0.0
     self.prevcmds, self.nextcmds, self.finalize = deque(), nextcmds, finalize
     self.c = self.m = self.d = None
     self.resetlayer()
