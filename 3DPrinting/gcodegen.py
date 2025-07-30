@@ -1100,6 +1100,9 @@ M18
   def isbin(self, cmd):
     return isinstance(cmd, bytes)
 
+  def iswait(self, cmd):
+    return self.iscmd(cmd) and cmd[0] == 'G4'
+
   def resetfile(self, nextcmds=None, finalize=False):
     """ Reset all file state variables.
 
@@ -1405,7 +1408,7 @@ M18
       self.add(fcode)
 
   def add(self, code):
-    """ Add code Layer, Move, Wait, or format-string instances. """
+    """ Add any kind of command code. """
     if not code:
       # Skip empty commands.
       return
@@ -1668,8 +1671,8 @@ M18
 
     prevs = []
     v0, m = 0.0, None
-    # Only go through non-comment commands using None for non-moves.
-    cmds = (m for m in self.prevcmds if not isinstance(m, str))
+    # Only go through movement related commands using None for waits.
+    cmds = (m for m in self.prevcmds if self.ismove(m) or self.iswait(m))
     for m1 in (m if self.ismove(m) else None for m in cmds):
       if m:
         # fixv m and possibly previous moves for next move m1.
