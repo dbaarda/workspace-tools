@@ -161,7 +161,6 @@ Kb=4.0
 Re=3.0
 """
 import argparse
-import re
 import sys
 from math import e, pi, inf, sqrt, copysign
 import vtext
@@ -257,16 +256,19 @@ class Move(MoveBase):
   https://mmone.github.io/klipper/Kinematics.html
 
   Note for printers with different specs this can be subclassed with the `Ap`,
-  `Vp`, and `Gp` overridden by setting them as arguments when subclassing.
+  `Vp`, `Ae`, `Ve`, `Gp`, and `Je` overridden by setting them as arguments
+  when subclassing. The values used here are taken from the OrcaSlicer
+  defaults for the Flashforge Adventurer 3 with changes `Vp = 150-> 100 mm/s`,
+  `Ve = 30 -> 40 mm/s` to match published and/or apparent specs.
   """
-  Fd = 1.75  # Fillament diameter.
-  Nd = 0.4   # Nozzle diameter.
+  Fd = 1.75 # Fillament diameter.
+  Nd = 0.4  # Nozzle diameter.
   Ap = 500  # printer acceleration in mm/s^2.
   Vp = 100  # printer max velocity in mm/s.
-  Ae = 1000 # extruder acceleration in mm/s^2.
+  Ae = 500  # extruder acceleration in mm/s^2.
   Ve = 40   # extruder max velocity in mm/s.
   Gp = 0.1  # printer cornering deviation distance in mm.
-  Je = 1.0  # extruder "jerk" speed deviation in mm/s.
+  Je = 2.5  # extruder "jerk" speed deviation in mm/s.
   Fa = acircle(Fd)  # Fillament area in mm^2.
   Na = acircle(Nd)  # Nozzle area in mm^2.
   # These are constant middle phase acceleration and velocity change attributes.
@@ -277,7 +279,9 @@ class Move(MoveBase):
 
   def __init_subclass__(cls, Fd=Fd, Nd=Nd, Ap=Ap, Vp=Vp, Gp=Gp, Ae=Ae, Ve=Ve, Je=Je):
     super().__init_subclass__()
-    cls.Fd, cls.Nd, cls.Ap, cls.Vp, cls.Gp, cls.Ae, cls.Ve, cls.Je = Fd, Nd, Ap, Vp, Gp, Ae, Ve, Je
+    cls.Fd, cls.Nd = Fd, Nd
+    cls.Ap, cls.Vp, cls.Gp = Ap, Vp, Gp
+    cls.Ae, cls.Ve, cls.Je = Ae, Ve, Je
     cls.Fa = acircle(Fd)
     cls.Na = acircle(Nd)
 
@@ -287,8 +291,8 @@ class Move(MoveBase):
     args = tuple(getnear(a) for a in args)
     kwargs = {k:getnear(v) for k,v in kwargs.items()}
     self = super().__new__(cls, *args, **kwargs)
-    assert 0.0 <= self.v <= cls.Vp
     self.v0 = self.v1 = 0.0
+    assert 0.0 <= self.v <= cls.Vp, f'{self.v=} {cls.Vp=} for {self!r}'
     self.setv(v0, v1)
     return self
 
@@ -941,6 +945,10 @@ class GCodeGen(object):
   Na = acircle(Nd)  # Nozzle area.
   Zh = Nd/2  # z-hop height.
 
+  # Slicer Types for formating gcode.
+  SlicerTypes = ('FlashPrint', 'OrcaSlicer')
+  FlashPrint, OrcaSlicer = SlicerTypes
+
   startcode = """\
 ;gcode_flavor: flashforge
 ;machine_type: Adventurer 3 Series
@@ -1000,6 +1008,7 @@ M18
     return f'M106' if fe == 1.0 else f'M106 S{round(fe*255)}' if fe else 'M107'
 
   def __init__(self,
+      Slicer=FlashPrint,
       Te=210, Tp=50, Fe=1.0, Fc=1.0, fKf=0.0,
       Kf=0.0, Kb=0.0, Re=5,
       Vp=60, Vt=100, Vz=7, Ve=40, Vb=30,
@@ -1007,6 +1016,9 @@ M18
       relext=False, optmov=False, segvel=False, fixvel=0,
       diff=False, verb=False,
       dynret=False, dynext=False):
+    assert Slicer in self.SlicerTypes
+    # Slicer gcode flavour to use.
+    self.Slicer = Slicer
     # Temp and Fan settings.
     self.Te, self.Tp, self.Fe, self.Fc, self.fKf = Te, Tp, Fe, Fc, fKf
     # Linear advance and retraction settings.
@@ -1098,6 +1110,7 @@ M18
     self.f_t = self.f_l = self.f_e  = 0.0
     self.pe = self.eb = self.vl = self.ve = self.h = 0.0
     self.prevcmds, self.nextcmds, self.finalize = deque(), nextcmds, finalize
+    self.c = self.m = self.d = None
     self.resetlayer()
 
   def resetlayer(self):
@@ -1106,7 +1119,6 @@ M18
     self.layer = Layer(
         -1, 0.0, self.Vp, self.Vt, self.Vz, self.Ve, self.Vb, self.Lh, self.Lw, self.Lr)
     self.l_t = self.l_l = self.l_e = 0.0
-    self.c = self.m = self.d = None
     self.resetstate()
 
   def resetstate(self):
@@ -1260,8 +1272,14 @@ M18
 
   def flayer(self, l):
     """ Format a layer as a comment string. """
-    # layer 0 is the preExtrude
-    return self.fcmt('{"layer" if layer.n else "preExtrude"}:{layer.h:.2f}')
+    if self.Slicer == self.FlashPrint:
+      # layer 0 is the preExtrude
+      return self.fcmt('{"layer" if layer.n else "preExtrude"}:{layer.h:.2f}')
+    else:
+      return '\n'.join([
+      self.fcmt('LAYER_CHANGE'),
+      self.fcmt('Z:{round(layer.z+layer.h,3):.6g}'),
+      self.fcmt('HEIGHT:{round(layer.h,3)}')])
 
   def fmove(self, m):
     """ Format a Move as a gcode command. """
@@ -1281,10 +1299,39 @@ M18
       cmd = f'{cmd:40s}; {{dt=:.3f}} {{m}} r={cmt}'
     return cmd
 
+  def _farg_FlashPrint(self, k, v):
+    # This formats always with the number of digits for the desired precision.
+    # Number of decimals for cmd arguments.
+    argfmt = dict(X='.2f',Y='.2f',Z='.3f',E='.4f',F='d').get(k,'')
+    return k + (v if isinstance(v, str) else f'{v:{argfmt}}')
+
+  def _farg_OrcaSlicer(self, k, v):
+    # This formats using the least digits necessary for the desired precision.
+    argres = dict(X=3,Y=3,Z=3,E=5,F=0).get(k,6)
+    if not isinstance(v, str):
+      v = f'{round(v, argres):.12g}'
+      if v.startswith('0.') or v.startswith('-0.'):
+        v = v.replace('0','',1)
+    return k + v
+
+  def farg(self, k, v):
+    # This replaces itself with the right formatter after first use.
+    if self.Slicer == 'FlashPrint':
+      self.farg=self._farg_FlashPrint
+    else:
+      self.farg=self._farg_OrcaSlicer
+    return self.farg(k,v)
+
   def fcmd(self, cmd, **kwargs):
-    """ Format a gcode command. """
-    fmts = dict(X='.2f',Y='.2f',Z='.3f',E='.4f',F='d')
-    args = ' '.join(f'{k}{v:{fmts.get(k,"")}}' for k,v in kwargs.items() if v is not None)
+    """ Format a gcode command.
+
+    Args set to None like X=None are omitted. Args set to a string value like
+    X='100' use the string value without any re-formating like "X100". Args
+    set to an empty string like A='' will give the arg without a value like
+    "A". Numeric value arguments will generally be formatted with decimal
+    places appropriate for their required precision.
+    """
+    args = ' '.join(self.farg(k,v) for k,v in kwargs.items() if v is not None)
     return f'{cmd} {args}' if args else cmd
 
   def fstr(self, str):
@@ -1377,7 +1424,14 @@ M18
     """ Add a gcode command as a tuple. """
     # Strip out None arguments.
     kwargs = {k:v for k,v in kwargs.items() if v is not None}
-    self.add((cmd, kwargs))
+    # convert G0 and G1 cmds into moves.
+    if cmd in ('G0', 'G1'):
+      # Use the previous f value and machine limits when inserting raw move cmds.
+      kwargs['v'] = min(kwargs.pop('F', self.f)/60, self.GMove.Vp)
+      kwargs = {k.lower():v for k,v in kwargs.items()}
+      self.move(**kwargs)
+    else:
+      self.add((cmd, kwargs))
 
   def cmt(self, cmt):
     """ Add a comment. """
@@ -1416,9 +1470,9 @@ M18
         w or self.Lw,
         r*self.Lr)
     self.add(l)
-    self.log('layer={layer.n} h={layer.h:.2f} w={layer.w:.2f} r={layer.r:.2f}')
-    if not isneareq(l.r, self.Lr, 2):
-      self.cmt(f'extrude_ratio:{round(layer.r, 2):.3g}')
+    self.log('layer={layer.n} z={layer.z:.2f} h={layer.h:.2f} w={layer.w:.2f} r={layer.r:.2f}')
+    if not isneareq(l.r, self.Lr, 2) and self.Slicer == self.FlashPrint:
+      self.cmt(f'extrude_ratio:{round(layer.r, 2):.4g}')
 
   def endLayer(self):
     self.layerstats()
@@ -1468,8 +1522,10 @@ M18
     m = self.GMove(dx,dy,dz,de,v,h=h,w=w)
     # Only add it if it does anything.
     if any(m[:4]):
-      #if m.isdraw and not isneareq(m.r, self.r, 2):
-      #  self.cmt(f'extrude_ratio:{round(m.r, 2):.3g} {m.r=} {self.r=}')
+      #if m.isdraw and not isneareq(m.r, self.r, 2) and self.Slicer == self.FlashPrint:
+      #  self.cmt(f'extrude_ratio:{round(m.r, 2):.4g} {m.r=} {self.r=}')
+      if self.Slicer != self.FlashPrint and m.isdraw and not isneareq(m.w, self.w):
+        self.cmt(f'WIDTH:{getnear(m.w+self.layer.h*(1-pi/4))}')
       self.add(m)
     else:
       self.log(f'skipping empty move {m}')
@@ -1898,6 +1954,8 @@ def RangeType(min=-inf, max=inf):
 
 def GCodeGenArgs(cmdline):
   """Add argparse cmdline arguments for GCodeGen params."""
+  cmdline.add_argument('-Slicer', choices=GCodeGen.SlicerTypes, default=GCodeGen.FlashPrint,
+      help='Slicer GCode format for comments and hints.')
   cmdline.add_argument('-Te', type=RangeType(0, 265), default=245,
       help='Extruder temperature.')
   cmdline.add_argument('-Tp', type=RangeType(0, 100), default=100,
@@ -1951,6 +2009,7 @@ def GCodeGenArgs(cmdline):
 def GCodeGetArgs(args):
   """ Get the dict of standard GCode arguments. """
   return dict (
+      Slicer=args.Slicer,
       Te=args.Te, Tp=args.Tp, Fe=args.Fe, Fc=args.Fc, fKf=args.fKf,
       Kf=args.Kf, Kb=args.Kb, Re=args.Re,
       Vp=args.Vp, Vt=args.Vt, Vz=args.Vz, Ve=args.Ve, Vb=args.Vb,

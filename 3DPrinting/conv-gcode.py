@@ -221,7 +221,7 @@ before and after.
 
 import re
 import gcodegen
-from math import log
+from math import pi
 
 
 def RelativeToAbsoluteE(data):
@@ -298,6 +298,7 @@ class Printer(gcodegen.GCodeGen):
     self.fd = 0.0  # current fanspeed drive.
     self.fe = 0.0  # filtered nozzle flow rate over past Tf.
     self.ft = 0.0  # time since last fan pwm cycle.
+    self._w = None
 
   def iterstate(self, dt, dl, de, dh, dvl, dve):
     """ Increment the state for a small dt interval. """
@@ -366,7 +367,8 @@ class Printer(gcodegen.GCodeGen):
       self.fs = fs
     if not gcodegen.isneareq(fd, self.fd, 2):
       self.setefan(fd)
-    self.fanstats()
+    if self.Hs:
+      self.fanstats()
 
   def setefan(self, s):
     """ Set the extruder fan speed between 0.0 to 1.0. """
@@ -377,6 +379,12 @@ class Printer(gcodegen.GCodeGen):
       self.cmd('M106')
     else:
       self.cmd('M106', S=round(s*255))
+
+  def setcfan(self, s):
+    if s == 0.0:
+      self.cmd('M652')
+    else:
+      self.cmd('M651', S=round(s*255))
 
   def layerstats(self):
     super().layerstats()
@@ -403,61 +411,64 @@ class Printer(gcodegen.GCodeGen):
 
   def padd(self, line):
     """ Parse and add a line of gcode. """
-    #print(line)
-    if line.startswith(';start gcode'):
-      self.cmt('heat_ext: {Hs}')
-      self.cmt('layer_pause: {Lp}')
-      self.add(line)
-    elif line.startswith(';preExtrude:'):
-      self.Layer(line)
-    elif line.startswith(';layer:'):
-      self.Layer(line)
-    elif line.startswith(';end gcode'):
-      self.layerstats()
-      self.filestats()
-      self.add(line)
-    elif line.startswith('M106'):
-      self.M106(line)
-    elif line.startswith('M107'):
-      self.M107(line)
-    elif line.startswith('G4 '):
-      self.G4(line)
-    elif line.startswith('G1 '):
-      self.G1(line)
+    if line and line[0] in 'GM':
+      self.pcmd(line)
+    elif line and line[0] == ';':
+      if re.match(r';(preExtrude:|layer:|LAYER_CHANGE|HEIGHT:|WIDTH:|Z:)', line):
+        self.Layer(line)
+      elif line.startswith(';start gcode') or line.startswith('; HEADER_BLOCK_END'):
+        self.cmt(' postprocess_cmd: {_getCmdline()}')
+        self.add(line)
+      elif line.startswith(';end gcode') or line.startswith('; EXECUTABLE_BLOCK_END'):
+        self.layerstats()
+        self.filestats()
+        self.add(line)
+      else:
+        # Encode other input comment lines so they are not reformated.
+        self.add(line.encode())
     else:
       self.add(line)
 
   def Layer(self, line):
     """ Start a new layer. """
-    t, h= re.match(';(preExtrude|layer):(\d+.\d+)', line).groups()
-    h = float(h)
-    if t == 'preExtrude':
-      self.startLayer(n=0, z=0.0, h=h)
+    if not (m := re.match(';(preExtrude|layer|HEIGHT|WIDTH):(\d+.\d+)', line)):
+      # Just drop other layer comment lines, they'll be re-added later.
+      return
+    t,v = m.groups()
+    v = float(v)
+    if t == 'WIDTH':
+      # For OrcaSlicer WIDTH comments set self._w for the next moves.
+      self._w = gcodegen.getnear(v - self.layer.h * (1 - pi/4))
+    elif t == 'preExtrude':
+      self.startLayer(n=0, z=0.0, h=gcodegen.getnear(v,3))
+    elif t =='HEIGHT' and self.layer.n == -1:
+      # These are OrcaSlicer layers that start at layer 1.
+      self.startLayer(n=1, z=0.0, h=gcodegen.getnear(v,3))
     else:
-      self.nextLayer(h=h)
+      self.nextLayer(h=gcodegen.getnear(v,3))
 
-  def M106(self, line):
-    """ Fan on."""
-    m = re.match(r'M106(?: S([-+0-9.]+))?', line)
-    fs = 1.0 if m[1] is None else int(m[1])/255
-    self.setefan(fs)
-
-  def M107(self, line):
-    """ Fan off. """
-    self.setefan(0.0)
-
-  def G1(self, line):
-    m = re.match(r'G1(?: X([-+0-9.]+))?(?: Y([-+0-9.]+))?(?: Z([-+0-9.]+))?(?: E([-+0-9.]+))?(?: F([-+0-9]+))?', line)
-    x,y,z,e,f = (a if a is None else float(a) for a in m.groups())
-    # Always use the previous f value when parsing gcode files.
-    if f is None: f = self.f
-    self.move(x=x, y=y, z=z, e=e, v=f/60)
-
-  def G4(self, line):
-    """ wait. """
-    m = re.match(r'G4 P([0-9]+)', line)
-    dt = float(m[1])/1000.0
-    self.wait(dt)
+  def pcmd(self, line):
+    argre=r'(?:\s+(?P<name>[A-Z])(?P<value>\S*))'
+    cmdre=fr'([GM]\d+)({argre}*)(?:\s*;.*)?'
+    m = re.fullmatch(cmdre, line)
+    if not m:
+      raise RuntimeError(f'not a cmd: {line!r}')
+    cmd,args=m[1],m[2]
+    #args= {m['name']:m['value'] for m in re.finditer(f'{argre}',args)}
+    args = {m['name']:(eval(m['value']) if m['value'] else '') for m in re.finditer(f'{argre}',args)}
+    # If this is a move command, add a w=<width> argument that will be passed through to the move().
+    if cmd in ('G0','G1'):
+      args['w'] = self._w or self.w
+    elif cmd == 'M107':
+      return self.setefan(0.0)
+    elif cmd == 'M106':
+      P,S = args.get('P', 0), args.get('S', 255)/255
+      if P == 0:
+        self.setefan(S)
+      elif P == 2:
+        self.setcfan(S)
+      return
+    self.cmd(cmd,**args)
 
 
 def GCodeGenArgs(cmdline):
@@ -480,7 +491,7 @@ def GCodeGetArgs(args):
 if __name__ == '__main__':
   import argparse, sys
 
-  cmdline = argparse.ArgumentParser(description='Postprocess FlashPrint gcode.',
+  cmdline = argparse.ArgumentParser(description='Postprocess gcode.',
       formatter_class=argparse.ArgumentDefaultsHelpFormatter)
   GCodeGenArgs(cmdline)
   cmdline.add_argument('infile', nargs='?', type=argparse.FileType('rb'), default=sys.stdin.buffer,
@@ -491,4 +502,10 @@ if __name__ == '__main__':
   p=Printer(**GCodeGetArgs(args))
   p.addCode(data)
   data=p.getCode()
-  sys.stdout.buffer.write(data)
+
+  if args.infile == sys.stdin.buffer:
+    outfile = sys.stdout.buffer
+  else:
+    args.infile.close()
+    outfile = open(args.infile.name, 'wb')
+  outfile.write(data)
