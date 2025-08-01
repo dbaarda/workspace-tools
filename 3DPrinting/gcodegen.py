@@ -108,13 +108,17 @@ dPe/dt = ve - vn
        = de/dt - vn
    dPe = de - dt * vn
        = de - dt * Pe * v/(Kf*v + Kb*Af/h)
+       = de - Pe * dl/(Kf*v + Kb*Af/h)
+       = de - Pe * dl*dt/(Kf*dl + Kb*Af/h*dt)
        = de - Pe * dt/(Kf + Kb*Af/(v*h))
 
-This is an exponentially decaying process with time-constant `T = Kf +
-Kb*Af/(v*h)`. This means with no additional extrusion `ve=0`, extruder
-pressure `Pe` will decay towards 0 over a time roughly of `Kf + Kb*Af/(h*v)`.
-Note that for `v=0` that time is infinity, which means it will not decay at
-all.
+This is an exponentially decaying process over time and line-distance. Looking
+at it over time it has a decay time-constant `T = Kf + Kb*Af/(v*h)`. Looking
+at it over distance it has a decay distance-constant of `L = Kf*v + Kb*Af/h`.
+This means with no additional extrusion `ve=0`, extruder pressure `Pe` will
+decay towards 0 over a time roughly of `Kf + Kb*Af/(h*v)`. Similarly it will
+decay towards zero over a distance of `Kf*v + Kb*Af/h`. Note that for `v=0`
+the time to decay is infinity, which means it will not decay at all.
 
 However, that assumes there is already a bead with backflow pressure Pb to
 match Pe. When you first start extruding after a restore, there is no bead and
@@ -1380,17 +1384,17 @@ M18
         self.log('skipping empty restore.')
         return
     elif self.dynext and (m.isdraw or (self.pe > 0.0 and m.isgo)):
-      # Adjust extrusion for any draw or move with positive pressure.
-      # Get the ve and db before and after this move. Note if m.v1 > 0.0 there
-      # must be a following move.
+      # Adjust extrusion for any draw or non-retracted move.
+      # Get the ve and db before and after this move.
       ve0 = self.ve
       ve1 = next((m1.ve0 for m1 in self.nextcmds if self.ismove(m1)), 0.0)
       # Get the pe and eb for the next moves.
       pe, eb = self._getNextPeEb()
-      # Adjust de to include required change in pe over the move.
-      # TODO: This tends to oscillate, change to a PID or PD controller.
-      # Lets try the P control first with Kp=0.2 so it's gentle.
-      de = m.de + 0.2*(pe + eb - (self.pe + self.eb))
+      # Calculate the adjusted m.de from the average ve to accumulate the
+      # required pressure change over the next Kf/2 seconds.
+      # TODO: Maybe use a PID or PD controller instead.
+      dpe = pe + eb - (self.pe + self.eb)
+      de = m.de + 2*dpe/self.Kf * m.dt
       Je = 0.8*m.Je
       if m.v0 > 0.0:
         # Constrain de within jerk limits of previous move's final ve.
@@ -1630,20 +1634,38 @@ M18
 
   def _getNextPeEb(self):
     "Get pe and eb for the next draws."
-    dt = dl = vedl = dbdl = ebdl = 0.0
-    # Get the line-average ve and eb for the next 10mm and 1s of moves up to
-    # the next retract/restore.
-    for m1 in (m for m in self.nextcmds if self.ismove(m)):
-      if m1.isadjust or (dl > 10 and dt > 1.0): break
-      dt+=m1.dt
-      dl+=m1.dl
-      vedl+=m1.de/m1.dt*m1.dl
-      dbdl+=m1.db*m1.dl
-      ebdl+=m1.eb*m1.dl
-    if dl:
-      # Calculate pe and eb using the line-averages.
-      return self.Pe(vedl/dl, dbdl/dl), ebdl/dl
-    return 0.0, 0.0
+    # Get the exponentially decaying average pe and eb for the future moves up to
+    # the next retract/restore. This needs to calculate the increasing decay as
+    # we go further into the future.
+    T = self.Kf       # the decay time-constant.
+    pe = eb = 0.0     # the averaged pe and eb.
+    ve1 = db1 = eb1 = 0.0   # the last (most future) ve, db, and eb.
+    K = 1.0           # the accumulated decay multiplier.
+
+    def accum(ve, db, meb, dt):
+      nonlocal K, pe, eb
+      # accumulate decayed averages and update decay multiplier.
+      a = K * dt/(T + dt)
+      pe += a*self.Pe(ve, db)
+      eb += a*meb
+      K *= T/(T + dt)
+
+    for m in (m1 for m1 in self.nextcmds if self.ismove(m1)):
+      if m.isadjust or K < 0.01: break
+      # accumulate acceleration/deceleration phases using average ve.
+      accum((m.ve0 + m.vem)/2, m.db, m.eb, m.dt0)
+      accum(m.vem, m.db, m.eb, m.dtm)
+      accum((m.vem + m.ve1)/2, m.db, m.eb, m.dt1)
+      # Note we use the last draw's middle phase for the last values because
+      # Orca sometimes puts wipe-moves before retracts, and we want the
+      # pressure of the last move, not the zero it tries and fails to
+      # decelerate to before the retract.
+      if m.isdraw:
+        ve1, db1, eb1 = m.vem, m.db, m.eb
+    # treat last pe and eb as lasting forever.
+    pe += K*self.Pe(ve1, db1)
+    eb += K*eb1
+    return pe, eb
 
   def modjoin(self):
     """Postprocess gcode to join moves."""
