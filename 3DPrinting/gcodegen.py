@@ -1383,14 +1383,14 @@ M18
       # Adjust extrusion for any draw or move with positive pressure.
       # Get the ve and db before and after this move. Note if m.v1 > 0.0 there
       # must be a following move.
-      ve0, db0 = self.ve, self.db
-      ve1, db1 = next((m1.ve0, m1.db) for m1 in self.nextcmds if self.ismove(m1)) if m.v1 else (0.0,0.0)
-      # For calculating the pressure pe needed, use ve1 and db1.
-      pe = self.Pe(ve1, db1)
+      ve0 = self.ve
+      ve1 = next((m1.ve0 for m1 in self.nextcmds if self.ismove(m1)), 0.0)
+      # Get the pe and eb for the next moves.
+      pe, eb = self._getNextPeEb()
       # Adjust de to include required change in pe over the move.
       # TODO: This tends to oscillate, change to a PID or PD controller.
       # Lets try the P control first with Kp=0.2 so it's gentle.
-      de = m.de + 0.2*(pe - self.pe)
+      de = m.de + 0.2*(pe + eb - (self.pe + self.eb))
       Je = 0.8*m.Je
       if m.v0 > 0.0:
         # Constrain de within jerk limits of previous move's final ve.
@@ -1630,22 +1630,19 @@ M18
 
   def _getNextPeEb(self):
     "Get pe and eb for the next draws."
-    dt = dl = vedl = dbdl = eb = 0.0
-    # Get the line-average ve and db for the next 10mm and 1s of moves.
+    dt = dl = vedl = dbdl = ebdl = 0.0
+    # Get the line-average ve and eb for the next 10mm and 1s of moves up to
+    # the next retract/restore.
     for m1 in (m for m in self.nextcmds if self.ismove(m)):
-      if not m1.isdraw or (dl > 10 and dt > 1.0): break
+      if m1.isadjust or (dl > 10 and dt > 1.0): break
       dt+=m1.dt
       dl+=m1.dl
       vedl+=m1.de/m1.dt*m1.dl
       dbdl+=m1.db*m1.dl
-      # Get eb from the first move.
-      if not eb:
-        eb = m1.eb
-        # For dynext, only use the first move.
-        if self.dynext: break
+      ebdl+=m1.eb*m1.dl
     if dl:
-      # Calculate pe using the line-average ve and db.
-      return self.Pe(vedl/dl, dbdl/dl), eb
+      # Calculate pe and eb using the line-averages.
+      return self.Pe(vedl/dl, dbdl/dl), ebdl/dl
     return 0.0, 0.0
 
   def modjoin(self):
