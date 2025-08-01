@@ -1361,35 +1361,54 @@ M18
 
   def faddmove(self, m):
     """ Do a final format and add of a Move. """
-    if m.isretract and self.dynret:
+    if self.dynret and m.isretract:
       # Adjust retraction to Re and also relieve advance pressure.
-      #self.log(f'adjusting {m} for {pe=:.4f}')
       m = m.change(de=-self.Re - self.pe)
+      # self.log(f'adjusted {m0} -> {m}')
       # If de is zero, skip adding this.
       if not m.de:
         self.log('skipping empty retract.')
         return
-    elif m.isrestore and self.dynret:
+    elif self.dynret and m.isrestore:
       # Get the pe and eb for the next draws.
       pe, eb = self._getNextPeEb()
       # Adjust existing restore and add the starting bead.
-      # self.log(f'adjusting {c} for {pe=:.4f} {eb=:.4f}')
-      # Using P control with Kp=0.8 for restores was contributing to
-      # underrestores without dynext, so only do that if dynext is on.
-      if self.dynext: pe *= 0.8
       m = m.change(de=pe - self.pe + eb)
+      # self.log(f'adjusted {m0} -> {m}')
       # If de is zero, skip adding this.
       if not m.de:
         self.log('skipping empty restore.')
         return
-    elif m.isdraw and self.dynext:
-      # For calculating the pressure pe needed, use the ending ve1.
-      pe = self.Pe(m.ve1, m.db)
+    elif self.dynext and (m.isdraw or (self.pe > 0.0 and m.isgo)):
+      # Adjust extrusion for any draw or move with positive pressure.
+      # Get the ve and db before and after this move. Note if m.v1 > 0.0 there
+      # must be a following move.
+      ve0, db0 = self.ve, self.db
+      ve1, db1 = next((m1.ve0, m1.db) for m1 in self.nextcmds if self.ismove(m1)) if m.v1 else (0.0,0.0)
+      # For calculating the pressure pe needed, use ve1 and db1.
+      pe = self.Pe(ve1, db1)
       # Adjust de to include required change in pe over the move.
-      # self.log(f'adjusting {c} {c.ve=:.4f}({c.ve0:.4f}<{c.vem:.4f}>{c.ve1:.4f}) {c.isaccel=}')
       # TODO: This tends to oscillate, change to a PID or PD controller.
-      # Lets try the P control first with Kp=0.8 to try and reduce the overshoot.
-      m = m.change(de=m.de + 0.8*(pe - self.pe))
+      # Lets try the P control first with Kp=0.2 so it's gentle.
+      de = m.de + 0.2*(pe - self.pe)
+      Je = 0.8*m.Je
+      if m.v0 > 0.0:
+        # Constrain de within jerk limits of previous move's final ve.
+        mve0 = de/m.dl*m.v0
+        mve0 = min(ve0 + Je, max(ve0 - Je, mve0))
+        de = mve0*m.dl/m.v0
+      if m.v1 > 0.0:
+        # Constrain de within jerk limits to next move's initial ve.
+        mve1 = de/m.dl*m.v1
+        mve1 = min(ve1 + Je, max(ve1 - Je, mve1))
+        de = mve1*m.dl/m.v1
+      m = m.change(de=de)
+      assert abs(m.ve0) <= m.Ve
+      assert abs(m.vem) <= m.Ve
+      assert abs(m.ve1) <= m.Ve
+      assert abs(m.ve0 - ve0) <= m.Je, f'{m.ve0=} {ve0=} {m.ve0-ve0=} {m}'
+      assert abs(m.ve1 - ve1) <= m.Je, f'{m.ve1=} {ve1=} {m.ve1-ve1=} {m}'
+      #self.log(f'adjusted {m0} -> {m}')
     if self.e + m.de > 1000.0:
       # Reset the E offset before it goes over 1000.0
       self.cmd('G92', E=0)
