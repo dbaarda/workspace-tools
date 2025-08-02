@@ -275,6 +275,7 @@ class Move(MoveBase):
   Je = 2.5  # extruder "jerk" speed deviation in mm/s.
   Fa = acircle(Fd)  # Fillament area in mm^2.
   Na = acircle(Nd)  # Nozzle area in mm^2.
+  La = 0.5*Vp**2/Ap # Acceleration to Vp distance in mm.
   # These are constant middle phase acceleration and velocity change attributes.
   am = aem = dvm = dvem = 0.0
 
@@ -288,6 +289,7 @@ class Move(MoveBase):
     cls.Ae, cls.Ve, cls.Je = Ae, Ve, Je
     cls.Fa = acircle(Fd)
     cls.Na = acircle(Nd)
+    cls.La = 0.5*cls.Vp**2/cls.Ap
 
   def __new__(cls, *args, v0=None, v1=None, **kwargs):
     """ Create a new Move. """
@@ -570,8 +572,9 @@ class Move(MoveBase):
 
   @cached_property
   def eb(self):
-    """ The extrusion bead volume. """
-    return self._eb(self.h, self.w, self.r)
+    """ The extrusion bead volume not including r under/over extrusion. """
+    # Return a tiny min to avoid divide-by-zero for zero or negative height moves.
+    return max(self._eb(self.h, self.w), 0.00001)
 
   @cached_property
   def el(self):
@@ -934,6 +937,8 @@ class GCodeGen(object):
     de: the extruder change of the last command.
     en: the extruded volume of the last command.
     db0: the bead diameter at the start of the last move.
+    eb0: the bead volume at the start of the last move.
+    r0,rm,r1: the extrusion ratios of the last move (property)
     c: the last non-comment command.
     m: the last move command.
     d: the last move command that was a draw.
@@ -1078,6 +1083,28 @@ M18
     return self.pn/self.Kf if self.Kf else self.ve if self.pe>=self.pb else 0.0
 
   @property
+  def r0(self):
+    """ The extrusion ratio at the start of the last move."""
+    m = self.m
+    return self.eb0/m.eb if m and m.h else 0.0
+
+  @property
+  def rm(self):
+    """ The extrusion ratio at the middle of the last move."""
+    m = self.m
+    if m and m.h:
+      if m.isgo:
+        return (self.en + (self.eb0 - self.eb)/2)/m.el
+      return (self.eb0 + self.eb)/(2*m.eb)
+    return 0.0
+
+  @property
+  def r1(self):
+    """ The extrusion ratio at the end of the last move."""
+    m = self.m
+    return self.eb/m.eb if m and m.h else 0.0
+
+  @property
   def w(self):
     """ Get the current default width."""
     # This is the width of the previous draw or the layer default.
@@ -1214,7 +1241,7 @@ M18
     assert isneareq(self.h, self.z - self.layer.z), f'{self.h=} != {self.z - self.layer.z}'
     assert isneareq(self.vl, m.v0), f'{self.vl=} != {m.v0=} for {m} at {ftime(self.f_t)}'
     assert isnearle(abs(self.ve - m.ve0), self.GMove.Je), f'{self.ve=} {m.ve0=} {self.m!s} -> {m!s}'
-    self.db0 = self.db
+    self.db0, self.eb0 = self.db, self.eb
     self.resetstate()
     # Save the expected final h to assert against later.
     h1 = self.h + m.dz
@@ -1304,8 +1331,7 @@ M18
     cmd = self.fcmd('G1', X=x, Y=y, Z=z, E=e, F=f)
     if self.verb:
       # Add additional command comment suffix.
-      cmt = '({db0/m.w:.2f}<{en/m.el if m.el else 0.0:.2f}>{db/m.w:.2f})' if m.dl else '{db/m.w:.2f}'
-      cmd = f'{cmd:40s}; {{dt=:.3f}} {{m}} r={cmt}'
+      cmd = f'{cmd:40s}; {{dt=:.3f}} {{m}} r=({{r0:.2f}}<{{rm:.2f}}>{{r1:.2f}})'
     return cmd
 
   def _farg_FlashPrint(self, k, v):
@@ -1365,7 +1391,10 @@ M18
 
   def faddmove(self, m):
     """ Do a final format and add of a Move. """
-    if self.dynret and m.isretract:
+    if self.layer.n <= 0:
+      # Skip adjusting pressures and retracts for preextrudes before layer 1.
+      pass
+    elif self.dynret and m.isretract:
       # Adjust retraction to Re and also relieve advance pressure.
       m = m.change(de=-self.Re - self.pe)
       # self.log(f'adjusted {m0} -> {m}')
@@ -1389,30 +1418,33 @@ M18
       ve0 = self.ve
       ve1 = next((m1.ve0 for m1 in self.nextcmds if self.ismove(m1)), 0.0)
       # Get the pe and eb for the next moves.
-      pe, eb = self._getNextPeEb()
-      # Calculate the adjusted m.de from the average ve to accumulate the
-      # required pressure change over the next Kf/2 seconds.
+      pe, eb = self._getNextPeEb(m)
+      # Get the pressure adjustment required, scaled by P=0.8.
       # TODO: Maybe use a PID or PD controller instead.
-      dpe = pe + eb - (self.pe + self.eb)
-      de = m.de + 2*dpe/self.Kf * m.dt
-      Je = 0.8*m.Je
-      if m.v0 > 0.0:
-        # Constrain de within jerk limits of previous move's final ve.
-        mve0 = de/m.dl*m.v0
-        mve0 = min(ve0 + Je, max(ve0 - Je, mve0))
-        de = mve0*m.dl/m.v0
-      if m.v1 > 0.0:
-        # Constrain de within jerk limits to next move's initial ve.
-        mve1 = de/m.dl*m.v1
-        mve1 = min(ve1 + Je, max(ve1 - Je, mve1))
-        de = mve1*m.dl/m.v1
-      m = m.change(de=de)
-      assert abs(m.ve0) <= m.Ve
-      assert abs(m.vem) <= m.Ve
-      assert abs(m.ve1) <= m.Ve
-      assert abs(m.ve0 - ve0) <= m.Je, f'{m.ve0=} {ve0=} {m.ve0-ve0=} {m}'
-      assert abs(m.ve1 - ve1) <= m.Je, f'{m.ve1=} {ve1=} {m.ve1-ve1=} {m}'
-      #self.log(f'adjusted {m0} -> {m}')
+      dpe = 0.8*(pe + eb - (self.pe + self.eb))
+      # Only adjust the move if the change required is large enough.
+      if abs(dpe) > 0.01:
+        # Calculate the adjusted m.de from the average ve to accumulate the
+        # required pressure change over the next max(m.La/2, m.dl).
+        de = m.de + dpe*m.dl/max(m.La/2, m.dl)
+        Je = 0.8*m.Je
+        if m.v0 > 0.0:
+          # Constrain de within jerk limits of previous move's final ve.
+          mve0 = de/m.dl*m.v0
+          mve0 = min(ve0 + Je, max(ve0 - Je, mve0))
+          de = mve0*m.dl/m.v0
+        if m.v1 > 0.0:
+          # Constrain de within jerk limits to next move's initial ve.
+          mve1 = de/m.dl*m.v1
+          mve1 = min(ve1 + Je, max(ve1 - Je, mve1))
+          de = mve1*m.dl/m.v1
+        m0,m = m, m.change(de=de)
+        assert abs(m.ve0) <= m.Ve
+        assert abs(m.vem) <= m.Ve
+        assert abs(m.ve1) <= m.Ve
+        assert abs(m.ve0 - ve0) <= m.Je, f'{m.ve0=} {ve0=} {m.ve0-ve0=} {m}'
+        assert abs(m.ve1 - ve1) <= m.Je, f'{m.ve1=} {ve1=} {m.ve1-ve1=} {m}'
+        #self.log(f'adjusted for target {pe=:.4f} {m0} -> {m}')
     if self.e + m.de > 1000.0:
       # Reset the E offset before it goes over 1000.0
       self.cmd('G92', E=0)
@@ -1632,39 +1664,52 @@ M18
     """ Do a pause. """
     self.cmd('G4', P=round(t*1000))
 
-  def _getNextPeEb(self):
-    "Get pe and eb for the next draws."
-    # Get the exponentially decaying average pe and eb for the future moves up to
-    # the next retract/restore. This needs to calculate the increasing decay as
-    # we go further into the future.
-    T = self.Kf       # the decay time-constant.
+  def _getNextPeEb(self,m=None):
+    "Get pe and eb for the next draws including m."
+    # Get the exponentially decaying average pe and eb for the future moves up
+    # to the next retract/restore. This needs to calculate the increasing
+    # decay as we go further into the future. Decay can be over time,
+    # distance, or both, however, we just use decay over distance because
+    # that's what matters for the print output quality.
+    Tl = self.GMove.La  # the decay time-constant acceleration distance.
     pe = eb = 0.0     # the averaged pe and eb.
-    ve1 = db1 = eb1 = 0.0   # the last (most future) ve, db, and eb.
     K = 1.0           # the accumulated decay multiplier.
 
-    def accum(ve, db, meb, dt):
+    def iterdl(ve, db, meb, dl):
       nonlocal K, pe, eb
       # accumulate decayed averages and update decay multiplier.
-      a = K * dt/(T + dt)
+      a = K * dl/(Tl + dl)
       pe += a*self.Pe(ve, db)
       eb += a*meb
-      K *= T/(T + dt)
+      K -= a
 
-    for m in (m1 for m1 in self.nextcmds if self.ismove(m1)):
-      if m.isadjust or K < 0.01: break
+    c,l,t,m1 = 0, 0, 0, m
+    def iterm(m):
+      nonlocal c,l,t,m1
       # accumulate acceleration/deceleration phases using average ve.
-      accum((m.ve0 + m.vem)/2, m.db, m.eb, m.dt0)
-      accum(m.vem, m.db, m.eb, m.dtm)
-      accum((m.vem + m.ve1)/2, m.db, m.eb, m.dt1)
+      if m.dt0: iterdl((m.ve0 + m.vem)/2, m.db, m.eb, m.dl0)
+      if m.dtm: iterdl(m.vem, m.db, m.eb, m.dlm)
+      if m.dt1: iterdl((m.vem + m.ve1)/2, m.db, m.eb, m.dl1)
       # Note we use the last draw's middle phase for the last values because
       # Orca sometimes puts wipe-moves before retracts, and we want the
       # pressure of the last move, not the zero it tries and fails to
       # decelerate to before the retract.
       if m.isdraw:
-        ve1, db1, eb1 = m.vem, m.db, m.eb
-    # treat last pe and eb as lasting forever.
-    pe += K*self.Pe(ve1, db1)
-    eb += K*eb1
+        m1 = m
+      c+=1
+      l+=m.dl
+      t+=m.dt
+
+    if m:
+      iterm(m)
+    for m in (mi for mi in self.nextcmds if self.ismove(mi)):
+      if m.isadjust or K < 0.05: break
+      iterm(m)
+    if m1:
+      # treat last draw's middle pe and eb as lasting forever.
+      pe += K*self.Pe(m1.vem, m1.db)
+      eb += K*m1.eb
+    #self.log(f'target {pe=:.4f} {eb=:.4f} for next {Tl:.1f}mm from {l:.1f}mm and {t:.3f}s of {c} moves to {m1}')
     return pe, eb
 
   def modjoin(self):
