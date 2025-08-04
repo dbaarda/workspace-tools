@@ -431,7 +431,7 @@ class Printer(gcodegen.GCodeGen):
 
   def Layer(self, line):
     """ Start a new layer. """
-    if not (m := re.match(';(preExtrude|layer|HEIGHT|WIDTH):(\d+.\d+)', line)):
+    if not (m := re.match(r';(preExtrude|layer|HEIGHT|WIDTH):(\d+.\d+)', line)):
       # Just drop other layer comment lines, they'll be re-added later.
       return
     t,v = m.groups()

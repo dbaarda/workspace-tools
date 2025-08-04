@@ -176,11 +176,6 @@ from collections import deque
 nl = '\n'  # for use inside fstrings.
 
 
-def attrs(o):
-  """ Get all attributes off an object as a dict."""
-  return {n:getattr(o,n) for n in dir(o) if not n.startswith('__')}
-
-
 def ftime(t):
   """Format a time in seconds as hh:mm:ss.sss."""
   h,s = divmod(t,3600)
@@ -1081,6 +1076,13 @@ M18
     self.GMove = GMove
     self.resetfile()
 
+  def __getitem__(self, key):
+    """Give dict-like access to attribues for fstr()."""
+    try:
+      return getattr(self, key)
+    except AttributeError:
+      raise KeyError(key)
+
   def Pb(self, db):
     """Get the bead backpressure from db."""
     return max(0.0, self.Kb*min(db,2*self.Nd))
@@ -1212,6 +1214,7 @@ M18
     """ Increment the state for a large dt interval. """
     # Keep the expected final state to check against and use later.
     dt1, dl1, de1, h1, vl1, ve1 = self.dt+dt, self.dl+dl, self.de+de, self.h+dh, self.vl+dvl, self.ve+dve
+    # Only do a fine-grained simulation when finalizing.
     t, idt = dt, 0.001
     if dl or de:
       # integrate a horizontal or extruding move.
@@ -1397,7 +1400,7 @@ M18
   def fstr(self, str):
     """ Format a string as an f-string with attributes of self."""
     try:
-      return fstr(str, locals=attrs(self))
+      return fstr(str, locals=self)
     except Exception as e:
       raise Exception(f'Error formatting {str!r}.') from e
 
@@ -1474,7 +1477,7 @@ M18
       # Reset the E offset before it goes over 1000.0
       self.cmd('G92', E=0)
     fmove = self.fmove(m)
-    self.inc(m)
+    self.incmove(m)
     self.add(fmove)
     self.log('{pe=:.4f} {eb=:.4f} {ve=:.4f} {vn=:.4f} {vl=:.3f} {db=:.2f}')
 
