@@ -211,7 +211,7 @@ def f3(v):
 
 def fstr(s, globals=None, locals=None):
   """ Format a string as an f-string. """
-  return eval(f'rf"""{s}"""',globals,locals)
+  return eval(f'rf"""{s}"""', globals, locals)
 
 
 def fesc(s):
@@ -1533,7 +1533,7 @@ M18
     self.add(self.flog(txt))
 
   def startFile(self):
-    self.add(self.fstr(self.startcode))
+    self.add(self.startcode)
     # Note Flashprint always generates and assumes pre-extrude has h=0.2mm.
     self.startLayer(0, h=0.2)
 
@@ -1542,7 +1542,7 @@ M18
     self.hopup(pe=-2.5)
     self.endLayer()
     self.filestats()
-    self.add(self.fstr(self.endcode))
+    self.add(self.endcode)
 
   def startLayer(self, n=None, z=None,
       Vp=None, Vt=None, Vz=None, Ve=None, Vb=None,
