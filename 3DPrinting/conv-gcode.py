@@ -242,11 +242,6 @@ def FixFlashPrintLayerStartHop(data):
   return data
 
 
-def fbool(b):
-  """ Format a boolean as 'Y', 'N', or '?' for True, False, None (unknown). """
-  return '?' if b is None else 'Y' if b else 'N'
-
-
 def hc(v):
   """ Get hc as a function of air velocity v in m/s."""
   assert v>= 0
