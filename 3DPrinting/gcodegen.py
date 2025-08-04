@@ -193,6 +193,27 @@ def fbool(b):
   return '?' if b is None else 'Y' if b else 'N'
 
 
+def fp(v, p, o=''):
+  """ Format a float with max p decimal places."""
+  return f'{v:{o}.{p}f}'.rstrip('0').rstrip('.') if p else f'{round(v):{o}}'
+
+
+def fzp(v, p):
+  """ Format a float with max p decimal places and strip the leading zero."""
+  s = fp(v,p)
+  return s.replace('0', '', 1) if s.startswith('0.') or s.startswith('-0.') else s
+
+
+def f2(v):
+  """ Format a float with max 2 decimal places."""
+  return f'{v:.2f}'.rstrip('0').rstrip('.')
+
+
+def f3(v):
+  """ Format a float with max 3 decimal places."""
+  return f'{v:.3f}'.rstrip('0').rstrip('.')
+
+
 def fstr(s, globals=None, locals=None):
   """ Format a string as an f-string. """
   return eval(f'rf"""{s}"""',globals,locals)
@@ -251,11 +272,14 @@ class MoveBase(NamedTuple):
 class Move(MoveBase):
   """Move instructions.
 
-  These represent gcode moves enhanced to include the start v0, end v1, and
-  middle vm velocities. They can partition a basic gcode "intent" move command
-  into "physical" acceleration, constant velocity, deceleration components
-  based on the printers acceleration, velocity, and cornering specs. They
-  assume the printer interprets gcode into movements as described at;
+  These represent gcode moves enhanced to include the target extrusion ratio
+  `r` and the start/middle/end velocities `v0`/`vm`/`v1`. The default `r` is
+  calculated from `de` but can be explicitly set to indicate the intent when
+  `de` includes pressure adjustments. The velocities partition a basic gcode
+  "intent" move command into "physical" acceleration, constant velocity,
+  deceleration components based on the printers acceleration, velocity, and
+  cornering specs. They assume the printer interprets gcode into movements as
+  described at;
 
   https://mmone.github.io/klipper/Kinematics.html
 
@@ -264,6 +288,17 @@ class Move(MoveBase):
   when subclassing. The values used here are taken from the OrcaSlicer
   defaults for the Flashforge Adventurer 3 with changes `Vp = 150-> 100 mm/s`,
   `Ve = 30 -> 40 mm/s` to match published and/or apparent specs.
+
+  Restore's are assumed to draw a circular dot with a target diameter w*r and
+  Retractions, Hops and Moves don't draw anything. Draws draw a line of target
+  width w*r and length dl with a half-dot "byte" out of the start from the
+  previous restore or draw, and corresponding "bulge" on the end. The default
+  r for draws and moves is calculated from the ratio of extrusion to
+  line-volume, otherwise it is the retract/restore distance.
+
+  The `de` extrusion for any of these can be adjusted to negative or positive
+  values for pressure adjustments and will not necessarily correspond with the
+  target `r` extrusion ratios.
   """
   Fd = 1.75 # Fillament diameter.
   Nd = 0.4  # Nozzle diameter.
@@ -291,51 +326,54 @@ class Move(MoveBase):
     cls.Na = acircle(Nd)
     cls.La = 0.5*cls.Vp**2/cls.Ap
 
-  def __new__(cls, *args, v0=None, v1=None, **kwargs):
+  def __new__(cls, *args, r=None, v0=None, v1=None, **kwargs):
     """ Create a new Move. """
     # Round arguments to clean out fp errors.
     args = tuple(getnear(a) for a in args)
     kwargs = {k:getnear(v) for k,v in kwargs.items()}
     self = super().__new__(cls, *args, **kwargs)
+    if r is None:
+      r = self.de/max(self.el, 0.0001) if self.isgo else self.de
+    self.r = getnear(r)
     self.v0 = self.v1 = 0.0
-    assert 0.0 <= self.v <= cls.Vp, f'{self.v=} {cls.Vp=} for {self!r}'
     self.setv(v0, v1)
+    assert 0.0 <= self.v <= cls.Vp, f'{self.v=} {cls.Vp=} for {self!r}'
     return self
 
-  def _replace(self, *args, v0=None, v1=None, **kwargs):
+  def _replace(self, *args, r=None, v0=None, v1=None, **kwargs):
     """ Create a new modified Move. """
     # Round arguments to clean out fp errors.
     args = tuple(getnear(a) for a in args)
     kwargs = {k:getnear(v) for k,v in kwargs.items()}
     m = super()._replace(*args,**kwargs)
+    m.r = self.r if r is None else getnear(r)
     m.v0, m.v1 = self.v0, self.v1
     m.setv(v0, v1)
     return m
 
   def __repr__(self):
-    return super().__repr__()[:-1] + f', v0={self.v0}, vm={self.vm}, v1={self.v1})'
+    return super().__repr__()[:-1] + f', r={self.r}, v0={self.v0}, v1={self.v1})'
 
   def __str__(self):
-    dz, dl, de, h, w, r = self.dz, self.dl, self.de, self.h, self.w, self.r
-    v, v0, v1, vm = round(self.v), round(self.v0), round(self.v1), round(self.vm)
-    ve, ve0, ve1, vem = round(self.ve, 2), round(self.ve0, 2), round(self.ve1, 2), round(self.vem, 2)
-    pstr = f'{dl=:.1f}@{v}({v0}<{vm}>{v1})'
-    estr = f'{de=:.4f}@{ve}({ve0}<{vem}>{ve1})'
-    hstr = f'{dz=:.2f}@{v}'
-    lstr = f'l={h:.2f}x{w:.2f}x{r:.2f}'
+    f0 = round
+    lstr = f'({f2(self.h)}x{f2(self.w)}x{f2(self.r)})'
+    pstr = f' dl={self.dl:.1f}@{f0(self.v)}({f0(self.v0)}<{f0(self.vm)}>{f0(self.v1)})' if self.isgo else ''
+    hstr = f' dz={self.dz:.2f}@{f0(self.v)}' if self.ishop else ''
+    estr = f' de={self.de:.4f}@{f2(self.ve)}({f2(self.ve0)}<{f2(self.vem)}>{f2(self.ve1)})' if self.de else ''
+    rstr = f' r={fp(self.er-self.r, 2, "+")}'
     if self.isdraw:
-      return f'draw {pstr} {estr} {lstr}'
+      mstr = f'draw'
     elif self.ishopup:
-      return f'hopup {hstr} {lstr}'
+      mstr = f'hopup'
     elif self.ishopdn:
-      return f'hopdn {hstr} {lstr}'
+      mstr = f'hopdn'
     elif self.isretract:
-      return f'retract {estr} {lstr}'
+      mstr = f'retract'
     elif self.isrestore:
-      return f'restore {estr} {lstr}'
+      mstr = f'restore'
     else:
-      return f'move {pstr} {lstr}'
-    #return f'{self.__class__.__name__}({dx=:.2f}, {dy=:.2f}, {dz=:.2f}, {de=:.4f}, {v=:.2f}, {v0=:.2f}, {v1=:.2f}, {h=:.2f}, {w=:.2f})'
+      mstr = f'move'
+    return ''.join((mstr,lstr,pstr,hstr,estr,rstr))
 
   def setv(self, v0=None, v1=None):
     """ Set the v0, v1 start and end velocities. """
@@ -364,11 +402,10 @@ class Move(MoveBase):
     return h * acircle(w*r) / cls.Fa
 
   @cached_property
-  def r(self):
-    """ The extrusion ratio of a move. """
-    if self.isdraw:
-      return getnear(self.de/self.el)
-    return 0.0
+  def er(self):
+    """Extruder ratio (not target extrusion ratio)."""
+    # Avoid divide by zero for h=0 moves.
+    return self.de/max(self.el, 0.0001) if self.isgo else self.de
 
   @property
   def f(self):
@@ -567,14 +604,13 @@ class Move(MoveBase):
 
   @property
   def db(self):
-    """ The extrusion bead diameter. """
-    return self.w*self.r
+    """ The target extrusion bead diameter. """
+    return max(self.w*self.r, 0.0)
 
   @cached_property
   def eb(self):
     """ The extrusion bead volume not including r under/over extrusion. """
-    # Return a tiny min to avoid divide-by-zero for zero or negative height moves.
-    return max(self._eb(self.h, self.w), 0.00001)
+    return self._eb(self.h, self.w)
 
   @cached_property
   def el(self):
@@ -588,24 +624,23 @@ class Move(MoveBase):
 
   @cached_property
   def isdraw(self):
-    # Note we treat moving retractions as pressure adjusted draws.
-    return self.isgo and self.de != 0.0
+    return self.isgo and self.r > 0.0
 
   @property
   def ismove(self):
-    return self.isgo and self.de == 0.0
+    return self.isgo and self.r <= 0.0
 
   @property
   def isadjust(self):
-    return self.de and not self.isgo
+    return self.r and not (self.isgo or self.dz)
 
   @property
   def isretract(self):
-    return self.de < 0 and not self.isgo
+    return self.r < 0 and not (self.isgo or self.dz)
 
   @property
   def isrestore(self):
-    return self.de > 0 and not self.isgo
+    return self.r > 0 and not (self.isgo or self.dz)
 
   @property
   def ishop(self):
@@ -754,7 +789,7 @@ class Move(MoveBase):
         # Join draws together if ...
         (self.isdraw and m.isdraw and
         # ... they have the same line settings, and ...
-        (self.h,self.w,self.r) == (self.h,self.w,self.r) and
+        (self.h,self.w,self.r) == (m.h,m.w,m.r) and
         # The path deviation from joining them is small.
         self.joind(m) < self.Gp) or
         # Always join hopup/hopdn together.
@@ -1085,24 +1120,18 @@ M18
   @property
   def r0(self):
     """ The extrusion ratio at the start of the last move."""
-    m = self.m
-    return self.eb0/m.eb if m and m.h else 0.0
+    return self.db0/self.m.w if self.m else 0.0
 
   @property
   def rm(self):
     """ The extrusion ratio at the middle of the last move."""
     m = self.m
-    if m and m.h:
-      if m.isgo:
-        return (self.en + (self.eb0 - self.eb)/2)/m.el
-      return (self.eb0 + self.eb)/(2*m.eb)
-    return 0.0
+    return self.en/max(m.el if m.isgo else m.eb, 0.0001) if m else 0.0
 
   @property
   def r1(self):
     """ The extrusion ratio at the end of the last move."""
-    m = self.m
-    return self.eb/m.eb if m and m.h else 0.0
+    return self.db/self.m.w if self.m else 0.0
 
   @property
   def w(self):
@@ -1314,8 +1343,8 @@ M18
     else:
       return '\n'.join([
       self.fcmt('LAYER_CHANGE'),
-      self.fcmt('Z:{round(layer.z+layer.h,3):.6g}'),
-      self.fcmt('HEIGHT:{round(layer.h,3)}')])
+      self.fcmt('Z:{f3(layer.z+layer.h)}'),
+      self.fcmt('HEIGHT:{f3(layer.h)}')])
 
   def fmove(self, m):
     """ Format a Move as a gcode command. """
@@ -1331,7 +1360,7 @@ M18
     cmd = self.fcmd('G1', X=x, Y=y, Z=z, E=e, F=f)
     if self.verb:
       # Add additional command comment suffix.
-      cmd = f'{cmd:40s}; {{dt=:.3f}} {{m}} r=({{r0:.2f}}<{{rm:.2f}}>{{r1:.2f}})'
+      cmd = f'{cmd:40s}; {{dt=:.3f}} {{m}}({{r0:.2f}}<{{rm:.2f}}>{{r1:.2f}})'
     return cmd
 
   def _farg_FlashPrint(self, k, v):
@@ -1343,11 +1372,7 @@ M18
   def _farg_OrcaSlicer(self, k, v):
     # This formats using the least digits necessary for the desired precision.
     argres = dict(X=3,Y=3,Z=3,E=5,F=0).get(k,6)
-    if not isinstance(v, str):
-      v = f'{round(v, argres):.12g}'
-      if v.startswith('0.') or v.startswith('-0.'):
-        v = v.replace('0','',1)
-    return k + v
+    return k + (v if isinstance(v, str) else fzp(v, argres))
 
   def farg(self, k, v):
     # This replaces itself with the right formatter after first use.
@@ -1531,8 +1556,6 @@ M18
         r*self.Lr)
     self.add(l)
     self.log('layer={layer.n} z={layer.z:.2f} h={layer.h:.2f} w={layer.w:.2f} r={layer.r:.2f}')
-    if not isneareq(l.r, self.Lr, 2) and self.Slicer == self.FlashPrint:
-      self.cmt(f'extrude_ratio:{round(layer.r, 2):.4g}')
 
   def endLayer(self):
     self.layerstats()
@@ -1569,8 +1592,7 @@ M18
     if h is None: h = self.h + dz
     if w is None: w = self.w
     r = self.layer.r * r
-    el = dl * w * h / self.Fa  # line filament volume not including extrusion ratio.
-    de = e - self.e if e is not None else de if de is not None else r * el
+    de = e - self.e if e is not None else de if de is not None else dl*w*h*r/self.Fa
     if v is None:
       if de:
         v = s * (self.layer.Vp if dl else self.layer.Ve if de < 0 else self.layer.Vb)
@@ -1582,13 +1604,13 @@ M18
     m = self.GMove(dx,dy,dz,de,v,h=h,w=w)
     # Only add it if it does anything.
     if any(m[:4]):
-      #if m.isdraw and not isneareq(m.r, self.r, 2) and self.Slicer == self.FlashPrint:
-      #  self.cmt(f'extrude_ratio:{round(m.r, 2):.4g} {m.r=} {self.r=}')
+      if self.Slicer == self.FlashPrint and m.isdraw and not isneareq(m.r, self.r, 2):
+        self.cmt(f'extrude_ratio:{f2(m.r)}')
       if self.Slicer != self.FlashPrint and m.isdraw and not isneareq(m.w, self.w):
         self.cmt(f'WIDTH:{getnear(m.w+self.layer.h*(1-pi/4))}')
       self.add(m)
     else:
-      self.log(f'skipping empty move {m}')
+      self.log(f'skipping empty move {m!r}')
 
   def draw(self, x=None, y=None, z=None, r=None, **kwargs):
     """ Draw a line.
@@ -1596,7 +1618,7 @@ M18
     This is the same as move() but with the default previous draw or layer r
     value so it draws instead of travels by default.
     """
-    # We need r before scaling by layer.r
+    # We need r before scaling by layer.r for the default.
     if r is None: r = self.r / self.layer.r
     self.move(x, y, z, r=r, **kwargs)
 
