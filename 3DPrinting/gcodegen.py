@@ -1275,21 +1275,23 @@ M18
     assert isnearle(abs(self.ve - m.ve0), self.GMove.Je), f'{self.ve=} {m.ve0=} {self.m!s} -> {m!s}'
     self.db0, self.eb0 = self.db, self.eb
     self.resetstate()
-    # Save the expected final h to assert against later.
-    h1 = self.h + m.dz
-    # "jerk" ve from the previous ve1 to ve0.
-    self.ve = m.ve0
-    # Update the state for the three move phases.
-    if m.dt0: self.incstate(m.dt0, m.dl0, m.de0, m.dh0, m.dv0, m.dve0)
-    if m.dtm: self.incstate(m.dtm, m.dlm, m.dem, m.dhm, m.dvm, m.dvem)
-    if m.dt1: self.incstate(m.dt1, m.dl1, m.de1, m.dh1, m.dv1, m.dve1)
-    # Check that the end states are as expected.
-    assert isneareq(self.dt, m.dt)
-    assert isneareq(self.dl, m.dl)
-    assert isneareq(self.de, m.de)
-    assert isneareq(self.vl, m.v1)
-    assert isneareq(self.ve, m.ve1)
-    assert isneareq(self.h, h1)
+    # Only run the detailed simulation when finalizing the output.
+    if self.finalize:
+      # Save the expected final h to assert against later.
+      h1 = self.h + m.dz
+      # "jerk" ve from the previous ve1 to ve0.
+      self.ve = m.ve0
+      # Update the state for the three move phases.
+      if m.dt0: self.incstate(m.dt0, m.dl0, m.de0, m.dh0, m.dv0, m.dve0)
+      if m.dtm: self.incstate(m.dtm, m.dlm, m.dem, m.dhm, m.dvm, m.dvem)
+      if m.dt1: self.incstate(m.dt1, m.dl1, m.de1, m.dh1, m.dv1, m.dve1)
+      # Check that the end states are as expected.
+      assert isneareq(self.dt, m.dt)
+      assert isneareq(self.dl, m.dl)
+      assert isneareq(self.de, m.de)
+      assert isneareq(self.vl, m.v1)
+      assert isneareq(self.ve, m.ve1)
+      assert isneareq(self.h, h1)
     # Update and round positions to remove floating point errors.
     self.x = getnear(self.x+m.dx)
     self.y = getnear(self.y+m.dy)
