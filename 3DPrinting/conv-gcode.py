@@ -449,11 +449,14 @@ class Printer(gcodegen.GCodeGen):
     if not m:
       raise RuntimeError(f'not a cmd: {line!r}')
     cmd,args=m[1],m[2]
-    #args= {m['name']:m['value'] for m in re.finditer(f'{argre}',args)}
     args = {m['name']:(eval(m['value']) if m['value'] else '') for m in re.finditer(f'{argre}',args)}
-    # If this is a move command, add a w=<width> argument that will be passed through to the move().
     if cmd in ('G0','G1'):
-      args['w'] = self._w or self.w
+      # Add a w=<width> argument that will be passed through to the move().
+      args.update(w=self._w or self.w)
+      # For h=0 retracts after a new layer and before hopup, force h=m.h if
+      # or layer.h and dz=0.0.
+      if self.h == 0 and 'Z' not in args and 'E' in args:
+        args.update(h=self.m.h if m else self.layer.h, dz=0.0)
     elif cmd == 'M107':
       return self.setefan(0.0)
     elif cmd == 'M106':
