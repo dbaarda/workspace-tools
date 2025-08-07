@@ -131,7 +131,7 @@ Some Adv3 numbers from earlier testing with h=0.3 w=0.6 (db=0.6,eb=0.035mm);
 
 de=+2mm seems to be the minimum for a normal starting dot.
 de=+1mm barely seems to register a dot at all.
-de=+0.5mm doesn't seem to show any difference from minimum drool.
+de=+0.5mm doesn't seem to show any difference from minimum ooze.
 
 This suggests roughly Re>0.8 to account for backlash, and Kb=2.0.
 
@@ -142,11 +142,11 @@ de=+5mm seems about right advance for vl=100mm/s ve=7.5mm/s
 
 Suggests roughly Kf=0.4 with Cf=Pb=Kb*0.6+Re=2.0.
 
-Testing suggests you need extra retraction on top of this to avoid drool and
-stringing. I suspect this drool is "heat creep expansion", where heat travels
+Testing suggests you need extra retraction on top of this to avoid ooze and
+stringing. I suspect this ooze is "heat creep expansion", where heat travels
 up the filament feed causing expansion. For 0.5x0.2x1.0 at about 60mm/s print
 speeds giving `ve=2.5mm/s`, retraction needs to be at least 5mm to avoid this
-drool. This suggests settings should be about;
+ooze. This suggests settings should be about;
 
 Kf=0.4
 Kb=2.0
@@ -1282,10 +1282,10 @@ M18
     self.tne_stats = stats1.Sample() # actual move volume stats.
     self.dlw_stats = stats1.Sample() # target line width stats.
     self.dnw_stats = stats1.Sample() # actual line width stats (lines).
-    self.tnw_stats = stats1.Sample() # actual move width stats (drool).
-    self.dre_stats = stats1.Sample() # line ratio-error stats.
-    self.tre_stats = stats1.Sample() # move ratio-error stats.
-    self.mre_stats = stats1.Sample() # total ratio-error stats.
+    self.tnw_stats = stats1.Sample() # actual move width stats (ooze).
+    self.drt_stats = stats1.Sample() # target line ratio stats.
+    self.drn_stats = stats1.Sample() # actual line ratio stats.
+    self.trn_stats = stats1.Sample() # actual move ratio stats.
 
   def iterstate(self, dt, dl, de, dh, dvl, dve):
     """ Increment the state for a small dt interval. """
@@ -1379,23 +1379,23 @@ M18
     wn = rn*wl if m.isgo else sqrt(rn)*wl
     # For dot's use equivalent line-length by volume in stats.
     if not m.isgo: dl = pi/4*wl
-    assert 0<dl<1000 and 0<wl<2 and 0<=wt<4 and 0<=wn<8, f'{dl=} {wl=} {wt=} {wn=} for {m!r}'
+    assert 0<dl<1000 and 0<wl<2 and 0<=wt<4 and 0<=wn<16, f'{dl=} {wl=} {wt=} {wn=} for {m!r}'
     assert 0<el<500 and 0<=et<500 and 0<=en<500, f'{dl=} {el=} {et=} {en=} for {m!r}'
     assert 0.0 <= rt <= 8, f'{rt=} {et=} {el=} for {m=!r}'
-    assert 0.0 <= rn <= 16, f'{rn=} {en=} {el=} for {m=!r}'
+    assert 0.0 <= rn <= 32, f'{rn=} {en=} {el=} for {m=!r}'
     if rt > 0:
       # This must be a draw or restore.
       self.dle_stats.add(et/dl,dl)
       self.dne_stats.add(en/dl,dl)
       self.dlw_stats.add(wt,dl)
       self.dnw_stats.add(wn,dl)
-      self.dre_stats.add(rn-rt,el)
+      self.drt_stats.add(rt,el)
+      self.drn_stats.add(rn,el)
     else:
       # This is a retract, hop, or move.
       self.tne_stats.add(en/dl,dl)
       self.tnw_stats.add(wn,dl)
-      self.tre_stats.add(rn,el)
-    self.mre_stats.add(rn-rt,el)
+      self.trn_stats.add(rn,el)
 
   def addstats(self, m, en0, enm, en1):
     """ Update the line stats with the phase nozzle extrusions for a move."""
@@ -2020,20 +2020,26 @@ M18
     self.log('  t={ftime(f_t)} l={f_l:.1f} e={f_e:.1f}')
     self.log('target line volume stats (ne/dl per draw dl):\n;  {dle_stats}')
     self.log('actual line volume stats (ne/dl per draw dl):\n;  {dne_stats}')
-    self.log('actual drool volume stats (ne/dl per move dl):\n;  {tne_stats}')
+    self.log('actual ooze volume stats (ne/dl per move dl):\n;  {tne_stats}')
     self.log('target line width stats (line width per draw dl):\n;  {dlw_stats}')
     self.log('actual line width stats (line width per draw dl):\n;  {dnw_stats}')
-    self.log('actual drool width stats (drool width per move dl):\n;  {tnw_stats}')
-    self.log('draw ratio error stats (ratio error per draw le):\n;  {dre_stats}')
-    self.log('move ratio error stats (ratio error per move le):\n;  {tre_stats}')
-    self.log('total ratio error stats (ratio error per le):\n;  {mre_stats}')
+    self.log('actual ooze width stats (ooze width per move dl):\n;  {tnw_stats}')
+    self.log('target draw ratio stats (line vol per draw le):\n;  {drt_stats}')
+    self.log('actual draw ratio stats (line vol per draw le):\n;  {drn_stats}')
+    self.log('actual move ratio stats (ooze vol per move le):\n;  {trn_stats}')
+    self.log('Summary:\n' +
+             ';  line actual/target vol = {dne_stats.sum*Fa:.3f}mm^3/{dle_stats.sum*Fa:.3f}mm^3={100*dne_stats.sum/dle_stats.sum:.3f}%\n' +
+             ';  ooze actual/target vol = {tne_stats.sum*Fa:.3f}mm^3/{dle_stats.sum*Fa:.3f}mm^3={100*tne_stats.sum/dle_stats.sum:.3f}%\n' +
+             ';  target line vol ratio = {100*drt_stats.atlogdev(-2):.3f}% < {100*drt_stats.avg:.3f}% <  {100*drt_stats.atlogdev(2):.3f}%\n' +
+             ';  actual line vol ratio = {100*drn_stats.atlogdev(-2):.3f}% < {100*drn_stats.avg:.3f}% <  {100*drn_stats.atlogdev(2):.3f}%\n' +
+             ';  actual ooze vol ratio = {100*trn_stats.atlogdev(-2):.3f}% < {100*trn_stats.avg:.3f}% <  {100*trn_stats.atlogdev(2):.3f}%')
 
   def preExt(self,x0,y0,x1,y1,le=120.0, lw=60.0, m=10.0, ve=20.0, vw=20, h=0.2, r=4):
     """Preextrude around a box with margin m.
 
     This extrudes for `le` mm at speed `ve` mm/s, then wipes for another `lw`
     mm at speed `vw` mm/s without extruding, and finally if we did a wipe
-    another 10mm at 1mm/s to stick the last bit of wipe drool to the plate.
+    another 10mm at 1mm/s to stick the last bit of wipe ooze to the plate.
     This should leave the nozzle primed with no residual advance pressure, and
     prevent the wipe from becoming a big piece of stringing that messes with
     the print.
@@ -2082,7 +2088,7 @@ M18
         l, v, r = lw, vw, 0
       elif l == 0 and r == 0 and v>1 and lw:
         # We have finished the wipe, go another 10mm at 1mm/s to stick the
-        # final drool to the plate.
+        # final ooze to the plate.
         l, v, r = 10,1,0
     self.hopup()
 
