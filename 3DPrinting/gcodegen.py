@@ -1443,9 +1443,9 @@ M18
     self.z = getnear(self.z+m.dz)
     self.e = getnear(self.e+m.de)
     self.f = m.f
-    self.f_l += m.dl if self.en else 0.0
+    self.f_l += m.dl
     self.f_e += self.en
-    self.l_l += m.dl if self.en else 0.0
+    self.l_l += m.dl
     self.l_e += self.en
     self.vl = m.v1
     self.ve = m.ve1
@@ -1562,7 +1562,7 @@ M18
       if self.diff:
         return self.fcmt('{dt:.3f}: ' + txt)
       else:
-        return self.fcmt('{ftime(f_t)}: ' + txt)
+        return self.fcmt('{ftime(f_t)} {f_l:.1f}mm: ' + txt)
 
   def faddmove(self, m):
     """ Do a final format and add of a Move. """

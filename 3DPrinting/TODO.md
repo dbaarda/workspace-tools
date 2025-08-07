@@ -4,9 +4,8 @@
 
 ### gcodegen.py
 
-* Add total line distance to log-lines.
-
-* Add a quality summary line to the stats logging output.
+* Improve pressure compensation to adjust ve0/ve/ve1 of future moves, not just
+  try to stay within jerk limits.
 
 * Change pressure-lookahead and pressure-compensation to target the same
   lookahead distance.
