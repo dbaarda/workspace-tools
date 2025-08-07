@@ -1,8 +1,15 @@
 #!/usr/bin/python3
 # Data structures and methods for analysis of data.
 
-from math import inf,sqrt
+from math import inf,sqrt,log,exp
 from collections import defaultdict
+
+
+def ln(x):
+  """log to the base e function."""
+  # Like math.log() except returns -inf for 0.0 instead of ValueError.
+  return log(x) if x else -inf
+
 
 class Sample(object):
   """A simple sample stats collector.
@@ -56,6 +63,21 @@ class Sample(object):
   def dev(self):
     """Get the standard deviation of the values."""
     return sqrt(self.var)
+
+  def atdev(self, dev):
+    """Get the value at +devs."""
+    return self.avg + dev*self.dev
+
+  def lognorm(self):
+    """Get the mu, sigma parameters for a lognormal distribution."""
+    r = self.dev/self.avg
+    s2 = ln(r*r + 1.0)
+    return ln(self.avg) - 0.5*s2, sqrt(s2)
+
+  def atlogdev(self, dev):
+    """Get the value at +devs for a lognormal distribution."""
+    m, s = self.lognorm()
+    return exp(m + dev*s)
 
   def __repr__(self):
     return f'{self.__class__.__name__}()'
