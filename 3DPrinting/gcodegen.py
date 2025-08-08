@@ -1186,12 +1186,6 @@ M18
     return self.Pb(self.db)
 
   @property
-  def hl(self):
-    """ Get the current "line height"."""
-    # Add the last move's height if we haven't yet moved up to the new layer.
-    return self.h+self.m.h if self.h < self.layer.h and self.m else self.h
-
-  @property
   def db(self):
     """ Get the current bead diameter from the bead volume."""
     return self.GMove._db(self.eb, self.hl)
@@ -1218,16 +1212,19 @@ M18
     return self.db/self.m.w if self.m else 0.0
 
   @property
-  def w(self):
-    """ Get the current default width."""
-    # This is the width of the previous draw or the layer default.
-    return self.d.w if self.d else self.layer.w
+  def hl(self):
+    """ Get the current line height."""
+    return self.m.h if self.m else self.layer.h
 
   @property
-  def r(self):
-    """ Get the current default extrusion ratio."""
-    # This is the ratio of the previous draw or the layer default.
-    return self.d.r if self.d else self.layer.r
+  def wl(self):
+    """ Get the current line width."""
+    return self.m.w if self.m else self.layer.w
+
+  @property
+  def rl(self):
+    """ Get the current line extrusion ratio."""
+    return self.m.r if self.m else self.layer.r
 
   def islayer(self, cmd):
     return isinstance(cmd, Layer)
@@ -1348,7 +1345,7 @@ M18
       self.incmove(code)
     elif self.iscmd(code):
       self.inccmd(code)
-    if not self.isstr(code):
+    if not (self.isstr(code) or self.isbin(code)):
       self.c = code
 
   def inct(self, dt):
@@ -1359,7 +1356,7 @@ M18
 
   def inclayer(self, l):
     """ Increment state for starting a Layer. """
-    # reset stats after layers before layer 1.
+    # reset stats before layer 1 to exlude pre-extrudes.
     if self.layer.n < 1:
       self.resetstats()
     self.resetlayer()
@@ -1413,8 +1410,9 @@ M18
     assert isneareq(self.h, self.z - self.layer.z), f'{self.h=} != {self.z - self.layer.z}'
     assert isneareq(self.vl, m.v0), f'{self.vl=} != {m.v0=} for {m} at {ftime(self.f_t)}'
     assert isnearle(abs(self.ve - m.ve0), self.GMove.Je), f'{self.ve=} {m.ve0=} {self.m!s} -> {m!s}'
-    self.db0, self.eb0 = self.db, self.eb
     self.resetstate()
+    # Update starting state vars and the current move.
+    self.db0, self.eb0, self.m = self.db, self.eb, m
     # Only run the detailed simulation when finalizing the output.
     if self.finalize:
       # Save the expected final h to assert against later.
@@ -1450,7 +1448,6 @@ M18
     self.vl = m.v1
     self.ve = m.ve1
     self.h = getnear(self.z - self.layer.z)
-    self.m = m
     if m.isdraw: self.d = m
     self.inct(m.dt)
 
@@ -1754,9 +1751,9 @@ M18
     m = self.GMove(dx,dy,dz,de,v,h=h,w=w)
     # Only add it if it does anything.
     if any(m[:4]):
-      if self.Slicer == self.FlashPrint and m.isdraw and not isneareq(m.r, self.r, 2):
+      if self.Slicer == self.FlashPrint and m.isdraw and not isneareq(m.r, self.rl, 2):
         self.cmt(f'extrude_ratio:{f2(m.r)}')
-      if self.Slicer != self.FlashPrint and m.isdraw and not isneareq(m.w, self.w):
+      if self.Slicer != self.FlashPrint and m.isdraw and not isneareq(m.w, self.wl):
         self.cmt(f'WIDTH:{getnear(m.w+self.layer.h*(1-pi/4))}')
       self.add(m)
     else:
@@ -1769,7 +1766,7 @@ M18
     value so it draws instead of travels by default.
     """
     # We need r before scaling by layer.r for the default.
-    if r is None: r = self.r / self.layer.r
+    if r is None: r = self.rl / self.layer.r
     self.move(x, y, z, r=r, **kwargs)
 
   def retract(self, e=None, de=None, ve=None, s=1.0, pe=None):
@@ -2095,7 +2092,7 @@ M18
   def fbox(self,x0,y0,x1,y1,shells=None,**kwargs):
     """ Fill a box with frame lines. """
     if shells is None: shells = inf
-    w = kwargs.get('w', self.w)
+    w = kwargs.get('w', self.wl)
     # make sure x0<x1 and y0<y1
     x0,x1 = sorted((x0,x1))
     y0,y1 = sorted((y0,y1))
@@ -2131,7 +2128,7 @@ M18
 
   def dbox(self,x0,y0,x1,y1,shells=3,**kwargs):
     """ fill a box with diagonal lines. """
-    w = kwargs.get('w', self.w)
+    w = kwargs.get('w', self.wl)
     x0,x1 = sorted((x0,x1))
     y0,y1 = sorted((y0,y1))
     if shells:
@@ -2212,7 +2209,7 @@ M18
   def text(self, t, x0, y0, x1=None, y1=None, fsize=5, angle=0, **kwargs):
     self.cmt('structure:shell-outer')
     self.log(f'text {[(x0,y0),(x1,y1)]} {fsize=} {angle=} {t!r}')
-    w = kwargs.get('w', self.w)
+    w = kwargs.get('w', self.wl)
     v = vtext.ptext(t,x0,y0,x1,y1,fsize,angle,w)
     for l in v:
       self.line(l,**kwargs)

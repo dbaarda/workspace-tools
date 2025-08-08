@@ -293,7 +293,7 @@ class Printer(gcodegen.GCodeGen):
     self.fd = 0.0  # current fanspeed drive.
     self.fe = 0.0  # filtered nozzle flow rate over past Tf.
     self.ft = 0.0  # time since last fan pwm cycle.
-    self._w = None
+    self.wt = None # The current target width.
 
   def iterstate(self, dt, dl, de, dh, dvl, dve):
     """ Increment the state for a small dt interval. """
@@ -432,8 +432,8 @@ class Printer(gcodegen.GCodeGen):
     t,v = m.groups()
     v = float(v)
     if t == 'WIDTH':
-      # For OrcaSlicer WIDTH comments set self._w for the next moves.
-      self._w = gcodegen.getnear(v - self.layer.h * (1 - pi/4))
+      # For OrcaSlicer WIDTH comments set self.wt for the next moves.
+      self.wt = gcodegen.getnear(v - self.layer.h * (1 - pi/4))
     elif t == 'preExtrude':
       self.startLayer(n=0, z=0.0, h=gcodegen.getnear(v,3))
     elif t =='HEIGHT' and self.layer.n == -1:
@@ -452,11 +452,11 @@ class Printer(gcodegen.GCodeGen):
     args = {m['name']:(eval(m['value']) if m['value'] else '') for m in re.finditer(f'{argre}',args)}
     if cmd in ('G0','G1'):
       # Add a w=<width> argument that will be passed through to the move().
-      args.update(w=self._w or self.w)
-      # For h=0 retracts after a new layer and before hopup, force h=m.h if
-      # or layer.h and dz=0.0.
-      if self.h == 0 and 'Z' not in args and 'E' in args:
-        args.update(h=self.m.h if m else self.layer.h, dz=0.0)
+      args.update(w=self.wt or self.wl)
+      # For h=0 non-hop moves after a new layer and before hopup, force h to
+      # the default hl and dz=0.0.
+      if self.h == 0 and 'Z' not in args:
+        args.update(h=self.hl, dz=0.0)
     elif cmd == 'M107':
       return self.setefan(0.0)
     elif cmd == 'M106':
