@@ -61,4 +61,7 @@ separate mixins for parsing input vs generating output?
 
 * Do spiral tests to measure pressure advance.
 
+* Test pressure advance needed for overhangs and bridging. In theory the
+  backpressure should be proportional to the fraction not overhanging.
+
 * Figure out some kind of final test-suite for measuring/calibrating printers.
