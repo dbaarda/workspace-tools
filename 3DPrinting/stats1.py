@@ -1,20 +1,50 @@
 #!/usr/bin/python3
 # Data structures and methods for analysis of data.
 
-from math import inf,sqrt,log,exp
 from collections import defaultdict
 
+# Use numpy if available to support vector versions.
+try:
+  from numpy import inf, sqrt, log, exp, fmin, fmax, array, printoptions
+except ImportError:
+  from math import inf, sqrt, exp, log as _log
+  fmin, fmax = min, max
 
-def ln(x):
-  """log to the base e function."""
-  # Like math.log() except returns -inf for 0.0 instead of ValueError.
-  return log(x) if x else -inf
+  def log(x):
+    """log to the base e function."""
+    # Like math.log() except returns -inf for 0.0 instead of ValueError.
+    return _log(x) if x else -inf
 
+
+# Short fstring functions for formatting numbers and numpy.array values.
+def fp(v, p=6, o=''):
+  """Format a number or array with max p decimal places and optional extraformating."""
+  def f(v):
+    return f'{v:{o}.{p}f}'.rstrip('0').rstrip('.') if p else f'{v:{o}.0f}'
+  if getattr(v, 'ndim', 0):
+    with printoptions(edgeitems=2, threshold=5, formatter=dict(float_kind=f, int_kind=f)):
+      return str(v)
+  return f(v)
+
+def f0(v, o=''):
+  return fp(v,0,o)
+
+def f1(v, o=''):
+  return fp(v,1,o)
+
+def f3(v, o=''):
+  return fp(v,3,o)
+
+def f6(v, o=''):
+  return fp(v,6,o)
 
 class Sample(object):
   """A simple sample stats collector.
 
-  This can be used to collect stats about values by adding them with add() or in batches using update().
+  This can be used to collect stats about values by adding them with add() or
+  in batches using update(). If numpy is available the values can be arrays of
+  values (lists and tuples will be converted to arrays), and all the
+  corresponding attributes will also be arrays.
 
   Attributes:
     num: the number of values added.
@@ -38,11 +68,13 @@ class Sample(object):
 
   def add(self, v, n=1):
     """Add a value."""
+    # Convert tuples and lists to np.array.
+    if isinstance(v,(tuple,list)): v=array(v)
     self.num += n
-    self.sum += v*n
-    self.sum2 += v*v*n
-    self.min = min(self.min, v)
-    self.max = max(self.max, v)
+    self.sum += n*v
+    self.sum2 += n*v*v
+    self.min = fmin(self.min, v)
+    self.max = fmax(self.min, v)
 
   def update(self, data):
     """Add all the values in data."""
@@ -71,8 +103,8 @@ class Sample(object):
   def lognorm(self):
     """Get the mu, sigma parameters for a lognormal distribution."""
     r = self.dev/self.avg
-    s2 = ln(r*r + 1.0)
-    return ln(self.avg) - 0.5*s2, sqrt(s2)
+    s2 = log(r*r + 1.0)
+    return log(self.avg) - 0.5*s2, sqrt(s2)
 
   def atlogdev(self, dev):
     """Get the value at +devs for a lognormal distribution."""
@@ -85,7 +117,7 @@ class Sample(object):
   def __str__(self):
     """Get a simple string rendering of the stats."""
     if self.num:
-      return f'num={self.num:g} sum={self.sum:g} min/avg/max/dev={self.min:g}/{self.avg:g}/{self.max:g}/{self.dev:g}'
+      return f'num={self.num:g} sum={f3(self.sum)} min/avg/max/dev={f3(self.min)}/{f3(self.avg)}/{f3(self.max)}/{f3(self.dev)}'
     else:
       return "num=0 sum=0"
 
