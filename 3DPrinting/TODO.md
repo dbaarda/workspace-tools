@@ -4,22 +4,15 @@
 
 ### gcodegen.py
 
+* Fix layer.n = -1 initialization and FlashPrint Preextrude being its own
+  layer.n=0. Instead we should just make layer.n=0 the initialized layer and
+  make pre-extrudes normal draws the same as it is for OrcaSlicer.
+
 * Improve pressure compensation to adjust ve0/ve/ve1 of future moves, not just
   try to stay within jerk limits.
 
-* Change pressure-lookahead and pressure-compensation to target the same
-  lookahead distance.
-
 * Change stats to be added from incstate() instead of incmove(), and have it
   accumulate and collect data at 1mm increments instead of per-move.
-
-* Move setting self.m to the start of incmove() so state updates, logging, etc
-  can access the current move while the state is being updated.
-
-* Always use the Move's height for line and pressure calculations instead of
-  nozzle height. This allows for non-planar lines and layers like vase-mode,
-  brick-layers, scarf-joints, etc, and can better handle moves after a new
-  layer before the hopup.
 
 * Factor out advanced drawing methods into an optional mixin.
 
@@ -30,6 +23,10 @@
 * Add support for getting/setting Kf (and maybe Kb?) from gcode cmds. This
   means we can support gcode pressure-advance tests or adaptive pressure
   advance that change Kf during the print.
+
+* Add support for modeling hardware PA and applying additional pressure
+  adjustments on top of it. This could be useful for leveraging hardware PA
+  while still adding additional PA improvements.
 
 Note: I considered adding support to Moves for dh, dw, dr for lines that
 change their height/width/ratio, but gcode doesn't have support for changing
