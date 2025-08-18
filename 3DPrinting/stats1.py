@@ -32,6 +32,9 @@ def f0(v, o=''):
 def f1(v, o=''):
   return fp(v,1,o)
 
+def f2(v, o=''):
+  return fp(v,2,o)
+
 def f3(v, o=''):
   return fp(v,3,o)
 
