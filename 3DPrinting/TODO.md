@@ -8,6 +8,24 @@
   layer.n=0. Instead we should just make layer.n=0 the initialized layer and
   make pre-extrudes normal draws the same as it is for OrcaSlicer.
 
+* Change all Move de volumes to be in mm^3, not mm of fillament. Note this
+  also changes ve to mm^3/s. This means translation into E values is only done
+  in the final stages of generating gcode, and everything else doesn't need to
+  know the fillament diameter to calculate volumes from line dimensions. Note
+  however that Ve and Ae velocity and acceleration limits will also need to be
+  in mm^3/sec and mm^3/sec^2, so will need to be calculated from the extruder
+  limits using Af.
+
+* Change Move v0,vm,v1 to also be start/mid/end speeds for adjusts and hops,
+  not just horizontal moves. Add/fix vl0,vlm,vl1,vz0,vzm,vz1,ve0,vem,ve1
+  attributes for start/mid/end speeds in the various dimensions, calculating
+  them from v0,vm,v1 as necessary depending on the move type.
+
+* Add Move dd attribute for combined dl,dz distance. Should it include de
+  distance too? Note de is typically way less than 0.5% of dl (less than 15%
+  if de is in mm^3) so it adds nearly nothing to normal move distances, but
+  means retract/restore have non-zero dd which might be useful?
+
 * Improve pressure compensation to adjust ve0/ve/ve1 of future moves, not just
   try to stay within jerk limits.
 
