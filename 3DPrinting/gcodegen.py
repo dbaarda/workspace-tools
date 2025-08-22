@@ -260,6 +260,16 @@ def solveqe(a,b,c):
   return v1 - v2, v1 + v2
 
 
+class AttrDictMixin(object):
+  """A mixin to add dict-like access to attributes for fstr()."""
+
+  def __getitem__(self, key):
+    try:
+      return getattr(self, key)
+    except AttributeError:
+      raise KeyError(key)
+
+
 class MoveBase(NamedTuple):
   """ Move instructions base type.
 
@@ -919,7 +929,7 @@ class Layer(NamedTuple):
   r : float # default line extrusion ratio.
 
 
-class GCodeGen(object):
+class GCodeGen(AttrDictMixin):
   """ GCodeGen gcode generator.
 
   The general operation of this is;
@@ -1154,13 +1164,6 @@ M18
     class GMove(Move, Fd=self.Fd, Nd=self.Nd): pass
     self.GMove = GMove
     self.resetfile()
-
-  def __getitem__(self, key):
-    """Give dict-like access to attribues for fstr()."""
-    try:
-      return getattr(self, key)
-    except AttributeError:
-      raise KeyError(key)
 
   def Pb(self, db):
     """Get the bead backpressure from db."""
