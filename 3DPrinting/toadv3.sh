@@ -37,4 +37,4 @@ ${FIX_TEMP};
 ${FIX_G0};"
 #${FIX_CMDS};
 
-sed -ri "$SCMD" "$@"
+exec sed -ri "$SCMD" "$@"
