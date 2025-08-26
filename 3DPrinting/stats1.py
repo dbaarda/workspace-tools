@@ -1,53 +1,160 @@
 #!/usr/bin/python3
 # Data structures and methods for analysis of data.
-
 from collections import defaultdict
 
-# Use numpy if available to support vector versions.
 try:
+  # Use numpy if available to support vector versions.
   from numpy import inf, sqrt, log, exp, fmin, fmax, array, printoptions
 except ImportError:
-  from math import inf, sqrt, exp, log as _log
-  fmin, fmax = min, max
+  # If it's not available use our own minimal array vector.
+  from collections.abc import Iterable
+  from math import inf, sqrt as _sqrt, exp as _exp, log as _log
+
+  class array(list):
+    """A lightweight pypy3 compatible numpy.array alternative."""
+
+    def __format__(self, format_spec=''):
+      return f'[{", ".join(f"{v:{format_spec}}" for v in self)}]'
+
+    def __mul__(self, other):
+      if isinstance(other, Iterable):
+        return self.__class__(x*y for x,y in zip(self,other,strict=True))
+      return self.__class__(x*other for x in self)
+
+    def __truediv__(self, other):
+      if isinstance(other, Iterable):
+        return self.__class__(x/y for x,y in zip(self,other,strict=True))
+      return self.__class__(x/other for x in self)
+
+    def __add__(self, other):
+      if isinstance(other, Iterable):
+        return self.__class__(x+y for x,y in zip(self,other,strict=True))
+      return self.__class__(x+other for x in self)
+
+    def __sub__(self, other):
+      if isinstance(other, Iterable):
+        return self.__class__(x-y for x,y in zip(self,other,strict=True))
+      return self.__class__(x-other for x in self)
+
+    def __rtruediv__(self,other):
+      if isinstance(other, Iterable):
+        return self.__class__(x/y for x,y in zip(other,self,strict=True))
+      return self.__class__(other/x for x in self)
+
+    def __rsub__(self, other):
+      if isinstance(other, Iterable):
+        return self.__class__(x-y for x,y in zip(other,self,strict=True))
+      return self.__class__(other-x for x in self)
+
+    __rmul__ = __mul__
+    __radd__ = __add__
+    __iadd__ = __add__
+    __isub__ = __sub__
+    __imul__ = __mul__
+    __itruediv__ = __truediv__
+
+  ## define numpy-like vectorizing versions of math functions.
+
+  def sqrt(x):
+    if isinstance(x,array):
+      return x.__class__(_sqrt(v) for v in x)
+    return _sqrt(x)
 
   def log(x):
     """log to the base e function."""
+    if isinstance(x,array):
+      return x.__class__(_log(v) for v in x)
     # Like math.log() except returns -inf for 0.0 instead of ValueError.
     return _log(x) if x else -inf
 
+  def exp(x):
+    if isinstance(x,array):
+      return x.__class__(_exp(v) for v in x)
+    return _exp(x)
 
-# Short fstring functions for formatting numbers and numpy.array values.
-def fp(v, p=6, o=''):
-  """Format a number or array with max p decimal places and optional extraformating."""
-  def f(v):
-    return f'{v:{o}.{p}f}'.rstrip('0').rstrip('.') if p else f'{v:{o}.0f}'
-  if getattr(v, 'ndim', 0):
-    with printoptions(edgeitems=2, threshold=5, formatter=dict(float_kind=f, int_kind=f)):
-      return str(v)
-  return f(v)
+  def fmin(a,b):
+    if isinstance(a,array):
+      if isinstance(b,array):
+        return a.__class__(min(x,y) for x,y in zip(a,b,strict=True))
+      return a.__class__(min(x,b) for x in a)
+    if isinstance(b,array):
+      return b.__class__(min(a,x) for x in b)
+    return min(a,b)
 
-def f0(v, o=''):
-  return fp(v,0,o)
+  def fmax(a,b):
+    if isinstance(a,array):
+      if isinstance(b,array):
+        return a.__class__(max(x,y) for x,y in zip(a,b,strict=True))
+      return a.__class__(max(x,b) for x in a)
+    if isinstance(b,array):
+      return b.__class__(max(a,x) for x in b)
+    return max(a,b)
 
-def f1(v, o=''):
-  return fp(v,1,o)
+  def clip(v,vmin,vmax):
+    return fmax(vmin,fmin(vmax,v))
 
-def f2(v, o=''):
-  return fp(v,2,o)
 
-def f3(v, o=''):
-  return fp(v,3,o)
+class P(object):
+  """A wrapper for float 'p' format-spec support for numbers and arrays.
 
-def f6(v, o=''):
-  return fp(v,6,o)
+  The 'p' format specifier formats like 'f' but also strips off any trailing
+  zeros or decimal point. The '#' alternate form will also strip any leading
+  zero. It can wrap numbers, tuples, lists, or arrays. The default format is
+  'g'. This can be used like this;
+
+  f'{P(1.1001):.3p}' -> '1.1'
+  f'{P(0.1234):#.3p}' -> '.123'
+  f'{P([1,2,3,4]):.1f}' -> '[1.0, 2.0, 3.0, 4.0]'
+  """
+  def __init__(self, v):
+    self.v = v
+
+  def __repr__(self):
+    return f'{self.__class__.__name__}({repr(self.v)})'
+  
+  def __str__(self):
+    return format(self)
+  
+  def __format__(self, format_spec=''):
+    self.spec=format_spec if format_spec else 'g'
+    return self._f(self.v)
+
+  def _fp(self, v):
+    """format a float using self.spec as the format spec."""
+    # TODO: support 'P' like 'F'.
+    if self.spec.endswith('p'):
+      s = f'{v:{self.spec[:-1] + "f"}}'
+      if '.' in s: s = s.rstrip('0').rstrip('.')
+      if '#' in self.spec and any(s.startswith(p) for p in ('0.', '-0.', '+0.', ' 0.')):
+        s = s.replace('0', '', 1)
+      return s
+    return f'{v:{self.spec}}'
+
+  def _f(self, v):
+    """format anything using self.spec as the format spec."""
+    if isinstance(v, (float,int)):
+      return self._fp(v)
+    if isinstance(v, tuple):
+      return f"({' '.join(self._f(e) for e in v)})"
+    if isinstance(v, list):
+      return f"[{' '.join(self._f(e) for e in v)}]"
+    if hasattr(v, 'ndim'):
+      # assume it's a numpy.array, use printoptions.
+      with printoptions(edgeitems=2, threshold=5, formatter=dict(
+          float_kind=self._fp, int_kind=self._fp)):
+        return format(v)
+    # fallback to str().
+    return str(v)
+
 
 class Sample(object):
   """A simple sample stats collector.
 
   This can be used to collect stats about values by adding them with add() or
-  in batches using update(). If numpy is available the values can be arrays of
-  values (lists and tuples will be converted to arrays), and all the
-  corresponding attributes will also be arrays.
+  in batches using update(). The values can be multiple value arrays (lists
+  and tuples will be converted to arrays), and all the corresponding
+  attributes will also be arrays. Note arrays will be numpy.array if numpy is
+  available, otherwise they will be a numpy-array-like list subclass.
 
   Attributes:
     num: the number of values added.
@@ -77,7 +184,7 @@ class Sample(object):
     self.sum += n*v
     self.sum2 += n*v*v
     self.min = fmin(self.min, v)
-    self.max = fmax(self.min, v)
+    self.max = fmax(self.max, v)
 
   def update(self, data):
     """Add all the values in data."""
@@ -92,7 +199,8 @@ class Sample(object):
   @property
   def var(self):
     """Get the variance of the values."""
-    return (self.sum2 - self.sum*self.sum/self.num) / self.num
+    # clamp >=0 to correct for rounding errors when var=0.
+    return fmax(0.0,(self.sum2 - self.sum*self.sum/self.num) / self.num)
 
   @property
   def dev(self):
@@ -120,7 +228,7 @@ class Sample(object):
   def __str__(self):
     """Get a simple string rendering of the stats."""
     if self.num:
-      return f'num={self.num:g} sum={f3(self.sum)} min/avg/max/dev={f3(self.min)}/{f3(self.avg)}/{f3(self.max)}/{f3(self.dev)}'
+      return f'num={self.num:g} sum={P(self.sum)} min/avg/max/dev={P(self.min)}/{P(self.avg)}/{P(self.max)}/{P(self.dev)}'
     else:
       return "num=0 sum=0"
 
@@ -157,6 +265,7 @@ class Histogram(Sample):
 
   def __init__(self, data=None, width=0, scale=0, base=0, hmin=-inf, hmax=inf):
     """Initialize a Histogram instance."""
+    if not width and not scale: width=1
     self.width, self.scale, self.base, self.hmin, self.hmax = width, scale, base, hmin, hmax
     self.data = defaultdict(int)
     super().__init__(data=data)
