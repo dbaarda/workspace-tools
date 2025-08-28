@@ -14,13 +14,13 @@ G161 X Y F3300
 M7 T0
 M6 T0
 M108 T0
-{if close_fan_the_first_x_layers[current_extruder]>0}; Leaving extuder fan off for first [close_fan_the_first_x_layers] layers.
+{if activate_air_filtration[current_extruder] && support_air_filtration}; Setting enclosure exhaust fan speed during print.
+M651 S{during_print_exhaust_fan_speed_num[current_extruder]}
+{else}; Leaving enclosure exhaust fan off during print.
+{endif}{if close_fan_the_first_x_layers[current_extruder]>0}; Leaving extuder fan off for first [close_fan_the_first_x_layers] layers.
 {elsif fan_min_speed[current_extruder]>0}; Turning extruder fan on for all layers.
 M106
 {else}; Leaving extruder fan off for all layers.
-{endif}{if activate_air_filtration[current_extruder] && support_air_filtration}; Setting enclosure exhaust fan speed during print.
-M651 S{during_print_exhaust_fan_speed_num[current_extruder]}
-{else}; Leaving enclosure exhaust fan off during print.
 {endif};end machine start gcode
 ;start preextrude
 G1 X-37.5 Y-74 F6000
