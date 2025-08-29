@@ -176,6 +176,30 @@ import stats1
 
 nl = '\n'  # for use inside fstrings.
 
+# These are short formatting functions for use in fstrings.
+from stats1 import P
+
+
+# Short fstring functions for formatting numbers and numpy.array values.
+def f0(v, o=''):
+  return f'{P(v):{o}.0f}'
+
+def f1(v, o=''):
+  return f'{P(v):{o}.1p}'
+
+def f2(v, o=''):
+  return f'{P(v):{o}.2p}'
+
+def f3(v, o=''):
+  return f'{P(v):{o}.3p}'
+
+def f6(v, o=''):
+  return f'{P(v):{o}.6p}'
+
+def fzp(v, p):
+  """ Format a float with max p decimal places and strip the leading zero."""
+  return f'{P(v):#.{p}p}'
+
 
 def ftime(t):
   """Format a time in seconds as hh:mm:ss.sss."""
@@ -187,27 +211,6 @@ def ftime(t):
 def fbool(b):
   """ Format a boolean as 'Y', 'N', or '?' for True, False, None (unknown). """
   return '?' if b is None else 'Y' if b else 'N'
-
-
-def fp(v, p, o=''):
-  """ Format a float with max p decimal places."""
-  return f'{v:{o}.{p}f}'.rstrip('0').rstrip('.') if p else f'{round(v):{o}}'
-
-
-def fzp(v, p):
-  """ Format a float with max p decimal places and strip the leading zero."""
-  s = fp(v,p)
-  return s.replace('0', '', 1) if s.startswith('0.') or s.startswith('-0.') else s
-
-
-def f2(v):
-  """ Format a float with max 2 decimal places."""
-  return f'{v:.2f}'.rstrip('0').rstrip('.')
-
-
-def f3(v):
-  """ Format a float with max 3 decimal places."""
-  return f'{v:.3f}'.rstrip('0').rstrip('.')
 
 
 def fstr(s, globals=None, locals=None):
@@ -349,10 +352,11 @@ class Move(MoveBase):
     kwargs = {k:getnear(v) for k,v in kwargs.items()}
     self = super().__new__(cls, *args, **kwargs)
     if r is None:
-      r = self.de/self.el if self.isgo else self.de
+      r = 0.0 if self.de <=0 else self.de/self.el if self.isgo else 1.0
     self.r = getnear(r)
     self.v0 = self.v1 = 0.0
     self.setv(v0, v1)
+    assert 0.0 <= self.r, f'{self.r=} for {self!r}'
     assert 0.0 <= self.v <= cls.Vp, f'{self.v=} {cls.Vp=} for {self!r}'
     return self
 
@@ -371,12 +375,12 @@ class Move(MoveBase):
     return super().__repr__()[:-1] + f', r={self.r}, v0={self.v0}, v1={self.v1})'
 
   def __str__(self):
-    f0 = round
     lstr = f'({f2(self.h)}x{f2(self.w)}x{f2(self.r)})'
-    pstr = f' dl={self.dl:.1f}@{f0(self.v)}({f0(self.v0)}<{f0(self.vm)}>{f0(self.v1)})' if self.isgo else ''
-    hstr = f' dz={self.dz:.2f}@{f0(self.v)}' if self.ishop else ''
+    pstr = f' dl={self.dl:.1f}@{f0(self.v)}({f0(self.v0)}<{f0(self.vm)}>{f0(self.v1)})' if self.dl else ''
+    hstr = f' dz={self.dz:.2f}@{f0(self.v)}' if self.dz else ''
     estr = f' de={self.de:.4f}@{f2(self.ve)}({f2(self.ve0)}<{f2(self.vem)}>{f2(self.ve1)})' if self.de else ''
-    rstr = f' r={fp(self.er-self.r, 2, "+")}'
+    # TODO: add support for agumenting/reporting actual nozzle output.
+    rstr = f' re={f2(self.re)}'
     if self.isdraw:
       mstr = f'draw'
     elif self.ishopup:
@@ -416,59 +420,30 @@ class Move(MoveBase):
   def _db(cls, eb, h):
     """ Get the bead diameter from the bead volume."""
     # h<=0 can happen for initializing moves or moves at the start of a new
-    # layer before a hop, and h>1 can happen at the start of a print when
-    # moving to the first layer, so always clamp h.
-    return dcircle(eb*cls.Fa/clamp(h, 0.01, 1.0))
+    # layer before a hop, and h>Nd*2 can happen at the start of a print when
+    # moving to the first layer, so always clamp h. For h>Nd*2 it spagetti's
+    # instead of beading, so that's the effective upper limit on bead height.
+    return dcircle(eb*cls.Fa/clamp(h, 0.01, cls.Nd*2))
 
   @classmethod
-  def _eb(cls, h, w, r=1.0):
+  def _eb(cls, h, db):
     """ Volume in filament length of bead."""
-    return clamp(h, 0.01, 1.0) * acircle(w*r) / cls.Fa
+    return clamp(h, 0.01, cls.Nd*2) * acircle(db) / cls.Fa
 
   @classmethod
-  def _el(cls, l, h, w, r=1.0):
+  def _el(cls, l, h, db):
     """ Volume in filament length of line."""
-    return l * clamp(h, 0.01, 1.0) * w * r / cls.Fa
-
-  @cached_property
-  def er(self):
-    """Extruder ratio (not target ratio)."""
-    return self.de/self.el if self.isgo else self.de
-
-  @cached_property
-  def en(self):
-    """Target nozzle extrusion."""
-    # For restore r is used for restore distance so assume r=1 for dot size.
-    v = self.el * self.r if self.isdraw else self.el if self.isrestore else 0.0
-    assert v >=0, f'{self!r}'
-    return v
-
-  @property
-  def en0(self):
-    """Target nozzle extrusion during acceleration phase."""
-    v = self.el0 * self.r if self.isdraw else 0.0
-    assert v >=0, f'{self!r}'
-    return v
-
-  @property
-  def en1(self):
-    """Target nozzle extrusion during deceleration phase."""
-    v = self.el1 * self.r if self.isdraw else 0.0
-    assert v >=0, f'{self!r}'
-    return v
-
-  @property
-  def enm(self):
-    """Target nozzle extrusion during middle phase."""
-    # For restore assume dot is all middle phase for restores.
-    v = self.elm * self.r if self.isdraw else self.elm if self.isrestore else 0.0
-    assert v >=0, f'{self!r}'
-    return v
+    return l * clamp(h, 0.01, cls.Nd*2) * db / cls.Fa
 
   @property
   def f(self):
     """ The 'f' mm/min speed of a move. """
     return round(self.v * 60)
+
+  @cached_property
+  def re(self):
+    """Extruder ratio (not target ratio)."""
+    return self.de/self.el
 
   @cached_property
   def dt0(self):
@@ -563,6 +538,26 @@ class Move(MoveBase):
     return dlm
 
   @property
+  def vz(self):
+    """ The target vertical velocity of a move."""
+    return self.dz/self.dl * self.v if self.dl else copysign(self.v, self.dz) if self.dz else 0.0
+
+  @property
+  def dz0(self):
+    """ Change in z of acceleration phase."""
+    return self.dz * self.dl0/self.dl if self.dl else 0.0
+
+  @property
+  def dz1(self):
+    """ Change in z of decceleration phase."""
+    return self.dz * self.dl1/self.dl if self.dl else 0.0
+
+  @property
+  def dzm(self):
+    """ Change in z of mid phase."""
+    return self.dz * self.dlm/self.dl if self.dl else self.dz
+
+  @property
   def ae0(self):
     """ The extrusion acceleration rate at the start of a move. """
     dl, de = self.dl, self.de
@@ -646,60 +641,96 @@ class Move(MoveBase):
     return dem
 
   @property
-  def dh0(self):
-    """ Change in height of acceleration phase."""
-    return self.dz * self.dl0/self.dl if self.dl else 0.0
+  def dd(self):
+    """ The total distance of a move.
+
+    This is a combined total travel distance that moves can be averaged over.
+    It is the combined horizontal line distance and vertical distance.
+    Retracts and restores are considered to have a line distance matching the
+    volume of their bead. Hops can have dz and dl for slope/spiral hops.
+    """
+    dl, dz = self.dl if self.isgo else 0.0 if self.dz else pi/4*self.w, self.dz
+    return sqrt(dl*dl + dz*dz)
 
   @property
-  def dh1(self):
-    """ Change in height of decceleration phase."""
-    return self.dz * self.dl1/self.dl if self.dl else 0.0
-
-  @property
-  def dhm(self):
-    """ Change in height of mid phase."""
-    return self.dz * self.dlm/self.dl if self.dl else self.dz
+  def vd(self):
+    """ The target total distance velocity."""
+    dt = m.dl/m.v if m.isgo else m.dz/m.v if m.dz else m.de/m.v
+    return self.dd/dt
 
   @property
   def db(self):
     """ The target extrusion bead diameter. """
-    return self.w * self.r if self.isgo else self.w if self.isrestore else 0.0
+    return self.w * self.r
 
   @cached_property
   def eb(self):
     """ The extrusion bead volume not including r under/over extrusion. """
-    v = self._eb(self.h, self.w)
-    assert v >=0, f'{self!r}'
-    return v
+    eb = self._eb(self.h, self.w)
+    assert eb >=0, f'{eb=} {self!r}'
+    return eb
 
   @cached_property
   def el(self):
     """ The line volume not including r under/over extrusion. """
-    v = self._el(self.dl, self.h, self.w) if self.isgo else self.eb
-    assert v >=0, f'{self!r}'
-    return v
+    # Note this is the bead volume for adjusts and the extra dz bead for non moving hops.
+    el = self._el(self.dl, self.h, self.w) if self.isgo else self._eb(abs(self.dz), self.w) if self.dz else self.eb
+    assert el >=0, f'{el=} {self!r}'
+    return el
 
   @property
   def el0(self):
     """ The start line volume not including r under/over extrusion. """
-    v = self.el*self.dl0/self.dl if self.isgo else 0.0
-    assert v >=0, f'{self!r}'
-    return v
+    el0 = self.el*(self.dl0/self.dl if self.isgo else self.dz0/self.dz if self.dz else self.de0/self.de)
+    assert el0 >=0, f'{el0=} {self!r}'
+    return el0
 
   @property
   def el1(self):
     """ The end line volume not including r under/over extrusion. """
-    v = self.el*self.dl1/self.dl if self.isgo else 0.0
-    assert v >=0, f'{self!r}'
-    return v
+    el1 = self.el*(self.dl1/self.dl if self.isgo else self.dz1/self.dz if self.dz else self.de1/self.de)
+    assert el1 >=0, f'{el1=} {self!r}'
+    return el1
 
   @property
   def elm(self):
     """ The mid line volume not including r under/over extrusion. """
-    # Assume all line volume is in the middle phase for non draws or moves.
-    v = self.el*self.dlm/self.dl if self.isgo else self.eb
-    assert v >=0, f'{self!r}'
-    return v
+    elm = self.el*(self.dlm/self.dl if self.isgo else self.dzm/self.dz if self.dz else self.dem/self.de)
+    assert elm >=0, f'{elm=} {self!r}'
+    return elm
+
+  @property
+  def vt(self):
+    """Target nozzle extrusion velocity."""
+    return self.et/self.dl * self.v if self.dl else self.et/self.de * self.v if self.de else 0.0
+
+  @cached_property
+  def et(self):
+    """Target nozzle extrusion."""
+    et = self.el * self.r
+    assert et >=0, f'{et=} {self!r}'
+    return et
+
+  @property
+  def et0(self):
+    """Target nozzle extrusion during acceleration phase."""
+    et0 = self.el0 * self.r
+    assert et0 >=0, f'{et0=} {self!r}'
+    return et0
+
+  @property
+  def et1(self):
+    """Target nozzle extrusion during deceleration phase."""
+    et1 = self.el1 * self.r
+    assert et1 >=0, f'{et1=} {self!r}'
+    return et1
+
+  @property
+  def etm(self):
+    """Target nozzle extrusion during middle phase."""
+    etm = self.elm * self.r
+    assert etm >=0, f'{etm=} {self!r}'
+    return etm
 
   @cached_property
   def isgo(self):
@@ -708,35 +739,38 @@ class Move(MoveBase):
 
   @cached_property
   def isdraw(self):
+    # Note there can be sloped draws.
     return self.isgo and self.r > 0.0
 
   @property
   def ismove(self):
-    return self.isgo and self.r <= 0.0
+    # Any dz means it's a slope or spiral hop.
+    return self.isgo and self.r <= 0 and not self.dz
 
   @property
   def isadjust(self):
-    return self.r and not (self.isgo or self.dz)
+    return self.de and not (self.isgo or self.dz)
 
   @property
   def isretract(self):
-    return self.r < 0 and not (self.isgo or self.dz)
+    return self.de < 0 and not (self.isgo or self.dz)
 
   @property
   def isrestore(self):
-    return self.r > 0 and not (self.isgo or self.dz)
+    return self.de > 0 and not (self.isgo or self.dz)
 
   @property
   def ishop(self):
-    return self.dz and not self.isgo
+    # Note there can be slope or spiral hops.
+    return self.dz and self.r <= 0
 
   @property
   def ishopup(self):
-    return self.dz > 0 and not self.isgo
+    return self.dz > 0 and self.r <= 0
 
   @property
   def ishopdn(self):
-    return self.dz < 0 and not self.isgo
+    return self.dz < 0 and self.r <= 0
 
   @property
   def isspeed(self):
@@ -916,7 +950,6 @@ def ldt(l):
 
 class Layer(NamedTuple):
   """ Layer definition object. """
-  # Note we always start layers from a high "hop" position.
   n : int   # layer number (0 for pre-extrude).
   z : float # height of bottom of layer.
   Vp: int   # default layer print speed.
@@ -927,6 +960,131 @@ class Layer(NamedTuple):
   h : float # layer height.
   w : float # default line width.
   r : float # default line extrusion ratio.
+
+
+class CmdStats(object):
+  """ Stats for a sample of moves."""
+  def __init__(self, name):
+    self.name = name
+    self.c = stats1.Sample() # cmd stats (dt,dd,dl,dz,de,el,et,en,v,v0,vm,v1 per cmd).
+    self.l = stats1.Sample() # cmd line stats (vl,vz,ve,vn,h,w,r per dd).
+    self.o = stats1.Sample() # out line stats (vl,vz,ve,vn,re,rt,rn,er per dd).
+    self.r = stats1.Sample() # extruder stats (re,rt,rn,er per el).
+
+  def _atdev(self, s, d):
+    """Get a Sample's values at d stddevs clipped between min and max."""
+    return stats1.clip(s.atdev(d), s.min, s.max)
+
+  def __str__(self):
+    num = self.c.num
+    dt, dd, dl, dz, de, el, et, en, *_  = self.c.sum
+    er = (en-et)/el
+    assert isneareq(self.l.num, dd)
+    assert isneareq(self.o.num, dd)
+    assert isneareq(self.r.num, el)
+    cmdsums = f'totals {num=} dt={ftime(dt)} {dd=:.1f} {dl=:.1f} {dz=:.2f} {de=:.3f} {el=:.3f} {et=:.3f} {en=:.3f} {er=:+.3f}'
+    *_, v, v0, vm, v1 = self.c.avg
+    vl, vz, ve, vn, h, w, r = self.l.avg
+    vl0, vz0, ve0, vn0, h0, w0, r0 = self._atdev(self.l,-2)
+    vl1, vz1, ve1, vn1, h1, w1, r1 = self._atdev(self.l,0)
+    vl2, vz2, ve2, vn2, h2, w2, r2 = self._atdev(self.l,2)
+    cmdlines = f'move args: {v=:.0f}({v0:.0f}<{vm:.0f}>{v1:.0f}) {h=:.2f}({h0:.2f}<{h1:.2f}<{h2:.2f}) {w=:.2f}({w0:.2f}<{w1:.2f}<{w2:.2f}) {r=:.2f}({r0:.2f}<{r1:.2f}<{r2:.2f})'
+    vlstr=f' {vl=:.0f}({vl0:.0f}<{vl1:.0f}<{vl2:.0f})' if vl else ''
+    vzstr=f' {vz=:.1f}({vz0:.1f}<{vz1:.1f}<{vz2:.1f})' if vz else ''
+    vestr=f' {ve=:.3f}({ve0:.3f}<{ve1:.3f}<{ve2:.3f})' if ve else ''
+    vnstr=f' {vn=:.3f}({vn0:.3f}<{vn1:.3f}<{vn2:.3f})' if vn else ''
+    cmdvels = f'target speeds per dd:{vlstr}{vzstr}{vestr}{vnstr}'
+    vl, vz, ve, vn, re, rt, rn, er = self.o.avg
+    vl0, vz0, ve0, vn0, re0, rt0, rn0, er0 = self._atdev(self.o,-2)
+    vl1, vz1, ve1, vn1, re1, rt1, rn1, er1 = self._atdev(self.o,0)
+    vl2, vz2, ve2, vn2, re2, rt2, rn2, er2 = self._atdev(self.o,2)
+    vlstr=f' {vl=:.0f}({vl0:.0f}<{vl1:.0f}<{vl2:.0f})' if vl else ''
+    vzstr=f' {vz=:.1f}({vz0:.1f}<{vz1:.1f}<{vz2:.1f})' if vz else ''
+    vestr=f' {ve=:.3f}({ve0:.3f}<{ve1:.3f}<{ve2:.3f})' if ve else ''
+    vnstr=f' {vn=:.3f}({vn0:.3f}<{vn1:.3f}<{vn2:.3f})' if vn else ''
+    actvels = f'actual speeds per dd:{vlstr}{vzstr}{vestr}{vnstr}'
+    restr=f' {re=:.2f}({re0:.2f}<{re1:.2f}<{re2:.2f})' if re else ''
+    rtstr=f' {rt=:.2f}({rt0:.2f}<{rt1:.2f}<{rt2:.2f})' if rt else ''
+    rnstr=f' {rn=:.2f}({rn0:.2f}<{rn1:.2f}<{rn2:.2f})' if rn else ''
+    erstr=f' {er=:+.2f}({er0:+.2f}<{er1:+.2f}<{er2:+.2f})'
+    lratios = f'volume ratios per dd:{restr}{rtstr}{rnstr}{erstr}'
+    re, rt, rn, er = self.r.avg
+    re0, rt0, rn0, er0 = self._atdev(self.r,-2)
+    re1, rt1, rn1, er1 = self._atdev(self.r,0)
+    re2, rt2, rn2, er2 = self._atdev(self.r,2)
+    restr=f' {re=:.2f}({re0:.2f}<{re1:.2f}<{re2:.2f})' if re else ''
+    rtstr=f' {rt=:.2f}({rt0:.2f}<{rt1:.2f}<{rt2:.2f})' if rt else ''
+    rnstr=f' {rn=:.2f}({rn0:.2f}<{rn1:.2f}<{rn2:.2f})' if rn else ''
+    erstr=f' {er=:+.2f}({er0:+.2f}<{er1:+.2f}<{er2:+.2f})'
+    eratios = f'volume ratios per el:{restr}{rtstr}{rnstr}{erstr}'
+    return f"""{self.name} stats:
+  {cmdsums}
+  {cmdlines}
+  {cmdvels}
+  {actvels}
+  {lratios}
+  {eratios}"""
+
+  def addinc(self, m, dt, dl, dz, de, en):
+    """ Update the stats for part of a move."""
+    # get the fraction of a move from the distance ratios.
+    s = (dl/m.dl if dl else dz/m.dz if dz else de/m.de)
+    # scale dist and volumes by the fraction of the move completed.
+    dd = s * m.dd; el = s * m.el; et = s * m.et
+    assert 0<dd<500 and 0<el<500 and 0<=et<500 and 0<=en<500, f'{dd=} {el=} {et=} {en=} for {m!r}'
+    vl, vz, ve, vn = dl/dt, dz/dt, de/dt, en/dt
+    re, rt, rn = de/el, et/el, en/el
+    er = rn - rt
+    self.o.add((vl, vz, ve, vn, re, rt, rn, er), dd)
+    self.r.add((re, rt, rn, er), el)
+
+  def addcmd(self, m, en):
+    """ Update the stats for a whole move."""
+    self.c.add((m.dt,m.dd,m.dl,m.dz,m.de,m.el,m.et,en,m.v,m.v0,m.vm,m.v1))
+    self.l.add((m.vl,m.vz,m.ve,m.vt,m.h,m.w,m.r), m.dd)
+
+
+class PrintStats(object):
+  """ Print stats collection and rendering."""
+
+  def __init__(self):
+    # Stats on speeds.
+    self.total = CmdStats('total')
+    self.draw = CmdStats('draw')
+    self.move = CmdStats('move')
+    self.hopup = CmdStats('hopup')
+    self.hopdn = CmdStats('hopdn')
+    self.retract = CmdStats('retract')
+    self.restore = CmdStats('restore')
+
+  def __str__(self):
+    return f"""{self.total}
+{self.draw}
+{self.move}
+{self.hopup}
+{self.hopdn}
+{self.retract}
+{self.restore}"""
+
+  def addinc(self, m, dt, dl, dz, de, en):
+    """ Update the line stats for part of a move."""
+    self.total.addinc(m, dt, dl, dz, de, en)
+    if m.isdraw: self.draw.addinc(m, dt, dl, dz, de, en)
+    elif m.ismove: self.move.addinc(m, dt, dl, dz, de, en)
+    elif m.ishopup: self.hopup.addinc(m, dt, dl, dz, de, en)
+    elif m.ishopdn: self.hopdn.addinc(m, dt, dl, dz, de, en)
+    elif m.isretract: self.retract.addinc(m, dt, dl, dz, de, en)
+    elif m.isrestore: self.restore.addinc(m, dt, dl, dz, de, en)
+
+  def addcmd(self, m, en):
+    """ Update the stats for a whole move."""
+    self.total.addcmd(m, en)
+    if m.isdraw: self.draw.addcmd(m, en)
+    elif m.ismove: self.move.addcmd(m, en)
+    elif m.ishopup: self.hopup.addcmd(m, en)
+    elif m.ishopdn: self.hopdn.addcmd(m, en)
+    elif m.isretract: self.retract.addcmd(m, en)
+    elif m.isrestore: self.restore.addcmd(m, en)
 
 
 class GCodeGen(AttrDictMixin):
@@ -1060,7 +1218,7 @@ class GCodeGen(AttrDictMixin):
     r0,rm,r1: the extrusion ratios of the last move (property)
     c: the last non-comment command.
     m: the last move command.
-    d: the last move command that was a draw.
+    d: the last move command that was a draw or restore.
     x,y,z,e,f: Current x,y,z,e,f position values.
     h: current height above the layer base.
     w: current default line width (property).
@@ -1199,20 +1357,26 @@ M18
     return self.pn/self.Kf if self.Kf else self.ve if self.pe>=self.pb else 0.0
 
   @property
-  def r0(self):
-    """ The extrusion ratio at the start of the last move."""
-    return self.db0/self.m.w if self.m else 0.0
+  def rn(self):
+    """ The nozzle extrusion ratio for the last move."""
+    assert isneareq(self.en, self.en0+self.enm+self.en1), f'{self.en=} {self.en0=} {self.enm=} {self.en1=}'
+    assert isneareq(self.m.el, self.m.el0+self.m.elm+self.m.el1), f'{self.m.el=} {self.m.el0=} {self.m.elm=} {self.m.el1=}'
+    return self.en/self.m.el if self.m else 0.0
 
   @property
-  def rm(self):
-    """ The extrusion ratio at the middle of the last move."""
-    m = self.m
-    return self.en/m.el if m else 0.0
+  def rn0(self):
+    """ The nozzle extrusion ratio for the accel phase of the last move."""
+    return self.en0/self.m.el0 if self.m and self.m.el0 else self.rnm
 
   @property
-  def r1(self):
-    """ The extrusion ratio at the end of the last move."""
-    return self.db/self.m.w if self.m else 0.0
+  def rnm(self):
+    """ The nozzle extrusion ratio for the mid phase of the last move."""
+    return self.enm/self.m.elm if self.m and self.m.elm else 0.0
+
+  @property
+  def rn1(self):
+    """ The nozzle extrusion ratio for the decel phase of the last move."""
+    return self.en1/self.m.el1 if self.m and self.m.el1 else self.rnm
 
   @property
   def hl(self):
@@ -1228,6 +1392,21 @@ M18
   def rl(self):
     """ Get the current line extrusion ratio."""
     return self.m.r if self.m else self.layer.r
+
+  @property
+  def hd(self):
+    """ Get the last draw line height."""
+    return self.d.h if self.d else self.layer.h
+
+  @property
+  def wd(self):
+    """ Get the last draw line width."""
+    return self.d.w if self.d else self.layer.w
+
+  @property
+  def rd(self):
+    """ Get the last draw line extrusion ratio."""
+    return self.d.r if self.d else self.layer.r
 
   def islayer(self, cmd):
     return isinstance(cmd, Layer)
@@ -1263,11 +1442,14 @@ M18
     self.resetlayer()
     self.resetstats()
 
+  def resetstats(self):
+    self.stats = PrintStats()
+
   def resetlayer(self):
     """ Reset all layer state variables. """
     # Set layer to a default base layer for any layer-less moves.
     self.layer = Layer(
-        -1, 0.0, self.Vp, self.Vt, self.Vz, self.Ve, self.Vb, self.Lh, self.Lw, self.Lr)
+        0, 0.0, self.Vp, self.Vt, self.Vz, self.Ve, self.Vb, self.Lh, self.Lw, self.Lr)
     self.l_t = self.l_l = self.l_e = 0.0
     self.resetstate()
 
@@ -1275,17 +1457,6 @@ M18
     """ Reset all move state variables. """
     self.dt = self.dl = self.de = self.en = 0.0
 
-  def resetstats(self):
-    # Stats on move extrusions.
-    self.dle_stats = stats1.Sample() # target line volume stats.
-    self.dne_stats = stats1.Sample() # actual line volume stats.
-    self.tne_stats = stats1.Sample() # actual move volume stats.
-    self.dlw_stats = stats1.Sample() # target line width stats.
-    self.dnw_stats = stats1.Sample() # actual line width stats (lines).
-    self.tnw_stats = stats1.Sample() # actual move width stats (ooze).
-    self.drt_stats = stats1.Sample() # target line ratio stats.
-    self.drn_stats = stats1.Sample() # actual line ratio stats.
-    self.trn_stats = stats1.Sample() # actual move ratio stats.
 
   def iterstate(self, dt, dl, de, dh, dvl, dve):
     """ Increment the state for a small dt interval. """
@@ -1304,6 +1475,7 @@ M18
     self.vl += dvl
     self.ve += dve
     self.h += dh
+    self.stats.addinc(self.m, dt, dl, dh, de, en)
 
   def incstate(self, dt, dl=0.0, de=0.0, dh=0.0, dvl=0.0, dve=0.0):
     """ Increment the state for a large dt interval and return en. """
@@ -1367,46 +1539,6 @@ M18
     self.h = getnear(self.z - l.z)
     assert self.h >= 0.0, f'{self.z=} {l}'
 
-  def iterstats(self, m, dl, en):
-    """ Update the line stats for part of a move."""
-    # nominal and target line widths and volumes.
-    wl, wt, el, et = m.w, m.db, m.el, m.en
-    # scale volumes by length if necessary. Note m.dl=0 for restores etc.
-    if dl < m.dl: s = dl/m.dl; el*=s; et*=s
-    # actual and target ratio.
-    rn, rt = en/el, et/el
-    # actual width, using diameter for dots.
-    wn = rn*wl if m.isgo else sqrt(rn)*wl
-    # For dot's use equivalent line-length by volume in stats.
-    if not m.isgo: dl = pi/4*wl
-    assert 0<dl<1000 and 0<wl<2 and 0<=wt<4 and 0<=wn<16, f'{dl=} {wl=} {wt=} {wn=} for {m!r}'
-    assert 0<el<500 and 0<=et<500 and 0<=en<500, f'{dl=} {el=} {et=} {en=} for {m!r}'
-    assert 0.0 <= rt <= 8, f'{rt=} {et=} {el=} for {m=!r}'
-    assert 0.0 <= rn <= 32, f'{rn=} {en=} {el=} for {m=!r}'
-    if rt > 0:
-      # This must be a draw or restore.
-      self.dle_stats.add(et/dl,dl)
-      self.dne_stats.add(en/dl,dl)
-      self.dlw_stats.add(wt,dl)
-      self.dnw_stats.add(wn,dl)
-      self.drt_stats.add(rt,el)
-      self.drn_stats.add(rn,el)
-    else:
-      # This is a retract, hop, or move.
-      self.tne_stats.add(en/dl,dl)
-      self.tnw_stats.add(wn,dl)
-      self.trn_stats.add(rn,el)
-
-  def addstats(self, m, en0, enm, en1):
-    """ Update the line stats with the phase nozzle extrusions for a move."""
-    assert isneareq(en0+enm+en1, self.en), f'{en0=} {enm=} {en1=} {self.en=}'
-    dlm, elm = m.dlm, m.elm
-    # iterate through accel phases to handle or accumulate them into the mid phase.
-    for dli, eni in ((m.dl0, en0), (m.dl1, en1)):
-      if dli < 1.0 or dlm < 1.0: dlm+=dli; enm+=eni
-      else: self.iterstats(m, dli, eni)
-    self.iterstats(m, dlm, enm)
-
   def incmove(self, m):
     """ Increment state for executing a Move. """
     # Check that the start states are as expected.
@@ -1423,14 +1555,10 @@ M18
       # "jerk" ve from the previous ve1 to ve0.
       self.ve = m.ve0
       # Update the state for the three move phases.
-      en0 = enm = en1 = 0.0
-      if m.dt0:
-        en0 = self.incstate(m.dt0, m.dl0, m.de0, m.dh0, m.dv0, m.dve0)
-      if m.dtm:
-        enm = self.incstate(m.dtm, m.dlm, m.dem, m.dhm, m.dvm, m.dvem)
-      if m.dt1:
-        en1= self.incstate(m.dt1, m.dl1, m.de1, m.dh1, m.dv1, m.dve1)
-      self.addstats(m, en0, enm, en1)
+      self.en0 = self.incstate(m.dt0, m.dl0, m.de0, m.dz0, m.dv0, m.dve0) if m.dt0 else 0.0
+      self.enm = self.incstate(m.dtm, m.dlm, m.dem, m.dzm, m.dvm, m.dvem) if m.dtm else 0.0
+      self.en1 = self.incstate(m.dt1, m.dl1, m.de1, m.dz1, m.dv1, m.dve1) if m.dt1 else 0.0
+      self.stats.addcmd(m, self.en)
       # Check that the end states are as expected.
       assert isneareq(self.dt, m.dt)
       assert isneareq(self.dl, m.dl)
@@ -1451,7 +1579,7 @@ M18
     self.vl = m.v1
     self.ve = m.ve1
     self.h = getnear(self.z - self.layer.z)
-    if m.isdraw: self.d = m
+    if m.r > 0 : self.d = m
     self.inct(m.dt)
 
   def inccmd(self, cmd):
@@ -1510,7 +1638,7 @@ M18
     cmd = self.fcmd('G1', X=x, Y=y, Z=z, E=e, F=f)
     if self.verb:
       # Add additional command comment suffix.
-      cmd = f'{cmd:40s}; {{dt=:.3f}} {{m}}({{r0:.2f}}<{{rm:.2f}}>{{r1:.2f}})'
+      cmd = f'{cmd:40s}; {{dt=:.3f}} {{m}} {{rn=:.2f}}({{rn0:.2f}}<{{rnm:.2f}}>{{rn1:.2f}})'
     return cmd
 
   def _farg_FlashPrint(self, k, v):
@@ -1566,10 +1694,7 @@ M18
 
   def faddmove(self, m):
     """ Do a final format and add of a Move. """
-    if self.layer.n <= 0:
-      # Skip adjusting pressures and retracts for preextrudes before layer 1.
-      pass
-    elif self.dynret and m.isretract:
+    if self.dynret and m.isretract:
       # Adjust retraction to Re and also relieve advance pressure.
       m = m.change(de=-self.Re - self.pe)
       # self.log(f'adjusted {m0} -> {m}')
@@ -1587,7 +1712,8 @@ M18
       if not m.de:
         self.log('skipping empty restore.')
         return
-    elif self.dynext and (m.isdraw or (self.pe > 0.0 and m.isgo)):
+    elif self.dynext and self.layer.n and (m.isdraw or (self.pe > 0.0 and m.isgo)):
+      # Skip adjusting pressures for preextrudes before layer 1.
       # Adjust extrusion for any draw or non-retracted move.
       # Get the ve and db before and after this move.
       ve0 = self.ve
@@ -1683,8 +1809,6 @@ M18
     self.startLayer(0, h=0.2)
 
   def endFile(self):
-    # Retract to -2.5mm for the next print.
-    self.hopup(pe=-2.5)
     self.endLayer()
     self.filestats()
     self.add(self.endcode)
@@ -1693,7 +1817,7 @@ M18
       Vp=None, Vt=None, Vz=None, Ve=None, Vb=None,
       h=None, w=None, r=1.0):
     if n is None: n = self.layer.n + 1
-    if z is None: z = self.layer.z + self.layer.h if n > 1 else 0.0
+    if z is None: z = getnear(self.layer.z + self.layer.h) if n > 1 else 0.0
     l = Layer(
         n, z,
         Vp or self.Vp,
@@ -1739,10 +1863,11 @@ M18
     dz = z - self.z if z is not None else dz if dz is not None else 0.0
     dl = sqrt(dx**2 + dy**2)
     # Note: setting h and z or dz means explicit h overrides z height for de calcs.
-    if h is None: h = self.h + dz
-    if w is None: w = self.w
+    if h is None: h = getnear(self.h + dz, 3)
+    if w is None: w = self.wl
+    # r is scaled by layer.r so changing layer.r scales all draws.
     r = self.layer.r * r
-    de = e - self.e if e is not None else de if de is not None else dl*w*h*r/self.Fa
+    de = e - self.e if e is not None else de if de is not None else self.GMove._el(dl,w,h*r)
     if v is None:
       if de:
         v = s * (self.layer.Vp if dl else self.layer.Ve if de < 0 else self.layer.Vb)
@@ -1754,23 +1879,26 @@ M18
     m = self.GMove(dx,dy,dz,de,v,h=h,w=w)
     # Only add it if it does anything.
     if any(m[:4]):
-      if self.Slicer == self.FlashPrint and m.isdraw and not isneareq(m.r, self.rl, 2):
+      if self.Slicer == self.FlashPrint and m.r > 0 and not isneareq(m.r, self.rd, 2):
         self.cmt(f'extrude_ratio:{f2(m.r)}')
-      if self.Slicer != self.FlashPrint and m.isdraw and not isneareq(m.w, self.wl):
+      if self.Slicer != self.FlashPrint and m.r > 0 and not isneareq(m.w, self.wd):
         self.cmt(f'WIDTH:{getnear(m.w+self.layer.h*(1-pi/4))}')
       self.add(m)
     else:
       self.log(f'skipping empty move {m!r}')
 
-  def draw(self, x=None, y=None, z=None, r=None, **kwargs):
+  def draw(self, x=None, y=None, z=None, h=None, w=None, r=None, **kwargs):
     """ Draw a line.
 
     This is the same as move() but with the default previous draw or layer r
     value so it draws instead of travels by default.
     """
-    # We need r before scaling by layer.r for the default.
-    if r is None: r = self.rl / self.layer.r
-    self.move(x, y, z, r=r, **kwargs)
+    # For defaults use last move's h,w,r if it was a draw, else use layer's.
+    if h is None: h = self.hl if self.rl else self.layer.h
+    if w is None: w = self.wl if self.rl else self.layer.w
+    if r is None: r = self.rl if self.rl else self.layer.r
+    # Note we need r before scaling by layer.r.
+    self.move(x, y, z, h=h, w=w, r=r/self.layer.r, **kwargs)
 
   def retract(self, e=None, de=None, ve=None, s=1.0, pe=None):
     """Do a retract.
@@ -1790,7 +1918,7 @@ M18
     if self.dynret and de >= 0: de = -0.00001
     self.move(e=e, de=de, v=ve, s=s)
 
-  def restore(self, e=None, de=None, vb=None, s=1.0, pe=None):
+  def restore(self, e=None, de=None, vb=None, s=1.0, pe=None, h=None, w=None, r=None):
     """ Do a restore.
 
     This is a restore that by default reverts any retraction and restores
@@ -1806,7 +1934,7 @@ M18
     # tiny restore so that it doesn't get optimized away or seen as a
     # retraction and can be dynamicly adjusted later.
     if self.dynret and de <= 0: de = 0.00001
-    self.move(e=e, de=de, v=vb, s=s)
+    self.draw(e=e, de=de, v=vb, s=s, h=h, w=w, r=r)
 
   def hopup(self,
       x=None, y=None, z=None, e=None,
@@ -2009,30 +2137,8 @@ M18
     self.log('  t={ftime(l_t)} l={l_l:.1f} e={l_e:.1f}')
 
   def filestats(self):
-    h='{(layer.z+layer.h)/layer.n:.2f}'
-    w='{Lw:.2f}'
-    r='{(Fa * f_e) / ((layer.z+layer.h)/(layer.n or 1) * Lw * f_l) if f_l else Lr:.2f}'
-    v='{f_l/f_t if f_t else 0.0:.1f}'
-    ve='{f_e/f_t if f_t else 0.0:.3f}'
-    lt='{ftime(f_t/(layer.n or 1))}'
     self.log('file finished with {layer.n} layers.')
-    self.log(f'  avg:{h}x{w}x{r}@{v} ve={ve} lt={lt}')
-    self.log('  t={ftime(f_t)} l={f_l:.1f} e={f_e:.1f}')
-    self.log('target line volume stats (ne/dl per draw dl):\n;  {dle_stats}')
-    self.log('actual line volume stats (ne/dl per draw dl):\n;  {dne_stats}')
-    self.log('actual ooze volume stats (ne/dl per move dl):\n;  {tne_stats}')
-    self.log('target line width stats (line width per draw dl):\n;  {dlw_stats}')
-    self.log('actual line width stats (line width per draw dl):\n;  {dnw_stats}')
-    self.log('actual ooze width stats (ooze width per move dl):\n;  {tnw_stats}')
-    self.log('target draw ratio stats (line vol per draw le):\n;  {drt_stats}')
-    self.log('actual draw ratio stats (line vol per draw le):\n;  {drn_stats}')
-    self.log('actual move ratio stats (ooze vol per move le):\n;  {trn_stats}')
-    self.log('Summary:\n' +
-             ';  line actual/target vol = {dne_stats.sum*Fa:.3f}mm^3/{dle_stats.sum*Fa:.3f}mm^3={100*dne_stats.sum/dle_stats.sum:.3f}%\n' +
-             ';  ooze actual/target vol = {tne_stats.sum*Fa:.3f}mm^3/{dle_stats.sum*Fa:.3f}mm^3={100*tne_stats.sum/dle_stats.sum:.3f}%\n' +
-             ';  target line vol ratio = {100*drt_stats.atlogdev(-2):.3f}% < {100*drt_stats.avg:.3f}% <  {100*drt_stats.atlogdev(2):.3f}%\n' +
-             ';  actual line vol ratio = {100*drn_stats.atlogdev(-2):.3f}% < {100*drn_stats.avg:.3f}% <  {100*drn_stats.atlogdev(2):.3f}%\n' +
-             ';  actual ooze vol ratio = {100*trn_stats.atlogdev(-2):.3f}% < {100*trn_stats.avg:.3f}% <  {100*trn_stats.atlogdev(2):.3f}%')
+    self.log('{str(stats).replace(nl,nl+";")}')
 
   def preExt(self,x0,y0,x1,y1,le=120.0, lw=60.0, m=10.0, ve=20.0, vw=20, h=0.2, r=4):
     """Preextrude around a box with margin m.
@@ -2095,7 +2201,7 @@ M18
   def fbox(self,x0,y0,x1,y1,shells=None,**kwargs):
     """ Fill a box with frame lines. """
     if shells is None: shells = inf
-    w = kwargs.get('w', self.wl)
+    w = kwargs.get('w', self.layer.w)
     # make sure x0<x1 and y0<y1
     x0,x1 = sorted((x0,x1))
     y0,y1 = sorted((y0,y1))
@@ -2131,7 +2237,7 @@ M18
 
   def dbox(self,x0,y0,x1,y1,shells=3,**kwargs):
     """ fill a box with diagonal lines. """
-    w = kwargs.get('w', self.wl)
+    w = kwargs.get('w', self.layer.w)
     x0,x1 = sorted((x0,x1))
     y0,y1 = sorted((y0,y1))
     if shells:
@@ -2212,7 +2318,7 @@ M18
   def text(self, t, x0, y0, x1=None, y1=None, fsize=5, angle=0, **kwargs):
     self.cmt('structure:shell-outer')
     self.log(f'text {[(x0,y0),(x1,y1)]} {fsize=} {angle=} {t!r}')
-    w = kwargs.get('w', self.wl)
+    w = kwargs.get('w', self.layer.w)
     v = vtext.ptext(t,x0,y0,x1,y1,fsize,angle,w)
     for l in v:
       self.line(l,**kwargs)

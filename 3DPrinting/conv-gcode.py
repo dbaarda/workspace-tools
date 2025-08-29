@@ -220,9 +220,9 @@ before and after.
 """
 
 import re
-import gcodegen
 from math import pi
-
+import gcodegen
+from gcodegen import getnear, isneareq, isnearle
 
 def RelativeToAbsoluteE(data):
   lines=[]
@@ -293,7 +293,10 @@ class Printer(gcodegen.GCodeGen):
     self.fd = 0.0  # current fanspeed drive.
     self.fe = 0.0  # filtered nozzle flow rate over past Tf.
     self.ft = 0.0  # time since last fan pwm cycle.
+    self._newlayer = False # starting next layer?
     self.wt = None # The current target width.
+    self.ht = None # The current target height.
+    self.zt = None # The current target layer-top height.
 
   def iterstate(self, dt, dl, de, dh, dvl, dve):
     """ Increment the state for a small dt interval. """
@@ -360,7 +363,7 @@ class Printer(gcodegen.GCodeGen):
       fd = fs
     if fs != self.fs:
       self.fs = fs
-    if not gcodegen.isneareq(fd, self.fd, 2):
+    if not isneareq(fd, self.fd, 2):
       self.setefan(fd)
     if self.Hs:
       self.fanstats()
@@ -397,20 +400,24 @@ class Printer(gcodegen.GCodeGen):
   def addCode(self, code):
     self.resetfile()
     code = FixFlashPrintLayerStartHop(code)
-    for line in code.splitlines():
+    for n,line in enumerate(code.splitlines()):
       try:
         self.padd(line.decode())
       except UnicodeDecodeError:
         # If it's not text it's *.gx file binary data; just append it.
         self.add(line)
+      except Exception as e:
+        ctx = '\n'.join(f'{n+l:6}:{self.prevcmds[l]}' for l in range(-3,0))
+        ctx += f'\n{n:6}:{line}'
+        raise Exception(f'Error addling line {n}: {line!r} after\n{ctx}') from e
 
   def padd(self, line):
     """ Parse and add a line of gcode. """
     if line and line[0] in 'GM':
       self.pcmd(line)
     elif line and line[0] == ';':
-      if re.match(r';(preExtrude:|layer:|LAYER_CHANGE|HEIGHT:|WIDTH:|Z:)', line):
-        self.Layer(line)
+      if re.match(r'^; ?(preExtrude:|layer:|LAYER_CHANGE|HEIGHT:|WIDTH:|Z:)', line):
+        self.player(line)
       elif line.startswith(';start gcode') or line.startswith('; HEADER_BLOCK_END'):
         self.cmt(' postprocess_cmd: {_getCmdline()}')
         self.add(line)
@@ -424,23 +431,38 @@ class Printer(gcodegen.GCodeGen):
     else:
       self.add(line)
 
-  def Layer(self, line):
-    """ Start a new layer. """
-    if not (m := re.match(r';(preExtrude|layer|HEIGHT|WIDTH):(\d+.\d+)', line)):
-      # Just drop other layer comment lines, they'll be re-added later.
-      return
+  def player(self, line):
+    """ Parse and handle layer related comments. """
+    m = re.match(r';([^:]*)(?::(\d+(?:.\d+)?))?$', line)
     t,v = m.groups()
-    v = float(v)
-    if t == 'WIDTH':
+    v = getnear(float(v),3) if v else None
+    # Note layer.z is the bottom and zt is the top of the layer.
+    if t == "LAYER_CHANGE":
+      # For OrcaSlicer new layers, but need next ht and zt.
+      self._newlayer, self.ht, self.zt = True, None, None
+    elif t == 'WIDTH':
       # For OrcaSlicer WIDTH comments set self.wt for the next moves.
-      self.wt = gcodegen.getnear(v - self.layer.h * (1 - pi/4))
+      self.wt = getnear(v - self.layer.h * (1 - pi/4))
+    elif t =='HEIGHT':
+      # For OrcaSlicer HEIGHT comments set self.ht for the next moves.
+      self.ht = v
+    elif t =='Z':
+      # For OrcaSlicer Z comments, set self.zt for the new layer.
+      self.zt = v
+    # TODO: add support for Flashprint's `extrude_ratio:` comments.
     elif t == 'preExtrude':
-      self.startLayer(n=0, z=0.0, h=gcodegen.getnear(v,3))
-    elif t =='HEIGHT' and self.layer.n == -1:
-      # These are OrcaSlicer layers that start at layer 1.
-      self.startLayer(n=1, z=0.0, h=gcodegen.getnear(v,3))
-    else:
-      self.nextLayer(h=gcodegen.getnear(v,3))
+      # For Flashprint pre-extrude, set the target height.
+      self.ht = v
+    elif t == 'layer':
+      # For Flashprint layers, set ht, zt, and new layer.
+      self._newlayer = True
+      self.ht = v
+      self.zt = getnear(self.layer.z + (self.layer.n and self.layer.h) + v, 3)
+    # Start next layer when we have ht and zt.
+    if self._newlayer and self.ht and self.zt:
+      self.nextLayer(h=self.ht)
+      self._newlayer = False
+      assert isneareq(self.zt, self.layer.z + self.layer.h), f'{self.zt=} {self.layer.z+self.layer.h=} {self.layer}'
 
   def pcmd(self, line):
     argre=r'(?:\s+(?P<name>[A-Z])(?P<value>\S*))'
@@ -453,10 +475,13 @@ class Printer(gcodegen.GCodeGen):
     if cmd in ('G0','G1'):
       # Add a w=<width> argument that will be passed through to the move().
       args.update(w=self.wt or self.wl)
-      # For h=0 non-hop moves after a new layer and before hopup, force h to
-      # the default hl and dz=0.0.
-      if self.h == 0 and 'Z' not in args:
-        args.update(h=self.hl, dz=0.0)
+      # Explicitly set dz=0 for non-Z moves so that h applies only to the line.
+      if 'Z' not in args:
+        args.update(dz=0.0)
+        # For h=0 retracts after a new layer and before hopup, force h to hl.
+        # TODO: Add support for setting h=0 for wipes.
+        if 'X' not in args and isneareq(self.h, 0.0, 3):
+          args.update(h=self.hl)
     elif cmd == 'M107':
       return self.setefan(0.0)
     elif cmd == 'M106':
