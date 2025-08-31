@@ -24,11 +24,11 @@ nozzle primed with fillament and some small residual pressure.
 2. move 10mm@1mm/s - slow move to drain accumulated pressure as drool. Should
 leave the nozzle primed with nearly zero residual pressure.
 
-3. draw 50mm@<vx>mm/s - fast draw to see fast line quality.
+3. draw `50mm@<vx>`mm/s - fast draw to see fast line quality.
 
-4. move 10mm@1mm/s - slow move to see if there is any residual pressure drool.
+4. move `10mm@1`mm/s - slow move to see if there is any residual pressure drool.
 
-5. draw 15mm@5mm/s - slow draw to see slow line quality after a fast line.
+5. draw `15mm@5`mm/s - slow draw to see slow line quality after a fast line.
 
 This has the following important transitions (green markers);
 
@@ -302,7 +302,7 @@ of keeping extrusion rates consistent during accelerations.
 
 1. For the 3rd test the slow draws had acceleration distances that were too
 small to break into separate phases. The lines mostly look OK except there is
-clear over-estrusion at the start of the <3mm/s lines, and some
+clear over-estrusion at the start of the `<3`mm/s lines, and some
 under-extrusion at the start of the >7mm/s lines. This suggests the criteria
 for deciding whether to break apart phases should be not be if the distance
 travelled when accelerating is greater than some small threshold (which is
@@ -626,9 +626,9 @@ This tested retract and restore distances for different speeds. It has the
 following phases;
 
 * 0mm: default drop and restore to pre-apply pressure before draw.
-* 45mm: draw at <vx>mm/s to stabilize pressure at that speed.
-* 20mm: moving retract of <re>mm at 5mm/s to measure required retraction.
-* 20mm: moving restore of <re>mm at 5mm/s to measure required restore.
+* 45mm: draw at `<vx>`mm/s to stabilize pressure at that speed.
+* 20mm: moving retract of `<re>`mm at 5mm/s to measure required retraction.
+* 20mm: moving restore of `<re>`mm at 5mm/s to measure required restore.
 * 5mm: draw at 5mm to finalize line and stabilize pressure.
 * 0mm: default retract and raise to relieve any vestigial pressure.
 
