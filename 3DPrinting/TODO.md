@@ -4,10 +4,6 @@
 
 ### gcodegen.py
 
-* Fix layer.n = -1 initialization and FlashPrint Preextrude being its own
-  layer.n=0. Instead we should just make layer.n=0 the initialized layer and
-  make pre-extrudes normal draws the same as it is for OrcaSlicer.
-
 * Change all Move de volumes to be in mm^3, not mm of fillament. Note this
   also changes ve to mm^3/s. This means translation into E values is only done
   in the final stages of generating gcode, and everything else doesn't need to
@@ -21,16 +17,8 @@
   attributes for start/mid/end speeds in the various dimensions, calculating
   them from v0,vm,v1 as necessary depending on the move type.
 
-* Add Move dd attribute for combined dl,dz distance. Should it include de
-  distance too? Note de is typically way less than 0.5% of dl (less than 15%
-  if de is in mm^3) so it adds nearly nothing to normal move distances, but
-  means retract/restore have non-zero dd which might be useful?
-
 * Improve pressure compensation to adjust ve0/ve/ve1 of future moves, not just
   try to stay within jerk limits.
-
-* Change stats to be added from incstate() instead of incmove(), and have it
-  accumulate and collect data at 1mm increments instead of per-move.
 
 * Factor out advanced drawing methods into an optional mixin.
 
@@ -62,15 +50,8 @@ the line extrusion rate during a draw, so this can't be done.
 
 * improve ADv3 fan support to include per-layer fan toggling.
 
-* improve ADv3 gcode support to strip trailing comments, remove unsuported
-cmds, and translate different gcode cmds.
-
-* improve OrcaSlicer support to include moving final layer retract/wipe/hopup
-cmds before the start of the next layer.
-
 * Factor ADv3 vs OrcaSlicer support into mixins and make them optional. Maybe
 separate mixins for parsing input vs generating output?
-
 
 ## Testing
 
@@ -80,3 +61,19 @@ separate mixins for parsing input vs generating output?
   backpressure should be proportional to the fraction not overhanging.
 
 * Figure out some kind of final test-suite for measuring/calibrating printers.
+
+## Other
+
+* Improve OrcaSlicer https://github.com/SoftFever/OrcaSlicer/pull/10428 by;
+
+   * Remove posxy scaled point grid vector, instead add toGrid() toPoint()
+     methods.
+   * Do all solving/iterpolating/ in double grid coordinates and only convert
+     to slic3r::Point() at the end?
+   * Don't interpolate per block, instead interpolate per line to avoid
+     interpolating 2x for every line and then having to use a hash-table to
+     find duplicated points.
+   * consider re-using src/libslic3r/MarchingSquares.hpp? Problems are assumes
+     rings and interpolates by iterating along edge calling isoval() weight
+     function using std::lower_bound() instead of interpolating grid weights.
+     Also has strange overlap?
