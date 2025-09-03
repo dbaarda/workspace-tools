@@ -246,7 +246,7 @@ class ExtrudeTest(gcodegen.GCodeGen):
     else:
       assert r is not None, 'require r if without ve and vl'
       if h is None: h = self.h
-      if w is None: w = self.w
+      if w is None: w = self.wl
     # Derive vl,de,dt from ve and dl.
     if vl is None:
       assert ve is not None, 'should have ve if without vl'

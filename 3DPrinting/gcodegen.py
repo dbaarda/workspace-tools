@@ -323,9 +323,12 @@ class Move(MoveBase):
   Nd = 0.4  # Nozzle diameter.
   Ap = 500  # printer acceleration in mm/s^2.
   Vp = 100  # printer max velocity in mm/s.
+  Vz = 20   # printer max z velocity in mm/s.
+  Az = 100  # printer max z acceleration in mm/s^2.
   Ae = 500  # extruder acceleration in mm/s^2.
   Ve = 40   # extruder max velocity in mm/s.
   Gp = 0.1  # printer cornering deviation distance in mm.
+  Jz = 0.4  # vertical "jerk" speed deviation in mm/s.
   Je = 2.5  # extruder "jerk" speed deviation in mm/s.
   Fa = acircle(Fd)  # Fillament area in mm^2.
   Na = acircle(Nd)  # Nozzle area in mm^2.
@@ -336,10 +339,11 @@ class Move(MoveBase):
   # The cached properties that depend on velocity attributes.
   __vprops = frozenset('vm dt dt0 dt1 dtm dl0 dl1 dlm ve0 vem ve1 de0 dem de1'.split())
 
-  def __init_subclass__(cls, Fd=Fd, Nd=Nd, Ap=Ap, Vp=Vp, Gp=Gp, Ae=Ae, Ve=Ve, Je=Je):
+  def __init_subclass__(cls, Fd=Fd, Nd=Nd, Ap=Ap, Vp=Vp, Gp=Gp, Az=Az, Vz=Vz, Jz=Jz, Ae=Ae, Ve=Ve, Je=Je):
     super().__init_subclass__()
     cls.Fd, cls.Nd = Fd, Nd
     cls.Ap, cls.Vp, cls.Gp = Ap, Vp, Gp
+    cls.Az, cls.Vz, cls.Jz = Az, Vz, Jz
     cls.Ae, cls.Ve, cls.Je = Ae, Ve, Je
     cls.Fa = acircle(Fd)
     cls.Na = acircle(Nd)
@@ -351,12 +355,12 @@ class Move(MoveBase):
     args = tuple(getnear(a) for a in args)
     kwargs = {k:getnear(v) for k,v in kwargs.items()}
     self = super().__new__(cls, *args, **kwargs)
-    if r is None:
-      r = 0.0 if self.de <=0 else self.de/self.el if self.isgo else 1.0
+    # Set these to args so the attributes exist for assert error outputs.
+    self.r, self.v0, self.v1 = r, v0 or 0.0, v1 or 0.0
+    if r is None: r = copysign(1, self.de) if self.isadjust else 0.0 if self.isstop else self.de/self.el
     self.r = getnear(r)
-    self.v0 = self.v1 = 0.0
     self.setv(v0, v1)
-    assert 0.0 <= self.r, f'{self.r=} for {self!r}'
+    assert -1.0 <= self.r < 8.0, f'{self.r=} for {self!r}'
     assert 0.0 <= self.v <= cls.Vp, f'{self.v=} {cls.Vp=} for {self!r}'
     return self
 
@@ -399,7 +403,7 @@ class Move(MoveBase):
     """ Set the v0, v1 start and end velocities. """
     v0 = self.v0 if v0 is None else getnear(v0)
     v1 = self.v1 if v1 is None else getnear(v1)
-    assert self.isgo or v0 == v1 == 0.0
+    assert self.dl or v0 == v1 == 0.0
     assert 0.0 <= v0 <= self.v, f'0.0 <= {v0} <= {self.v} for {self!r}'
     assert 0.0 <= v1 <= self.v, f'0.0 <= {v1} <= {self.v} for {self!r}'
     if (v0, v1) != (self.v0, self.v1):
@@ -462,7 +466,7 @@ class Move(MoveBase):
   @cached_property
   def dtm(self):
     """Duration of middle phase."""
-    dtm = self.dlm/self.vm if self.vm else self.dem/self.vem if self.vem else abs(self.dz/self.v)
+    dtm = self.dlm/self.vm if self.dl else self.dem/self.vem if self.de else abs(self.dz/self.v)
     assert dtm >= 0.0, f'{self.dlm=} {self.vm=} {self.dem=} {self.vem=} {self!r}'
     return dtm
 
@@ -645,17 +649,16 @@ class Move(MoveBase):
     """ The total distance of a move.
 
     This is a combined total travel distance that moves can be averaged over.
-    It is the combined horizontal line distance and vertical distance.
-    Retracts and restores are considered to have a line distance matching the
-    volume of their bead. Hops can have dz and dl for slope/spiral hops.
+    It is the combined horizontal line distance and vertical distance. Adjusts
+    are considered to have a line distance matching the volume of their bead.
+    Hops can have dl and de for slope/spiral and adjusting hops.
     """
-    dl, dz = self.dl if self.isgo else 0.0 if self.dz else pi/4*self.w, self.dz
-    return sqrt(dl*dl + dz*dz)
+    return pi/4*self.w if self.isadjust else sqrt(self.dl*self.dl + self.dz*self.dz)
 
   @property
   def vd(self):
     """ The target total distance velocity."""
-    dt = m.dl/m.v if m.isgo else m.dz/m.v if m.dz else m.de/m.v
+    dt = m.dl/m.v if m.dl else m.dz/m.v if m.dz else m.de/m.v
     return self.dd/dt
 
   @property
@@ -674,28 +677,28 @@ class Move(MoveBase):
   def el(self):
     """ The line volume not including r under/over extrusion. """
     # Note this is the bead volume for adjusts and the extra dz bead for non moving hops.
-    el = self._el(self.dl, self.h, self.w) if self.isgo else self._eb(abs(self.dz), self.w) if self.dz else self.eb
-    assert el >=0, f'{el=} {self!r}'
+    el = self.eb if self.isadjust else self._el(self.dd, self.h, self.w)
+    assert self.isstop or el > 0, f'{el=} {self!r}'
     return el
 
   @property
   def el0(self):
     """ The start line volume not including r under/over extrusion. """
-    el0 = self.el*(self.dl0/self.dl if self.isgo else self.dz0/self.dz if self.dz else self.de0/self.de)
+    el0 = self.el*(self.dl0/self.dl if self.dl else self.dz0/self.dz if self.dz else self.de0/self.de)
     assert el0 >=0, f'{el0=} {self!r}'
     return el0
 
   @property
   def el1(self):
     """ The end line volume not including r under/over extrusion. """
-    el1 = self.el*(self.dl1/self.dl if self.isgo else self.dz1/self.dz if self.dz else self.de1/self.de)
+    el1 = self.el*(self.dl1/self.dl if self.dl else self.dz1/self.dz if self.dz else self.de1/self.de)
     assert el1 >=0, f'{el1=} {self!r}'
     return el1
 
   @property
   def elm(self):
     """ The mid line volume not including r under/over extrusion. """
-    elm = self.el*(self.dlm/self.dl if self.isgo else self.dzm/self.dz if self.dz else self.dem/self.de)
+    elm = self.el*(self.dlm/self.dl if self.dl else self.dzm/self.dz if self.dz else self.dem/self.de)
     assert elm >=0, f'{elm=} {self!r}'
     return elm
 
@@ -707,7 +710,7 @@ class Move(MoveBase):
   @cached_property
   def et(self):
     """Target nozzle extrusion."""
-    et = self.el * self.r
+    et = max(0.0, self.el * self.r)
     assert et >=0, f'{et=} {self!r}'
     return et
 
@@ -732,50 +735,82 @@ class Move(MoveBase):
     assert etm >=0, f'{etm=} {self!r}'
     return etm
 
-  @cached_property
-  def isgo(self):
-    """ Is this a horizontal move? """
-    return self.dx or self.dy
+
+  # These identify the type of move. Note that this can be a bit ambiguous, as
+  # it's possible for moves to change any combination of x,y,z,e. Note that
+  # pressure adjustements can also mean +-e changes for any type of move, so
+  # we use r as the indication of extrusion intent to decide if its a draw or
+  # not. Every move is either a shift, hop, or adjustment, which depends
+  # on if the speed is limited by dl, dz, or de changes.
 
   @cached_property
-  def isdraw(self):
-    # Note there can be sloped draws.
-    return self.isgo and self.r > 0.0
+  def isstop(self):
+    """Is this not moving? """
+    return not (self.dx or self.dy or self.dz)
 
-  @property
-  def ismove(self):
-    # Any dz means it's a slope or spiral hop.
-    return self.isgo and self.r <= 0 and not self.dz
+  @cached_property
+  def ishoriz(self):
+    """ Is this predominantly a horizontal move? """
+    return (self.dx or self.dy) and not self.isvert
 
-  @property
-  def isadjust(self):
-    return self.de and not (self.isgo or self.dz)
-
-  @property
-  def isretract(self):
-    return self.de < 0 and not (self.isgo or self.dz)
-
-  @property
-  def isrestore(self):
-    return self.de > 0 and not (self.isgo or self.dz)
-
-  @property
-  def ishop(self):
-    # Note there can be slope or spiral hops.
-    return self.dz and self.r <= 0
-
-  @property
-  def ishopup(self):
-    return self.dz > 0 and self.r <= 0
-
-  @property
-  def ishopdn(self):
-    return self.dz < 0 and self.r <= 0
+  @cached_property
+  def isvert(self):
+    """ Is this predominantly a vertical move? """
+    # It's considered vertical if speed is limited by dz movement.
+    return self.dz and abs(self.dz)/self.Vz > self.dl/self.Vp
 
   @property
   def isspeed(self):
     """ Is this just a speed change? """
-    return not (self.isgo or self.dz or self.de)
+    return self.isstop and not self.de
+
+  @cached_property
+  def isshift(self):
+    """ Is this a non-adjusting horizontal move? """
+    return self.ishoriz and not self.isadjust
+
+  @property
+  def isdraw(self):
+    """Is this a horizontal line draw?"""
+    # There can be sloped draws, but if it is too vertical it's a hop.
+    return self.isshift and self.r > 0.0
+
+  @property
+  def ismove(self):
+    """ Is this a horizontal move?"""
+    # There can be sloped moves, but if it is too vertical it's a hop.
+    return self.isshift and self.r <= 0.0
+
+  @cached_property
+  def isadjust(self):
+    """ Is this a non-moving retract or restore?"""
+    # It's considered an adjustment if speed is limited by de movement.
+    return self.de and abs(self.de)/self.Ve > max(self.dl/self.Vp, abs(self.dz)/self.Vz)
+
+  @property
+  def isretract(self):
+    """ Is this a non-horizontal retract?"""
+    return self.isadjust and self.r < 0
+
+  @property
+  def isrestore(self):
+    """ Is this a non-horizontal-moving restore?"""
+    return self.isadjust and self.r > 0
+
+  @cached_property
+  def ishop(self):
+    """ Is this a vertical move?"""
+    # Note there can be slope or spiral and adjusting hops, but if it's too
+    # much it's either a move or adjust.
+    return self.isvert and not self.isadjust
+
+  @property
+  def ishopup(self):
+    return self.ishop and self.dz > 0
+
+  @property
+  def ishopdn(self):
+    return self.ishop and self.dz < 0
 
   @property
   def isaccel(self):
@@ -966,10 +1001,15 @@ class CmdStats(object):
   """ Stats for a sample of moves."""
   def __init__(self, name):
     self.name = name
+    # Note we initialize the arrays with zero count adds.
     self.c = stats1.Sample() # cmd stats (dt,dd,dl,dz,de,el,et,en,v,v0,vm,v1 per cmd).
+    self.c.add([0]*12,0)
     self.l = stats1.Sample() # cmd line stats (vl,vz,ve,vn,h,w,r per dd).
+    self.l.add([0]*7,0)
     self.o = stats1.Sample() # out line stats (vl,vz,ve,vn,re,rt,rn,er per dd).
+    self.o.add([0]*8,0)
     self.r = stats1.Sample() # extruder stats (re,rt,rn,er per el).
+    self.r.add([0]*4,0)
 
   def _atdev(self, s, d):
     """Get a Sample's values at d stddevs clipped between min and max."""
@@ -978,10 +1018,10 @@ class CmdStats(object):
   def __str__(self):
     num = self.c.num
     dt, dd, dl, dz, de, el, et, en, *_  = self.c.sum
-    er = (en-et)/el
-    assert isneareq(self.l.num, dd)
-    assert isneareq(self.o.num, dd)
-    assert isneareq(self.r.num, el)
+    er = (en-et)/el if el else 0.0
+    assert isneareq(self.l.num, dd), f'{self.l.num=} {dd=}'
+    assert isneareq(self.o.num, dd), f'{self.o.num=} {dd=}'
+    assert isneareq(self.r.num, el), f'{self.r.num=} {el=}'
     cmdsums = f'totals {num=} dt={ftime(dt)} {dd=:.1f} {dl=:.1f} {dz=:.2f} {de=:.3f} {el=:.3f} {et=:.3f} {en=:.3f} {er=:+.3f}'
     *_, v, v0, vm, v1 = self.c.avg
     vl, vz, ve, vn, h, w, r = self.l.avg
@@ -1028,20 +1068,26 @@ class CmdStats(object):
   def addinc(self, m, dt, dl, dz, de, en):
     """ Update the stats for part of a move."""
     # get the fraction of a move from the distance ratios.
-    s = (dl/m.dl if dl else dz/m.dz if dz else de/m.de)
+    # Note we use dl,de,dz in that order because of relative magnitude for accuracy.
+    s = (dl/m.dl if m.dl else de/m.de if m.de else dz/m.dz)
     # scale dist and volumes by the fraction of the move completed.
     dd = s * m.dd; el = s * m.el; et = s * m.et
-    assert 0<dd<500 and 0<el<500 and 0<=et<500 and 0<=en<500, f'{dd=} {el=} {et=} {en=} for {m!r}'
+    assert 0<dt<=1 and 0<dd<500 and 0<=el<500 and 0<=et<500 and 0<=en<500, f'{dd=} {el=} {et=} {en=} for {m!r}'
     vl, vz, ve, vn = dl/dt, dz/dt, de/dt, en/dt
     re, rt, rn = de/el, et/el, en/el
     er = rn - rt
     self.o.add((vl, vz, ve, vn, re, rt, rn, er), dd)
     self.r.add((re, rt, rn, er), el)
+    #print(f'addinc({m=}, {dt=}, {dl=},  {dz=}, {de=}, {en=}, {dd=}')
 
   def addcmd(self, m, en):
     """ Update the stats for a whole move."""
     self.c.add((m.dt,m.dd,m.dl,m.dz,m.de,m.el,m.et,en,m.v,m.v0,m.vm,m.v1))
     self.l.add((m.vl,m.vz,m.ve,m.vt,m.h,m.w,m.r), m.dd)
+    dt, dd, dl, dz, de, el, et, en, *_  = self.c.sum
+    assert isneareq(self.l.num, dd), f'{self.l.num=} {dd=} after {m=} {m.dd=}'
+    assert isneareq(self.o.num, dd), f'{self.o.num=} {dd=} after {m=} {m.dd=}'
+    assert isneareq(self.r.num, el), f'{self.r.num=} {el=} after {m=} {m.dd=}'
 
 
 class PrintStats(object):
@@ -1712,9 +1758,9 @@ M18
       if not m.de:
         self.log('skipping empty restore.')
         return
-    elif self.dynext and self.layer.n and (m.isdraw or (self.pe > 0.0 and m.isgo)):
+    elif self.dynext and self.layer.n and not m.isadjust and (m.r>0 or self.pe > 0.0):
       # Skip adjusting pressures for preextrudes before layer 1.
-      # Adjust extrusion for any draw or non-retracted move.
+      # Adjust extrusion for any non-adjusts that draw or are non-retracted.
       # Get the ve and db before and after this move.
       ve0 = self.ve
       ve1 = next((m1.ve0 for m1 in self.nextcmds if self.ismove(m1)), 0.0)
@@ -2084,7 +2130,7 @@ M18
 
     def _fixvel(m):
       """Fix v depending on fixvel level of velocity fix required."""
-      if self.ismove(m) and m.isgo and (m.vm < m.v) and (
+      if self.ismove(m) and m.ishoriz and (m.vm < m.v) and (
           # Any slow move.
           (self.fixvel == 3) or
           # Accelerating move.
