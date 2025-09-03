@@ -4,11 +4,11 @@ from collections import defaultdict
 
 try:
   # Use numpy if available to support vector versions.
-  from numpy import inf, sqrt, log, exp, fmin, fmax, array, printoptions
+  from numpy import inf, nan, copysign, sqrt, log, exp, fmin, fmax, array, printoptions
 except ImportError:
   # If it's not available use our own minimal array vector.
   from collections.abc import Iterable
-  from math import inf, sqrt as _sqrt, exp as _exp, log as _log
+  from math import inf, nan, copysign, sqrt as _sqrt, exp as _exp, log as _log
 
   class array(list):
     """A lightweight pypy3 compatible numpy.array alternative."""
@@ -23,8 +23,8 @@ except ImportError:
 
     def __truediv__(self, other):
       if isinstance(other, Iterable):
-        return self.__class__(x/y for x,y in zip(self,other,strict=True))
-      return self.__class__(x/other for x in self)
+        return self.__class__(fdiv(x,y) for x,y in zip(self,other,strict=True))
+      return self.__class__(fdiv(x,other) for x in self)
 
     def __add__(self, other):
       if isinstance(other, Iterable):
@@ -38,8 +38,8 @@ except ImportError:
 
     def __rtruediv__(self,other):
       if isinstance(other, Iterable):
-        return self.__class__(x/y for x,y in zip(other,self,strict=True))
-      return self.__class__(other/x for x in self)
+        return self.__class__(fdiv(x,y) for x,y in zip(other,self,strict=True))
+      return self.__class__(fdiv(other,x) for x in self)
 
     def __rsub__(self, other):
       if isinstance(other, Iterable):
@@ -94,6 +94,15 @@ except ImportError:
     return fmax(vmin,fmin(vmax,v))
 
 
+def fdiv(x,y):
+  """ Like div, but handle divide by zero with signed inf or zero."""
+  # Note we use try: here because arrays handle zero-divide themselves.
+  try:
+    return x/y
+  except ZeroDivisionError:
+    return copysign(x*inf, x*y) if x else nan
+
+
 class P(object):
   """A wrapper for float 'p' format-spec support for numbers and arrays.
 
@@ -111,10 +120,10 @@ class P(object):
 
   def __repr__(self):
     return f'{self.__class__.__name__}({repr(self.v)})'
-  
+
   def __str__(self):
     return format(self)
-  
+
   def __format__(self, format_spec=''):
     self.spec=format_spec if format_spec else 'g'
     return self._f(self.v)
@@ -183,8 +192,9 @@ class Sample(object):
     self.num += n
     self.sum += n*v
     self.sum2 += n*v*v
-    self.min = fmin(self.min, v)
-    self.max = fmax(self.max, v)
+    # Convert to np.array but don't adjust min/max for n=0.
+    self.min = fmin(self.min, v if n else fmax(inf,v))
+    self.max = fmax(self.max, v if n else fmin(-inf,v))
 
   def update(self, data):
     """Add all the values in data."""
@@ -194,13 +204,13 @@ class Sample(object):
   @property
   def avg(self):
     """Get the average of the values."""
-    return self.sum / self.num
+    return fdiv(self.sum, self.num)
 
   @property
   def var(self):
     """Get the variance of the values."""
     # clamp >=0 to correct for rounding errors when var=0.
-    return fmax(0.0,(self.sum2 - self.sum*self.sum/self.num) / self.num)
+    return fdiv(fmax(0.0, self.sum2 - fdiv(self.sum*self.sum, self.num)), self.num)
 
   @property
   def dev(self):
@@ -213,7 +223,7 @@ class Sample(object):
 
   def lognorm(self):
     """Get the mu, sigma parameters for a lognormal distribution."""
-    r = self.dev/self.avg
+    r = fdiv(self.dev, self.avg)
     s2 = log(r*r + 1.0)
     return log(self.avg) - 0.5*s2, sqrt(s2)
 
