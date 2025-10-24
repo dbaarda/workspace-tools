@@ -62,18 +62,23 @@ separate mixins for parsing input vs generating output?
 
 * Figure out some kind of final test-suite for measuring/calibrating printers.
 
+## OrcaSlicer
+
+Improve OrcaSlicer https://github.com/SoftFever/OrcaSlicer with;
+
+* Get https://github.com/SoftFever/OrcaSlicer/pull/10747 MarchingSquares
+  optimizations approved.
+
+* Get https://github.com/SoftFever/OrcaSlicer/pull/10876 FillTpmsFk
+optimizations approved.
+
+* Add FillAdaptiveTpms fill methods.
+
+* Fix multiline_fill() to use offset() for pollylines. See 
+  https://github.com/SoftFever/OrcaSlicer/pull/10876#issuecomment-3393839823
+  
+* Improve distance, length, and coordinate code everywhere.
+
 ## Other
 
-* Improve OrcaSlicer https://github.com/SoftFever/OrcaSlicer/pull/10428 by;
 
-   * Remove posxy scaled point grid vector, instead add toGrid() toPoint()
-     methods.
-   * Do all solving/iterpolating/ in double grid coordinates and only convert
-     to slic3r::Point() at the end?
-   * Don't interpolate per block, instead interpolate per line to avoid
-     interpolating 2x for every line and then having to use a hash-table to
-     find duplicated points.
-   * consider re-using src/libslic3r/MarchingSquares.hpp? Problems are assumes
-     rings and interpolates by iterating along edge calling isoval() weight
-     function using std::lower_bound() instead of interpolating grid weights.
-     Also has strange overlap?
