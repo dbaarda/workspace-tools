@@ -78,6 +78,10 @@ extruder advance distance. See this for some thoughts on these assumptions;
 
 https://klipper.discourse.group/t/modification-of-pressure-advance-for-high-speed-bowden-printers/13053/18?u=dbaarda
 
+Also more thoughts posted in OrcaSlicer discussions;
+
+https://github.com/SoftFever/OrcaSlicer/discussions/10832#discussioncomment-14603955
+
 Note the linear advance factor `Kf` for compensating for this is the mm of
 advance `pe` needed per mm/sec of extruder velocity for the nozzle output flow
 rate to match the extruder velocity.
