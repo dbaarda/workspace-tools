@@ -52,6 +52,21 @@ My thoughts on how line-width and extrusion-ratio settings should work is at;
 
 https://github.com/SoftFever/OrcaSlicer/pull/11105#issuecomment-3443404410
 
+## Seam Gap.
+
+OrcaSlicer has a "Quality; Seam; Seam Gap" setting that leaves a space between the seam join
+ends.
+
+If we assume the start and end of the lines include the circular "bead" bulge
+beyond the start and stop points, we can calculate the gap needed for the
+bulge overlap to exactly match the volume of no seam.
+
+gap = line_spacing * (1 - pi/4) ~= 0.2146 * line_spacing
+
+The setting can be set as a % of nozzle diameter or length, with the default
+being 10%. For a 0.4mm nozzle this is 0.04mm, which is less than half our
+calculated 0.0850mm.
+
 ## Linear Advance
 
 Linear Advance or Pressure Advance is mm of extrusion advance per mm/s of
