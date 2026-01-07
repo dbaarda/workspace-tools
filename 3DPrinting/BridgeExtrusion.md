@@ -44,8 +44,8 @@ either `line_width` or `line_spacing` can be set, and the one that is set will
 be used to derive the other.
 
 * Printer and layer settings
-   * Dn - nozzle_diameter
-   * Lh - `layer_height` of the normal perimeter lines.
+   * Dn - `nozzle_diameter` (range: [0.1mm,1.0mm], default: 0.4mm)
+   * Lh - normal `layer_height` (range: [0.1mm,1.0mm], default: 0.2mm)
 * Normal line settings
    * Lw - normal `line_width` (range: [Dn/2+Lh,Dn*4+Lh], default: Dn+Lh)
    * Ls - normal `line_spacing` (range: [Dn/2,Dn*4], default: derived from Lw)
@@ -60,6 +60,7 @@ be used to derive the other.
    * Bfp - bridge bottom `perimeter_factor` (range: [0,1], default: 0)
 * Bridge anchor line settings;
    * Afw - anchor `overlap_factor` (range: [0,1], default: Bfw)
+   * Atl - anchor `transition_length` (range:[0mm,10mm], default: Ls)
 
 And from these settings the following attributes can be derived;
 
@@ -192,3 +193,83 @@ I need to figure out exactly how the best bridging from empirical testing
 results translates into overlap. It's possible that the square for
 `overlap_factor=1` assumption doesn't match the best settings in practice, in
 which case maybe another target rectangle would be better.
+
+
+## OrcaSlicer v2.3.2-dev
+
+Flows in Flow.hpp have lengths m_width, m_height, m_spacing,
+m_nozzle_diameter, and bool m_bridge. `Flow::mm3_per_mm()` returns the area of
+a circle with diameter=width for bridge flows, otherwise does the
+rounded-rectange area using width and height.
+
+For Bridging flows, `Flow::bridging_flow()` takes a diameter and the
+nozzle_diameter, and creates a flow with `width = height = diameter` and
+`spacing = Flow::bridge_extrusion_spacing(diameter) = diameter+0.05mm`
+
+In LayerRegion.cpp, `LayerRegion::bridging_flow(FlowRole role, bool
+thick_bridge)` returns `Flow::bridging_flow()` with a diameter scaled by sqrt
+of the bridge_flow ratio, but only if thick_bridge is true, otherwise it
+returns a non-bridging flow the same as the solid infill adjusted by the
+flow_ratio. When increasing the flow ratio, the adjustment bumps the height,
+when decreasing the flow, it adjusts the width and spacing... strange.
+
+A table of the bridge characteristics for given settings is below. Note for
+thick_bridge=N, Bd is calculated from the observed flow Ba;
+
+Lh  Ls  thick_bridge bridge_flow bridge_density  Bd     Bh     Bw     Bs      Ba
+0.2 0.5  Y           1.0         100%            0.40mm 0.40mm 0.40mm 0.450mm 0.1255mm^2
+0.2 0.5  Y           1.0         110%            0.40mm 0.40mm 0.40mm 0.409mm 0.1255mm^2
+0.2 0.5  Y           1.0         120%            0.40mm 0.40mm 0.40mm 0.375mm 0.1255mm^2
+0.2 0.5  Y           1.1         100%            0.42mm 0.42mm 0.42mm 0.470mm 0.1380mm^2
+0.2 0.5  Y           1.2         100%            0.44mm 0.44mm 0.44mm 0.488mm 0.1510mm^2
+0.2 0.5  N           1.0         100%            0.36mm 0.20mm 0.54mm 0.500mm 0.1000mm^2
+0.2 0.5  N           1.0         110%            0.36mm 0.20mm 0.54mm 0.454mm 0.1000mm^2
+0.2 0.5  N           1.0         120%            0.36mm 0.20mm 0.54mm 0.417mm 0.1000mm^2
+0.2 0.5  N           1.1         100%            0.37mm 0.22mm 0.55mm 0.500mm 0.1100mm^2
+0.2 0.5  N           1.2         100%            0.39mm 0.24mm 0.55mm 0.500mm 0.1200mm^2
+
+### Thick external bridges
+
+With Thick external bridges enabled, the bridge characteristics from the
+settings bridge_flow and bridge_density are;
+
+```
+Bd = sqrt(bridge_flow)*Dn
+Bh = Bd
+Bw = Bd
+Bs = (Bd + 0.05)/bridge_density
+Ba = Bd^2 * pi/4
+Bfw = (1 - ((Bd+0.5)/Bd)/bridge_density)/(1-sqrt(pi/4))
+```
+
+We can use this to calculate required settings from our target Bd and overlap
+factor Bfw;
+
+```
+bridge_flow = (Bd/nozzle_diameter)^2
+bridge_density = (Bd + 0.05)/Bs
+               = (Bd + 0.05)/(Bd*(1 - Bfw*(1-sqrt(pi/4))))
+               = ((Bd + 0.05)/Bd)/(1 - Bfw*(1-sqrt(pi/4)))
+```
+
+This gives the following table for Bs/Dn, bridge_flow, and bridge_density for
+Bd/Dn and Bfw values;
+
+Bd/Dn   Bfw   Bs/Dn    bridge_flow  bridge_density
+1.0    1.0    0.88622  1.0000       1.2694
+0.95   1.0    0.84191  0.9025       1.2769
+0.9    1.0    0.79760  0.8100       1.2851
+1.0    0.5493 0.93750  1.0000       1.2000
+
+For Bd/Dn=1.0 we need bridge_density=127%, but the valid settings range is
+limited to 120%. As Bd/Dn drops, bridge_flow also drops, but bridge_density
+increases even further. So in practice the highest overlap we can get is
+`Bfw=0.5493` with `Bd = nozzle_diameter`, `bridge_flow=1.0`, and
+`bridge_density=120%`.
+
+Note that although it sets the bridge height to the diameter, it doesn't
+actually change the bridging print height even layer to take that extra height
+into account, and prints the bridge on the same layer with the same nozzle
+height that it would use if it assume the bridge was only the normal layer
+height. This means that the external surface of bridges is actually lower than
+it should be by `Bd - Lh`.
