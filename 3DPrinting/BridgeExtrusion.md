@@ -13,7 +13,7 @@ This is based on ideas and discussions at;
 * https://manual.slic3r.org/advanced/flow-math
 * https://github.com/OrcaSlicer/OrcaSlicer/pull/11255
 
-There is also the following supporting documents 
+There is also the following supporting documents
 
 * [spreadsheet for translating to/from OrcaSlicer](https://docs.google.com/spreadsheets/d/1q8VEJtvlpofTINNaKx3oTjjiWdCzXQhwqQcuNmZ9_eM/edit?usp=sharing)
 * [Onshape CAD model](https://cad.onshape.com/documents/d6c789081e4718027433abc0/w/fab8c0f8c830995797647553/e/4c161cfdaa646b1caebb929e?configuration=Advanced_Settings%3Dtrue%3BAfw%3D1.0%3BAtl%3D4.0E-4%2Bmeter%3BBd%3D3.8E-4%2Bmeter%3BBdr%3D0.95%3BBfh%3D1.0%3BBfp%3D0.0%3BBfw%3D1.0%3BBh%3D3.37E-4%2Bmeter%3BBs%3D3.37E-4%2Bmeter%3BDn%3D4.0E-4%2Bmeter%3BLfp%3D0.0%3BLfw%3D1.0%3BLh%3D2.0E-4%2Bmeter%3BList_10u8p1SlZapMRd%3DDefaults%3BList_vwkf0slImDvp20%3DSet_Line_Width%3BLs%3D4.0E-4%2Bmeter%3BLw%3D5.0E-4%2Bmeter&renderMode=0&uiState=6960a1006d2f50394174a759)
@@ -194,6 +194,48 @@ of the layer, which is below the `print_height` for the bridge lines they are
 extensions of. This means there should be a little hop-up at the transition
 from anchor to bridge line.
 
+## Pressure Advance
+
+A significant factor in Pressure Advance is back-pressure from the print
+surface. Bridge lines are not printed against a surface, which means the
+pressure advance required is much less.
+
+However, the anchor lines **are** printed against the supporting lines, which
+means more Pressure Advance is required. In practice this means pressure will
+build up while the anchor lines are being printed, and then be suddenly released
+when the line moves past the edge of the supporting lines and starts bridging.
+This will contribute extra slight over-extrusion at the start of each bridge
+line that will decay away until the pressure stabilizes. This is probably a
+contributing factor for the staggered line ends affect highlighted at the end
+of this video. You can even see the slighly larger diameter of the
+lines leaving the support lines vs approaching in the staggered cross-section
+vs the more uniform diameters in the smooth central bridge;
+
+https://www.youtube.com/watch?v=Mrs2kAuRCBk
+
+This problem is made even worse by OrcaSlicer using the same extrusion rate
+for the anchor lines as the bridging lines, despite the completely different
+cross section area and thus flow rate required for those lines. This usually
+means that extrusion rates and line spacing that works perfectly for the
+bridge lines is hugely over-extruded for the anchor lines. For the short
+anchor lines at the beginning and end of the bridges this usually just
+contributes more excess pressure that is relieved as more over-extrusion at
+the start of the bridge lines. However OrcaSlicer also often has extra bridge
+lines at the sides of the bridges that overlap supporting perimeters and are
+thus actually anchor lines for their whole length. For those the
+over-extrusion can really build up and make a mess, as seen in this video;
+
+https://www.youtube.com/watch?v=eaasEkFULKE
+
+The only way to minimize the problems caused by different bridge and anchor
+extrusion rates for slicers like OrcaSlicer that don't differentiate between
+them is to pick settings that produce bridge and anchor lines with almost the
+same cross section area. Assuming anchor overlap-factor Afw=1 is reqired to
+maximise anchor area and the optimal bridge overlap-factor is `Bfw=1`, the
+bridge and anchor areas are the same when `Bs=Lh`.
+
+This is normally significantly less than the nozzle diameter, which might be
+OK for very stringy materials, but could cause "snapping" for some materials.
 
 ## Thoughts.
 
@@ -243,10 +285,10 @@ The relevant settings OrcaSlicer exposes are;
 
 * Internal solid infill line_width - The bridge line_width in "legacy" mode.
   (default: Dn, range: [Dn/2,Dn*5)
-  
+
 * thick_bridge - a checkbox toggling "legacy" and "thick" bridge modes.
   (default: N).
-  
+
 * bridge_flow - multiplier for the flow (default:1.0, range: [0,2]).
 
 * bridge_density - a percentage scaling factor for reduction in line-spacing.
@@ -410,7 +452,7 @@ is `Bfw=0.549` with `Bd = nozzle_diameter`, `bridge_flow=1.0`, and
 #### Legacy external bridges
 
 Legacy external bridges, use an adjusted solid infill line. In the following
-`Ls`, `Lw`, and `La` refer to the solid infill line characteristics. 
+`Ls`, `Lw`, and `La` refer to the solid infill line characteristics.
 
 The translations to our model from OrcaSlicer settings are;
 
