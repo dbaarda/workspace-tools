@@ -137,6 +137,21 @@ La = Lh*(Lw - Lh*(1 - pi/4))
 Lp = (Lw - Lfp*Lh*(1-pi/4))/2
 ```
 
+Note OrcaSlicer currently hard-codes `Lfw=1.0` and `Lfp=0.0` which simplifys
+this to;
+
+```
+Ls = Lw - Lh*(1-pi/4)      ; Ls from Lw, Lh, and Lfw
+Lw = Ls + Lh*(1-pi/4)      ; Lw from Ls, Lh, and Lfw
+
+La = Lh*(Lw - Lh*(1 - pi/4)) = Lh*Ls
+Lp = Lw/2
+```
+
+But also note that OrcaSlicer has other settings for some types of lines
+modifying the "density" which will adjust the spacing without adjusting the
+width. When it does this the area is always calculated from the width.
+
 ## Bridge Calculations
 
 For bridges, overlap is calculated assuming that a nominal `line_spacing` with
@@ -272,54 +287,64 @@ settings for both. We will focus on external bridges, but this also applys for
 internal bridges. It also has two different modes for different bridging models;
 
 * "legacy" bridges models bridges as modified internal solid infill lines and
-  aims to keep the same line-spacing. It uses the rounded box cross-section
-  and adjusts the layer-height while keeping the same line-spacing to adjust
-  the flow.
+  aims to keep the same `line_spacing` or `layer_height`. It uses the rounded
+  box cross-section and adjusts the height while keeping the same spacing when
+  increasing flows, and adjusts the spacing while keeping the same height when
+  reducing flows.
 
 * "thick" bridges models bridges with a circular cross-section where the
-  layer-height and line-width are the same as the diameter. The diameter is
-  adjusted to adjust the flow. The default line-spacing is a tiny constant
-  larger than the diameter
+  height and width are the same as the diameter. The diameter is adjusted to
+  adjust the flow. The default spacing is a tiny constant `0.05mm` larger than
+  the diameter
 
 The relevant settings OrcaSlicer exposes are;
 
-* Internal solid infill line_width - The bridge line_width in "legacy" mode.
-  (default: Dn, range: [Dn/2,Dn*5)
+* Internal solid infill `line_width` - The bridge `line_width` in "legacy" mode.
+  (default: `Dn`, range: `[Dn/2,Dn*5)`
 
-* thick_bridge - a checkbox toggling "legacy" and "thick" bridge modes.
-  (default: N).
+* `thick_bridge` - a checkbox toggling "legacy" and "thick" bridge modes.
+  (default: `N`).
 
-* bridge_flow - multiplier for the flow (default:1.0, range: [0,2]).
+* `bridge_flow` - multiplier for the flow (default:`1.0`, range: `[0,2]`).
 
-* bridge_density - a percentage scaling factor for reduction in line-spacing.
-  Higher values means closer spacing (default:100%, range: [10%,120%]).
+* `bridge_density` - a percentage scaling factor for reduction in line-spacing.
+  Higher values means closer spacing (default:`100%`, range: `[10%,120%]`).
 
 ### Implementation
 
-The class `Flows` in `Flow.hpp` have lengths m_width, m_height, m_spacing,
-m_nozzle_diameter, and a bool m_bridge, with other attributes all derived by
-methods from these attributes. `Flow::mm3_per_mm()` returns the area of a
-circle with diameter=width for bridge flows, otherwise calculates the
-rounded-rectange area using width and height.
+The class `Flows` in `Flow.hpp` have lengths `m_width`, `m_height`,
+`m_spacing`, `m_nozzle_diameter`, and a `bool m_bridge`, with other attributes
+all derived by methods from these attributes. `Flow::mm3_per_mm()` returns the
+area of a circle with diameter=width for bridge flows, otherwise calculates
+the rounded-rectange area using width and height.
 
-For bridging flows, `Flow::bridging_flow()` takes a diameter and the
-nozzle_diameter, and creates a flow with `width = height = diameter` and
-`spacing = Flow::bridge_extrusion_spacing(diameter) = diameter+0.05mm`. This
-suggests that it was once believed briding worked best with small gaps between
-the lines, but recent empirical testing suggests the opposite.
+For thick bridges, `Flow::bridging_flow()` in `Flow.hpp` takes a diameter
+and the nozzle_diameter, and creates a flow with `width = height = diameter`
+and `spacing = Flow::bridge_extrusion_spacing(diameter) = diameter+0.05mm`.
+This suggests that it was once believed briding worked best with small gaps
+between the lines, but recent empirical testing suggests the opposite.
 
-For In `LayerRegion.cpp`, `LayerRegion::bridging_flow(FlowRole role, bool
+For legacy bridges `Flow::with_flow_ratio()` is used to modify the solid
+infill flow by the setting `bridge_flow`, which calls
+`Flow::with_cross_section()`, implemented in `Flow.cpp`. This increases the
+height and keeps the spacing when increasing flows, and keeps the height and
+decreases the spacing when decreasing flows provided width is greater than the
+height. If the reduced width is less than the height it switches to
+calculating height and width as the diameter of a circle with the target area.
+Note that height changes when increasing flows also gives you tiny line-width
+changes to keep the same line-spacing. Reducing flows to widths less than the
+layer height is unlikely to produce decent bridges so we will ignore that in
+the following conversions and assume it just reduces spacing.
+
+In `LayerRegion.cpp`, `LayerRegion::bridging_flow(FlowRole role, bool
 thick_bridge)` returns different flows for legacy vs thick bridge mode. For
 thick bridges it returns `Flow::bridging_flow()` with a diameter scaled by
-sqrt of the bridge_flow ratio. For legacy bridges it returns a non-bridging
-flow the same as the solid infill adjusted by the bridge_flow ratio to give
-the required area; for increases it increases the height while keeping the
-same line-spacing, for decreases it keeps the same height and reduces the
-line-spacing. Note that height changes give you tiny line-width changes for
-the same line-spacing.
+sqrt of the `bridge_flow` setting. For legacy bridges it calls
+`Flow::with_flow_ratio()` to return a non-bridging solid infill flow adjusted
+by the `bridge_flow` setting to give the required area.
 
-For both bridge models, `bridge_density` is then used to adjust the
-line-spacing without changing the flow to `flow.m_spacing/bridge_density`.
+For both bridge models, the `bridge_density` setting is then used to adjust
+the line-spacing without changing the flow to `flow.m_spacing/bridge_density`.
 
 ### Observations
 
@@ -351,10 +376,33 @@ bridge on the same layer regardless of it's `Bh` bridge height or how "low it
 hangs" below the top of the layer. This means in practice that bridges
 normally hang much lower than the external perimeter height.
 
+It a lot of bridge testing done by others that I've seen they have been using
+"legacy" bridges that require significant `bridge_flow` increases (order 1.4x)
+combined with `bridge_density` increases (around 110% to 125% with modified
+OrcaSlicer to bypass settings limits) to produce decent results. These tests
+often don't mention the `layer_height` used, but as the modelling shows the
+flow rates for legacy bridges are highly dependent on it, so the ideal
+`bridge_flow` and `bridge_density` settings will vary significantly with
+`layer_height`.
+
+If testing is done using "thick" bridges, it uses a better model and the flow
+rates are independent of `layer_height`. The flow rates are significantly
+higher, and I guess ideal `bridge_flow` settings would be in the range
+`[0.5,1.0]`. It's a bit unfortunate that by default it adds a small space
+between bridge lines because it also means `bridge_overlap` settings need to
+be higher to overcome that, and the 120% limit is likely too low for ideal
+results.
+
+Note that for both kinds of bridges `layer_height` will have a significant
+impact on the over-extrusion of anchor lines. I suspect ideal settings for
+bridges will always benefit from larger `layer_height` settings to reduce the
+anchor over-extrusion.
+
 ### Settings Translation
 
 From these observations and looking at the code we can derive the formulas for
-translating between our model's settings and OrcaSlicer's. For both bridging models, the following mappings always apply.
+translating between our model's settings and OrcaSlicer's. For both bridging
+models, the following mappings always apply.
 
 Because it doesn't do any print-height compensation to account for the
 normally larger bridge layer-height, the some bridge line hight
@@ -378,7 +426,7 @@ and the bridge's actual bottom perimeter.
 
 ```
 Be = Bp - Lh  ; distance from layer bottom to bridge bottom perimeter.
-   ~= Bd - Lh  ; exact for Bfp=0, but also normally pretty close.
+   ~= Bd - Lh  ; exact for Bfp=0, but still within 5% of Bd for Bfp<=1.
 ```
 
 **NOTE:** for `Bfp=0` (ie, no perimeter overlap so use lowest point of the
