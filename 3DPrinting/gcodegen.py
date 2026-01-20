@@ -1583,7 +1583,7 @@ M18
     self.resetlayer()
     self.layer = l
     self.h = getnear(self.z - l.z)
-    assert self.h >= 0.0, f'{self.z=} {l}'
+    assert self.h >= 0.0, f'{self.h=} {self.z=} {l=}'
 
   def incmove(self, m):
     """ Increment state for executing a Move. """
@@ -1874,6 +1874,9 @@ M18
         h or self.Lh,
         w or self.Lw,
         r*self.Lr)
+    hz = l.z + l.h + self.Zh
+    if self.z < hz:
+      self.hopup(z=hz, de=0)
     self.add(l)
     self.log('layer={layer.n} z={layer.z:.2f} h={layer.h:.2f} w={layer.w:.2f} r={layer.r:.2f}')
 
@@ -1942,7 +1945,7 @@ M18
     # For defaults use last move's h,w,r if it was a draw, else use layer's.
     if h is None: h = self.hl if self.rl else self.layer.h
     if w is None: w = self.wl if self.rl else self.layer.w
-    if r is None: r = self.rl if self.rl else self.layer.r
+    if r is None: r = self.rl if self.rl else 1.0
     # Note we need r before scaling by layer.r.
     self.move(x, y, z, h=h, w=w, r=r/self.layer.r, **kwargs)
 
@@ -1980,7 +1983,7 @@ M18
     # tiny restore so that it doesn't get optimized away or seen as a
     # retraction and can be dynamicly adjusted later.
     if self.dynret and de <= 0: de = 0.00001
-    self.draw(e=e, de=de, v=vb, s=s, h=h, w=w, r=r)
+    self.draw(dz=0, e=e, de=de, v=vb, s=s, h=h, w=w, r=r)
 
   def hopup(self,
       x=None, y=None, z=None, e=None,
@@ -2358,11 +2361,11 @@ M18
       return self.dot(x0, y0, r, **kwargs)
     self.hopdn(x0,y0)
     for x,y in l[1:]:
-      self.draw(x,y,**kwargs)
+      self.draw(x,y, r=r, **kwargs)
     self.hopup()
 
   def text(self, t, x0, y0, x1=None, y1=None, fsize=5, angle=0, **kwargs):
-    self.cmt('structure:shell-outer')
+    self.cmt('TYPE:Outer wall')
     self.log(f'text {[(x0,y0),(x1,y1)]} {fsize=} {angle=} {t!r}')
     w = kwargs.get('w', self.layer.w)
     v = vtext.ptext(t,x0,y0,x1,y1,fsize,angle,w)
