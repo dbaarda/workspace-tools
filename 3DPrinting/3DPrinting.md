@@ -61,11 +61,11 @@ If we assume the start and end of the lines include the circular "bead" bulge
 beyond the start and stop points, we can calculate the gap needed for the
 bulge overlap to exactly match the volume of no seam.
 
-gap = line_spacing * (1 - pi/4) ~= 0.2146 * line_spacing
+gap = line_spacing * pi/4 ~= 0.7854 * line_spacing
 
 The setting can be set as a % of nozzle diameter or length, with the default
-being 10%. For a 0.4mm nozzle this is 0.04mm, which is less than half our
-calculated 0.0850mm.
+being 10%. For a 0.4mm nozzle this is 0.04mm, which is much less than our
+calculated 0.3142mm for a 0.4mm width line.
 
 ## Linear Advance
 
