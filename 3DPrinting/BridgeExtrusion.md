@@ -112,6 +112,7 @@ And from these settings the following attributes can be derived;
    * Lp - normal `perimeter_offset` from line center.
    * La - normal `line_area`
 * Bridge line attributes
+   * Bl - height/width of a square with the same area as Ba.
    * Bz - bridge `print_offset` distance from bridge-layer top up to print height.
    * Bp - bridge `perimeter_offset` from external perimeter up to print height.
    * Ba - bridge `line_area`
@@ -160,6 +161,7 @@ cross-section with the same area as the circular extrusion. This gives the
 following relationships between settings and attributes.
 
 ```
+Bl = Bd*sqrt(pi/4)                ; Bl from Bd.
 Bs = Bd*(1 - Bfw*(1-sqrt(pi/4)))  ; Bs from Bd and Bfw
 Bh = Bd*(1 - Bfh*(1-sqrt(pi/4)))  ; Bh from Bd and Bfh
 Bd = Bs/(1 - Bfw*(1-sqrt(pi/4)))  ; Bd from Bs and Bfw
