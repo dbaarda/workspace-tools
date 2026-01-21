@@ -1133,8 +1133,8 @@ class PrintStats(object):
     elif m.isrestore: self.restore.addcmd(m, en)
 
 
-class GCodeGen(AttrDictMixin):
-  """ GCodeGen gcode generator.
+class GCodeGenBase(AttrDictMixin):
+  """ A base class for generating gcode output.
 
   The general operation of this is;
 
@@ -1156,20 +1156,6 @@ class GCodeGen(AttrDictMixin):
   final transformation to gcode in a namespace containing all the execution
   state at that point. This means they can include complex expressions
   evaluated from the current execution state for the gcode they generate.
-
-  There are many helper methods that generate and add() commands to do various
-  different things. These include;
-
-  * startFile()/endFile(): add gcode initialization/finalization cmds.
-  * startLayer()/endLayer(): add layer initialization/finalization cmds.
-  * nextLayer(): shorthand for ending the previous layer and starting a new one.
-  * cmd(): add an arbitrary gcode command.
-  * cmt(): add a gcode comment line.
-  * log(): add a gcode comment log line, depending on self.verb setting.
-  * draw(), move(), retract(), restore(), hopup(), hopdn(): add move cmds
-    for basic actions.
-  * preExt(), fbox(), dbox(), dot(), line(), text(): add multiple move
-    commands for complex output.
 
   The add(cmd) method is the underlying method to execute and record a cmd in
   self.prevcmds. It filters out empty cmds that evaluate to False. It always
@@ -1225,28 +1211,118 @@ class GCodeGen(AttrDictMixin):
     Tp: Platform temp (degC).
     Fe: Extruder fan speed (0.0->1.0).
     Fc: Case fan speed (0.0->1.0).
-    fKf: Firmware Linear Advance factor (0.0->4.0 mm/mm/s).
-    Kf: Linear Advance factor (0.0->4.0 mm/mm/s).
-    Kb: Bead backpressure factor (??? mm/mm).
-    Re: Retraction distance (0.0->10.0 mm).
     Vp: Speed when printing (mm/s).
     Vt: Speed when traveling (mm/s).
     Vz: Speed when raising/lowering (mm/s).
     Ve: Speed when retracting (mm/s).
     Vb: Speed when restoring (mm/s).
+    Re: Retraction distance (0.0->10.0 mm).
     Lr: Default extrusion ratio (0.1 -> 10.0).
     Lh: Default line height (0.1->0.4mm).
     Lw: Default line width (0.2->0.8mm).
-    relext: relative extrusion enabled.
-    dynret: linear advance dynamic retraction enabled.
-    dynext: linear advance dynamic extrusion enabled.
-    optmov: path optimizing enabled.
     f_t: current file execution time.
     f_l: current file printed line length.
     f_e: current file extruded filament length.
     l_t: current layer execution time.
     l_l: current layer printed line length.
     l_e: current layer extruded filament length.
+    c: the last non-comment command.
+    m: the last move command.
+    d: the last move command that was a draw or restore.
+    x,y,z,e,f: Current x,y,z,e,f position values.
+    h: current height above the layer base.
+  """
+
+  Fd = 1.75  # Fillament diameter.
+  Nd = 0.4   # Nozzle diameter.
+  Fa = acircle(Fd)  # Fillament area.
+  Na = acircle(Nd)  # Nozzle area.
+  Zh = Nd/2  # z-hop height.
+
+  def __init__(self,
+      Te=210, Tp=50, Fe=1.0, Fc=1.0,
+      Vp=60, Vt=100, Vz=7, Ve=40, Vb=30, Re=5,
+      Lh=0.2, Lw=Nd, Lr=1.0, **kwargs):
+    # Temp and Fan settings.
+    self.Te, self.Tp, self.Fe, self.Fc = Te, Tp, Fe, Fc
+    # Default velocities and retraction.
+    self.Vp, self.Vt, self.Vz, self.Ve, self.Vb, self.Re = Vp, Vt, Vz, Ve, Vb, Re
+    # Default line height, width, and extrusion ratio.
+    self.Lh, self.Lw, self.Lr = Lh, Lw, Lr
+    class GMove(Move, Fd=self.Fd, Nd=self.Nd): pass
+    self.GMove = GMove
+    self.resetfile()
+
+  def resetfile(self, nextcmds=None, finalize=False):
+    """ Reset all file state variables.
+
+    This gets ready to process or finalize a queue of nextcmds or new commands.
+    """
+    # Zero all positions so the first move's deltas are actually absolute.
+    self.x, self.y, self.z, self.e, self.f, self.h = 0.0, 0.0, 0.0, 0.0, 0, 0.0
+    self.f_t = self.f_l = self.f_e  = 0.0
+    # We assume prints start retracted.
+    self.pe = -self.Re
+    self.prevcmds, self.nextcmds, self.finalize = deque(), nextcmds, finalize
+    self.c = self.m = self.d = None
+    self.resetlayer()
+
+  def resetlayer(self):
+    """ Reset all layer state variables. """
+    # Set layer to a default base layer for any layer-less moves.
+    self.layer = Layer(
+        0, 0.0, self.Vp, self.Vt, self.Vz, self.Ve, self.Vb, self.Lh, self.Lw, self.Lr)
+    self.l_t = self.l_l = self.l_e = 0.0
+
+  def islayer(self, cmd):
+    return isinstance(cmd, Layer)
+
+  def ismove(self, cmd):
+    return isinstance(cmd, Move)
+
+  def iscmd(self, cmd):
+    return type(cmd) == tuple
+
+  def isstr(self, cmd):
+    return isinstance(cmd, str)
+
+  def isbin(self, cmd):
+    return isinstance(cmd, bytes)
+
+  def iswait(self, cmd):
+    return self.iscmd(cmd) and cmd[0] == 'G4'
+
+
+class GCodeCmtMixin(GCodeGenBase):
+  """ A GCodeGen mixin to add slicer specific comments. """
+
+
+class GCodeGen(GCodeGenBase):
+  """ GCodeGen gcode generator.
+
+  There are many helper methods that generate and add() commands to do various
+  different things. These include;
+
+  * startFile()/endFile(): add gcode initialization/finalization cmds.
+  * startLayer()/endLayer(): add layer initialization/finalization cmds.
+  * nextLayer(): shorthand for ending the previous layer and starting a new one.
+  * cmd(): add an arbitrary gcode command.
+  * cmt(): add a gcode comment line.
+  * log(): add a gcode comment log line, depending on self.verb setting.
+  * draw(), move(), retract(), restore(), hopup(), hopdn(): add move cmds
+    for basic actions.
+  * preExt(), fbox(), dbox(), dot(), line(), text(): add multiple move
+    commands for complex output.
+
+  Attributes:
+    <See GCodeGenBase for inherited attributes>
+    fKf: Firmware Linear Advance factor (0.0->4.0 mm/mm/s).
+    Kf: Linear Advance factor (0.0->4.0 mm/mm/s).
+    Kb: Bead backpressure factor (??? mm/mm).
+    relext: relative extrusion enabled.
+    dynret: linear advance dynamic retraction enabled.
+    dynext: linear advance dynamic extrusion enabled.
+    optmov: path optimizing enabled.
     pe: current extruder pressure or retraction.
     pn: current nozzle pressure (property).
     pb: current bead backpressure (property).
@@ -1262,20 +1338,9 @@ class GCodeGen(AttrDictMixin):
     db0: the bead diameter at the start of the last move.
     eb0: the bead volume at the start of the last move.
     r0,rm,r1: the extrusion ratios of the last move (property)
-    c: the last non-comment command.
-    m: the last move command.
-    d: the last move command that was a draw or restore.
-    x,y,z,e,f: Current x,y,z,e,f position values.
-    h: current height above the layer base.
     w: current default line width (property).
     r: current default extrusion ratio (property).
   """
-
-  Fd = 1.75  # Fillament diameter.
-  Nd = 0.4   # Nozzle diameter.
-  Fa = acircle(Fd)  # Fillament area.
-  Na = acircle(Nd)  # Nozzle area.
-  Zh = Nd/2  # z-hop height.
 
   # Slicer Types for formating gcode.
   SlicerTypes = ('FlashPrint', 'OrcaSlicer')
@@ -1341,33 +1406,22 @@ M18
 
   def __init__(self,
       Slicer=FlashPrint,
-      Te=210, Tp=50, Fe=1.0, Fc=1.0, fKf=0.0,
-      Kf=0.0, Kb=0.0, Re=5,
-      Vp=60, Vt=100, Vz=7, Ve=40, Vb=30,
-      Lh=0.2, Lw=Nd, Lr=1.0,
+      fKf=0.0, Kf=0.0, Kb=0.0,
       relext=False, optmov=False, segvel=False, fixvel=0,
       diff=False, verb=False,
-      dynret=False, dynext=False):
+      dynret=False, dynext=False, **kwargs):
     assert Slicer in self.SlicerTypes
     # Slicer gcode flavour to use.
     self.Slicer = Slicer
-    # Temp and Fan settings.
-    self.Te, self.Tp, self.Fe, self.Fc, self.fKf = Te, Tp, Fe, Fc, fKf
     # Linear advance and retraction settings.
-    self.Kf, self.Kb, self.Re = Kf, Kb, Re
-    # Default velocities.
-    self.Vp, self.Vt, self.Vz, self.Ve, self.Vb = Vp, Vt, Vz, Ve, Vb
-    # Default line height, width, and extrusion ratio.
-    self.Lh, self.Lw, self.Lr = Lh, Lw, Lr
+    self.fKf, self.Kf, self.Kb = fKf, Kf, Kb
     # Processing mode options.
     self.relext, self.optmov, self.segvel, self.fixvel = relext, optmov, segvel, fixvel
     # Logging mode options.
     self.diff, self.verb = diff, verb
     # Pressure advance mode options.
     self.dynret, self.dynext = dynret, dynext
-    class GMove(Move, Fd=self.Fd, Nd=self.Nd): pass
-    self.GMove = GMove
-    self.resetfile()
+    super().__init__(**kwargs)
 
   def Pb(self, db):
     """Get the bead backpressure from db."""
@@ -1454,38 +1508,13 @@ M18
     """ Get the last draw line extrusion ratio."""
     return self.d.r if self.d else self.layer.r
 
-  def islayer(self, cmd):
-    return isinstance(cmd, Layer)
-
-  def ismove(self, cmd):
-    return isinstance(cmd, Move)
-
-  def iscmd(self, cmd):
-    return type(cmd) == tuple
-
-  def isstr(self, cmd):
-    return isinstance(cmd, str)
-
-  def isbin(self, cmd):
-    return isinstance(cmd, bytes)
-
-  def iswait(self, cmd):
-    return self.iscmd(cmd) and cmd[0] == 'G4'
-
   def resetfile(self, nextcmds=None, finalize=False):
     """ Reset all file state variables.
 
     This gets ready to process or finalize a queue of nextcmds or new commands.
     """
-    # Zero all positions so the first move's deltas are actually absolute.
-    self.x, self.y, self.z, self.e, self.f = 0.0, 0.0, 0.0, 0.0, 0
-    self.f_t = self.f_l = self.f_e  = 0.0
-    # We assume prints start retracted.
-    self.pe = -self.Re
-    self.eb = self.vl = self.ve = self.h = 0.0
-    self.prevcmds, self.nextcmds, self.finalize = deque(), nextcmds, finalize
-    self.c = self.m = self.d = None
-    self.resetlayer()
+    super().resetfile(nextcmds, finalize)
+    self.eb = self.vl = self.ve = 0.0
     self.resetstats()
 
   def resetstats(self):
@@ -1493,16 +1522,12 @@ M18
 
   def resetlayer(self):
     """ Reset all layer state variables. """
-    # Set layer to a default base layer for any layer-less moves.
-    self.layer = Layer(
-        0, 0.0, self.Vp, self.Vt, self.Vz, self.Ve, self.Vb, self.Lh, self.Lw, self.Lr)
-    self.l_t = self.l_l = self.l_e = 0.0
+    super().resetlayer()
     self.resetstate()
 
   def resetstate(self):
     """ Reset all move state variables. """
     self.dt = self.dl = self.de = self.en = 0.0
-
 
   def iterstate(self, dt, dl, de, dh, dvl, dve):
     """ Increment the state for a small dt interval. """
