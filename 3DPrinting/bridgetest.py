@@ -224,12 +224,13 @@ class ExtrudeTest(gcodegen.GCodeGen):
     # Save the current layer details for restoring at the end.
     ln, lz = self.layer.n, self.layer.z
     # Draw a brim line for the measure lines to attach to.
-    self.hopdn(x0+dx-w,y0)
+    x0 += sx
+    self.hopdn(x0+dx-w, y0)
+    self.cmt('TYPE:Brim')
     self.draw(dy=-dy)
     self.draw(dx=w)
     self.draw(dy=dy)
     self.hopup()
-    x0 += sx
     for x,y in ((x0+5,y0),(x0+dx+(1-nw)*w-5, y0)):
       self.hopdn(x,y)
       self.cmt('TYPE:Support')
