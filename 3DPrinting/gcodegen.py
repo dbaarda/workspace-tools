@@ -1239,6 +1239,46 @@ class GCodeGenBase(AttrDictMixin):
   Na = acircle(Nd)  # Nozzle area.
   Zh = Nd/2  # z-hop height.
 
+  startcode = """\
+;start gcode
+M118 X{75.0:.2f} Y{75.0:.2f} Z{150.0:.2f} T0
+M140 S{round(Tp)} T0
+M104 S{round(Te)} T0
+M104 S0 T1
+M107
+M900 K{fKf:.3f} T0
+G90
+G28
+M132 X Y Z A B
+G1 Z50.000 F420
+G161 X Y F3300
+M7 T0
+M6 T0
+{_setFc(Fc)}
+M108 T0
+{_setFe(Fe)+nl if Fe else ""}\
+{"M83"+nl if relext else ""}\
+"""
+
+  endcode = """\
+;end gcode
+M107
+M104 S0 T0
+M140 S0 T0
+G162 Z F1800
+G28 X Y
+M132 X Y A B
+M652
+G91
+M18
+"""
+
+  def _setFc(self, fc):
+    return f'M651 S{round(fc*255)}' if fc else 'M652'
+
+  def _setFe(self, fe):
+    return f'M106' if fe == 1.0 else f'M106 S{round(fe*255)}' if fe else 'M107'
+
   def __init__(self,
       Te=210, Tp=50, Fe=1.0, Fc=1.0,
       Vp=60, Vt=100, Vz=7, Ve=40, Vb=30, Re=5,
@@ -1296,8 +1336,41 @@ class GCodeGenBase(AttrDictMixin):
 class GCodeCmtMixin(GCodeGenBase):
   """ A GCodeGen mixin to add slicer specific comments. """
 
+  # Slicer Types for formating gcode.
+  SlicerTypes = ('FlashPrint', 'OrcaSlicer')
+  FlashPrint, OrcaSlicer = SlicerTypes
 
-class GCodeGen(GCodeGenBase):
+  Header = dict(
+    FlashPrint="""\
+;gcode_flavor: flashforge
+;machine_type: Adventurer 3 Series
+;filament_diameter0: {Fd}
+;right_extruder_temperature: {Te}
+;platform_temperature: {Tp}
+;extruder_fan: {round(Fe*100)}%
+;case_fan: {round(Fc*100)}%
+;base_print_speed: {round(Vp)}
+;travel_speed: {round(Vt)}
+;vertical_speed: {round(Vz)}
+;retract_speed: {round(Ve)}
+;restore_speed: {round(Vb)}
+;layer_height: {Lh:.2f}
+;line_width: {Lw:.2f}
+;extrusion_ratio: {Lr:.2f}
+;command_line: {_getCmdline()}
+""",
+               OrcaSlicer="""\
+""")
+
+  Footer = dict(
+                FlashPrint="",
+                OrcaSlicer="")
+
+  def _getCmdline(self):
+    return ' '.join(sys.argv)
+
+
+class GCodeGen(GCodeCmtMixin,GCodeGenBase):
   """ GCodeGen gcode generator.
 
   There are many helper methods that generate and add() commands to do various
@@ -1342,70 +1415,8 @@ class GCodeGen(GCodeGenBase):
     r: current default extrusion ratio (property).
   """
 
-  # Slicer Types for formating gcode.
-  SlicerTypes = ('FlashPrint', 'OrcaSlicer')
-  FlashPrint, OrcaSlicer = SlicerTypes
-
-  startcode = """\
-;gcode_flavor: flashforge
-;machine_type: Adventurer 3 Series
-;filament_diameter0: {Fd}
-;right_extruder_temperature: {Te}
-;platform_temperature: {Tp}
-;extruder_fan: {round(Fe*100)}%
-;case_fan: {round(Fc*100)}%
-;base_print_speed: {round(Vp)}
-;travel_speed: {round(Vt)}
-;vertical_speed: {round(Vz)}
-;retract_speed: {round(Ve)}
-;restore_speed: {round(Vb)}
-;layer_height: {Lh:.2f}
-;line_width: {Lw:.2f}
-;extrusion_ratio: {Lr:.2f}
-;command_line: {_getCmdline()}
-;start gcode
-M118 X{75.0:.2f} Y{75.0:.2f} Z{150.0:.2f} T0
-M140 S{round(Tp)} T0
-M104 S{round(Te)} T0
-M104 S0 T1
-M107
-M900 K{fKf:.3f} T0
-G90
-G28
-M132 X Y Z A B
-G1 Z50.000 F420
-G161 X Y F3300
-M7 T0
-M6 T0
-{_setFc(Fc)}
-M108 T0
-{_setFe(Fe)+nl if Fe else ""}\
-{"M83"+nl if relext else ""}\
-"""
-  endcode = """\
-;end gcode
-M107
-M104 S0 T0
-M140 S0 T0
-G162 Z F1800
-G28 X Y
-M132 X Y A B
-M652
-G91
-M18
-"""
-
-  def _getCmdline(self):
-    return ' '.join(sys.argv)
-
-  def _setFc(self, fc):
-    return f'M651 S{round(fc*255)}' if fc else 'M652'
-
-  def _setFe(self, fe):
-    return f'M106' if fe == 1.0 else f'M106 S{round(fe*255)}' if fe else 'M107'
-
   def __init__(self,
-      Slicer=FlashPrint,
+      Slicer=GCodeCmtMixin.FlashPrint,
       fKf=0.0, Kf=0.0, Kb=0.0,
       relext=False, optmov=False, segvel=False, fixvel=0,
       diff=False, verb=False,
