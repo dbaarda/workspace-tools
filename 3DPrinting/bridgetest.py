@@ -64,6 +64,13 @@ class GCodeCfgMixin(gcodegen.GCodeGenBase):
     dv = (v1-v0)/tn
     return v0, v1, dv
 
+  def _incstep(self, v0, v1, dv):
+    return v0+dv, v1, dv
+
+  def _endstep(self, v0, v1, dv):
+    e = 0.0001
+    return (dv>0 and v0>v1+e) or (dv<0 and v0<v1-e)
+
   def setconf(self, **kwargs):
     # Filter out configs set to None or already set.
     kwargs = {k:v for k,v in kwargs.items() if k in self._CONF_ARGS and v is not None and getattr(self,k) != v}
@@ -337,7 +344,7 @@ class ExtrudeTest(GCodeCfgMixin, gcodegen.GCodeGen):
     self.cmt(f'TYPE:Inner wall')
     y = y0
     e = 0.00001
-    while all(v <= v1+e for (v,v1,dv) in allsteps.values()):
+    while all(not self._endstep(*s) for s in allsteps.values()):
       de0,_,_ = allsteps.get('de0', (0.0,0.0,0.0))
       lineargs={k:v for k,(v,_,_) in allsteps.items() if k != 'de0'}
       confargs={k:v for k,v in lineargs.items() if k in self._CONF_ARGS}
@@ -353,8 +360,8 @@ class ExtrudeTest(GCodeCfgMixin, gcodegen.GCodeGen):
       self.measure(x, y, de0=de0)
       x += self.tmx
       self.stabilize(x, y)
-      for k,(v,v1,dv) in allsteps.items():
-        allsteps[k] = (v+dv,v1,dv)
+      for k, s in allsteps.items():
+        allsteps[k] = self._incstep(*s)
       y-=self.ldy
     # Restore the config arguments after the test.
     #self.popconf()
@@ -458,7 +465,7 @@ if __name__ == '__main__':
 
   bridgeargs=dict(name="BrPA", linefn=gen.bridgeline, prepfn=gen.bridgeprep, Kf=gen.Kf, Kb=gen.Kb, Re=gen.Re, tests=(
     dict(ve=(0.1, 2.6), vl=10),
-    dict(ve=(2.5, 7.5), vl=40),))
+    dict(ve=(2.5, 7.5), vl=40, de0=(0.0,-2.0)),))
 
   gen.startFile()
   gen.doTests(**bridgeargs)
