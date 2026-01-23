@@ -35,39 +35,9 @@ from math import *
 def roundup(v,m=1):
   return m*ceil(v/m)
 
-class ExtrudeTest(gcodegen.GCodeGen):
-  """ Generate GCode Extrusion Tests.
 
-  Note that nozzle vs fillament diameters and/or track areas mean that de=1mm
-  translates to nearly 20mm of nozzle thread, or possibly even more of track.
-  This means 1mm of uncompensated pressure advance translates to more 20mm of
-  track smear or stringing.
-  """
-  #Zh = 1.2 # set Zh high enough to clear bridge-tests.
-  vx0 = 5  # test min speed
-  vx1 = 100  # test max speed
-  le0 = 0  # test min retraction length
-  le1 = 10  # test max retraction length
-  ve0 = 15  # test min retraction speed
-  ve1 = 45  # test max retraction speed
-  t0x = 10  # test line warmup x distance.
-  t1x = 10  # test line cooldn x distance.
-  tex = 60  # test line execute x distance.
-  tmx = 60  # test line measurement x distance.
-  tdx = t0x+tex+tmx+t1x    #  total test line x distance.
-  tn = 10  # number of increments for each test (tn+1 test lines).
-  sdy = 10 # test settings y space.
-  rdy = 3  # test ruler y space.
-  ldy = 5  # test line y distance.
-  tdy = (tn+1)*ldy  # test runs y distance.
-  cdy = sdy+rdy+1+tdy+2  # test case y distance.
-  rulerbox = (tdx, rdy+1)   # test ruler box size including space.
-  testsbox = (tdx, tdy+2)   # test run box size including space.
-  tcasebox = (tdx, cdy+3)   # test case box size including space.
-  rtics = (0, t0x, (t0x+tex, tmx), tdx) # Ruler ticks.
-  bnh = 4 # number of layers for bridge test supports.
-  bnw = 2 # number of lines for bridge test supports.
-
+class GCodeCfgMixin(gcodegen.GCodeGenBase):
+  """GCode mixin to dynamically changing config settings."""
 
   # These are printer configuration test arguments.
   _CONF_ARGS = ('Kf','Kb','Re', 'fKf', 'dynret', 'dynext')
@@ -96,7 +66,7 @@ class ExtrudeTest(gcodegen.GCodeGen):
 
   def setconf(self, **kwargs):
     # Filter out configs set to None or already set.
-    kwargs = {k:v for k,v in kwargs.items() if v is not None and getattr(self,k) != v}
+    kwargs = {k:v for k,v in kwargs.items() if k in self._CONF_ARGS and v is not None and getattr(self,k) != v}
     if kwargs:
       self.log(f'Setting config {self._fset(**kwargs)}')
     self.add(kwargs)
@@ -141,22 +111,57 @@ class ExtrudeTest(gcodegen.GCodeGen):
     else:
       super().inc(code)
 
-  def preextrude(self,n=0,x0=-70,y0=-70,x1=70,y1=-70):
+
+class ExtrudeTest(GCodeCfgMixin, gcodegen.GCodeGen):
+  """ Generate GCode Extrusion Tests.
+
+  Note that nozzle vs fillament diameters and/or track areas mean that de=1mm
+  translates to nearly 20mm of nozzle thread, or possibly even more of track.
+  This means 1mm of uncompensated pressure advance translates to more 20mm of
+  track smear or stringing.
+  """
+  #Zh = 1.2 # set Zh high enough to clear bridge-tests.
+  vx0 = 5  # test min speed
+  vx1 = 100  # test max speed
+  le0 = 0  # test min retraction length
+  le1 = 10  # test max retraction length
+  ve0 = 15  # test min retraction speed
+  ve1 = 45  # test max retraction speed
+  t0x = 10  # test line warmup x distance.
+  t1x = 10  # test line cooldn x distance.
+  tex = 60  # test line execute x distance.
+  tmx = 60  # test line measurement x distance.
+  tdx = t0x+tex+tmx+t1x    #  total test line x distance.
+  tn = 10  # number of increments for each test (tn+1 test lines).
+  sdy = 5  # test settings y space.
+  rdy = 3  # test ruler y space.
+  ldy = 5  # test line y distance.
+  tdy = (tn+1)*ldy  # test runs y distance.
+  cdy = sdy+rdy+1+tdy+2  # test case y distance.
+  rulerbox = (tdx, rdy+1)   # test ruler box size including space.
+  testsbox = (tdx, tdy+2)   # test run box size including space.
+  tcasebox = (tdx, cdy+2)   # test case box size including space.
+  rtics = (0, t0x, (t0x+tex, tmx), tdx) # Ruler ticks.
+  bnh = 4 # number of layers for bridge test supports.
+  bnw = 2 # number of lines for bridge test supports.
+
+  def preextrude(self,n=0,x0=-40,y0=-74,x1=40,y1=-74,v=20):
     self.cmt('TYPE:Custom')
-    self.line(l=((x0,y0-n),(x1,y0-n)), v=20, r=2)
+    self.line(l=((x0,y0-n),(x1,y0-n)), v=v, r=2)
 
-  def title(self,x0,y0, **kwargs):
-    self.settings(x0+2,y0+5,sep=' ', **kwargs)
+  def title(self,x0,y0, title='', **kwargs):
+    self.settings(x0,y0,sep=' ', title=title, **kwargs)
 
-  def brim(self, x0, y0, x1, y1):
+  def settings(self, x0, y0, sep=' ', title='', **kwargs):
+    """ Draw the test arguments at (x0,y0)."""
+    if title: title += sep
+    self.text(title + self._fset(sep=sep, **kwargs), x0, y0, fsize=5)
+
+  def brim(self, x0=-70, y0=70, x1=70, y1=-70):
     w = self.layer.w
     self.cmt("TYPE:Brim")
     for x,y in ((x0-w,y0), (x1+w,y0)):
-      self.hopdn(x,y)
-      self.draw(y=y1)
-      self.draw(dx=-w)
-      self.draw(y=y0)
-      self.hopup()
+      self.line(((x,y0),(x,y1),(x-w,y1), (x-w,y0)))
 
   def ruler(self, x0, y0, box=rulerbox, tics=rtics):
     """ Draw a ruler that fits in box with tics.
@@ -177,10 +182,6 @@ class ExtrudeTest(gcodegen.GCodeGen):
         self.hopdn(dx=2,y=y0)
         self.draw(dy=-l)
         self.hopup()
-
-  def settings(self, x0, y0, sep=' ', title='', **kwargs):
-    """ Draw the test arguments at (x0,y0)."""
-    self.text(title + self._fset(sep=sep, **kwargs), x0, y0, fsize=5)
 
   def stabilize(self, x0, y0, dx=t0x, dy=ldy, v=20, w=None):
     """ Stabilize nozzle pressure by drawing filled rectangle."""
@@ -214,10 +215,13 @@ class ExtrudeTest(gcodegen.GCodeGen):
     """Setup Bridge Test Base
 
     This draws two walls nw lines wide starting at x offset sx that are dy
-    long, dx-10 apart, and nh layers high.
+    long, dx-10 apart, and nh layers high. It also draws a brim line to attach
+    the measure lines to, since the bridge line is not attached to the measure
+    line.
 
-    Note that this does not increment layers,just moves up, and ends hopped-up
-    Zh above the last layer of the second wall.
+    Note that this does increment layers, and ends hopped-up Zh above the last
+    layer of the second wall, and then sets the next layer back down at the
+    starting layer.
     """
     if h is None: h=self.layer.h
     if w is None: w=self.layer.w
@@ -236,7 +240,7 @@ class ExtrudeTest(gcodegen.GCodeGen):
       self.cmt('TYPE:Support')
       dyi = -dy
       for l in range(nh):
-        # before each layer except the first, hop up and back to the start.
+        # before each layer except the first, increment the layer and hopdn at the next start.
         if l:
           #self.move(dz=h)
           self.nextLayer()
@@ -248,6 +252,7 @@ class ExtrudeTest(gcodegen.GCodeGen):
           self.draw(dy=dyi, dz=0, w=w, h=h)
           dyi*=-1
       self.hopup()
+      # Set the layer back to the starting layer/height.
       self.nextLayer(n=ln, z=lz)
 
   def bridgeline(self, x0, y0, dx=tex, dy=ldy, Bd=None, Bfw=1.0, Bfh=1.0, vl=None, ve=None, n=None, nh=bnh):
@@ -256,19 +261,18 @@ class ExtrudeTest(gcodegen.GCodeGen):
     # Take into account 5mm gaps before/after bridge supports.
     x0, dx = x0+5, dx-10
     if Bd:
-      Ba = Bd**2 * pi/4
+      Ba = gcodegen.acirlcle(Bd)
     elif ve and vl:
       Ba = self.Fa * ve/vl
     else:
       Ba = self.Na
-    if not Bd: Bd = sqrt(Ba * 4/pi)
+    if not Bd: Bd = gcodegen.dcircle(Ba)
     Bl = sqrt(Ba)
     Bs = Bd - Bfw*(Bd - Bl)
     Bh = Bd - Bfh*(Bd - Bl)
     Bz = (Bd - Bh)/2
     vl,ve,h,w,r = self._getVlVehwr(vl=vl, ve=ve, h=Bh, w=Bs, r=Bh*Bs/Ba)
     ln,lz = self.layer.n, self.layer.z
-    z = nh*self.layer.h + h + Bz
     if not n:
       # default n for 5 secs of extrusion, up to as many bridges as will fit.
       n = min(dy/Bs, ceil(vl*5/dx))
@@ -276,17 +280,18 @@ class ExtrudeTest(gcodegen.GCodeGen):
     if not n%2:
       x0, dx = x0+dx,-dx
     self.nextLayer(n=ln+nh+1,z=lz + nh*self.Lh, h=h)
-    #self.hopup(dz=Bz)
     self.hopdn(x0,y0,h=h+Bz)
     self.cmt('TYPE:Bridge')
     for i in range(n):
+      # Before each line except the first, move to the next line position.
+      if i: self.draw(dy=-Bs, dz=0, v=vl, h=h, w=w, r=r)
       self.draw(dx=dx, dz=0, v=vl, h=h, w=w, r=r)
       dx*=-1
-      if i < n-1: self.draw(dy=-Bs, dz=0, v=vl, h=h, w=w, r=r)
-    self.nextLayer(n=1,z=0.0)
+    # Set the layer back to the original layer.
+    self.nextLayer(n=ln,z=lz)
 
   def doTests(self, name, tests, linefn, prepfn=None, n=None, **kwargs):
-    """Run up to 4 tests.
+    """Run up to as many tests as will fit.
 
     This calls doTest() with arguments from kwargs overridden by arguments for
     each test case in tests.
@@ -310,20 +315,22 @@ class ExtrudeTest(gcodegen.GCodeGen):
     self.startLayer(Vp=10)
     # Only draw the title and brim if running test 0.
     if n==0:
-      self.title(x0,y0,**kwargs)
+      self.title(x0,y0, title=name, **kwargs)
       self.brim(x0,y0,x1, y1)
+    y0 -= 5
     for i,t in enumerate(tests):
       # only run test n if not running all tests.
       if alltests or i == n:
-        self.doTest(name, x0, y0, linefn, prepfn, **(kwargs|t))
+        self.doTest(f'{name}:{i}', x0, y0, linefn, prepfn, runargs=kwargs, **t)
       y0 -= self.tcasebox[1]
     self.endLayer()
 
-  def doTest(self, name, x0, y0, linefn, prepfn=None, de0=0.0, **kwargs):
-    testargs = {k:self._getstep(self.tn, v) for k,v in kwargs.items()}
-    assert any(dv for _,_,dv in testargs.values()), 'At least one arg in {kwargs} must be a range.'
-    self.log(f'Test {name} {self._fset(**kwargs)}')
-    self.settings(x0, y0, sep=' ', **kwargs)
+  def doTest(self, name, x0, y0, linefn, prepfn=None, runargs=None, **kwargs):
+    allargs = (runargs or {}) | kwargs
+    allsteps = {k:self._getstep(self.tn, v) for k,v in allargs.items()}
+    assert any(dv for _,_,dv in allsteps.values()), 'At least one arg in {allargs} must be a range.'
+    self.log(f'Test {name} {self._fset(**allargs)}')
+    self.settings(x0, y0, title=name, sep=' ', **kwargs)
     y0 -= self.sdy
     self.ruler(x0, y0)
     y0 -= self.rdy
@@ -332,8 +339,9 @@ class ExtrudeTest(gcodegen.GCodeGen):
     self.cmt(f'TYPE:Inner wall')
     y = y0
     e = 0.00001
-    while all(v <= v1+e for (v,v1,dv) in testargs.values()):
-      lineargs={k:v for k,(v,_,_) in testargs.items()}
+    while all(v <= v1+e for (v,v1,dv) in allsteps.values()):
+      de0,_,_ = allsteps.get('de0', (0.0,0.0,0.0))
+      lineargs={k:v for k,(v,_,_) in allsteps.items() if k != 'de0'}
       confargs={k:v for k,v in lineargs.items() if k in self._CONF_ARGS}
       funcargs={k:v for k,v in lineargs.items() if k not in self._CONF_ARGS}
       self.log(f'Test Line {name} {self._fset(**lineargs)}')
@@ -347,8 +355,8 @@ class ExtrudeTest(gcodegen.GCodeGen):
       self.measure(x, y, de0=de0)
       x += self.tmx
       self.stabilize(x, y)
-      for k,(v,v1,dv) in testargs.items():
-        testargs[k] = (v+dv,v1,dv)
+      for k,(v,v1,dv) in allsteps.items():
+        allsteps[k] = (v+dv,v1,dv)
       y-=self.ldy
     # Restore the config arguments after the test.
     #self.popconf()
@@ -450,8 +458,8 @@ if __name__ == '__main__':
 
   gen=ExtrudeTest(**gcodegen.GCodeGetArgs(args))
 
-  bridgeargs=dict(name="BridgeBackpressure", linefn=gen.bridgeline, prepfn=gen.bridgeprep, tests=(
-    #dict(ve=(0.1, 2.6), vl=10),
+  bridgeargs=dict(name="BrPA", linefn=gen.bridgeline, prepfn=gen.bridgeprep, Kf=gen.Kf, Kb=gen.Kb, Re=gen.Re, tests=(
+    dict(ve=(0.1, 2.6), vl=10),
     dict(ve=(2.5, 7.5), vl=40),))
 
   gen.startFile()
