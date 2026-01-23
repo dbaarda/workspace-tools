@@ -2471,9 +2471,9 @@ class GCodeGen(GCodeCmtMixin,GCodeGenBase):
   def endLayer(self):
     self.layerstats()
 
-  def nextLayer(self, **largs):
+  def nextLayer(self, *args, **kwargs):
     self.endLayer()
-    self.startLayer(**largs)
+    self.startLayer(*args, **kwargs)
 
   def move(self,
       x=None, y=None, z=None, e=None,

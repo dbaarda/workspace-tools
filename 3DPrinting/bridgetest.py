@@ -6,14 +6,14 @@ These tests assume an older printer with Vp=100mm/sec, Ap=500mm/sec^2, and a
 0.4mm nozzle. This means it takes 0.2sec to reach full speed over 10mm of
 distance.
 
-Bridge lines are between 0.2@10-0.6@60, with areas 0.031-0.283mm^2,
+Bridge lines are between D0.2@10-D0.6@60, with areas 0.031-0.283mm^2,
 flows 0.314-16.965mm^3/sec, and ve=0.1-7.1mm/s.
 
 Normal lines are between 0.1x0.4@10-0.3x0.6@100 with areas 0.040-0.180mm^2,
 flows 0.4-18.0mm^3/sec, and ve=0.17-7.5mm/sec.
 
 If we assume PA has Kf=2.0, it will take about 6.3sec for flow to stabilize.
-For @100mm/sec speeds thats 630mm of line, or 13 spans of a 50mm bridge, 7
+For @100mm/sec speeds that's 630mm of line, or 13 spans of a 50mm bridge, 7
 traversals of a 100mm line, or 1.7 times around a 12cm diameter spiral.
 
 We need a warmup line to restore and stabilize the nozzle pressure to a
@@ -134,13 +134,13 @@ class ExtrudeTest(GCodeCfgMixin, gcodegen.GCodeGen):
   tdx = t0x+tex+tmx+t1x    #  total test line x distance.
   tn = 10  # number of increments for each test (tn+1 test lines).
   sdy = 5  # test settings y space.
-  rdy = 3  # test ruler y space.
+  rdy = 4  # test ruler y space.
   ldy = 5  # test line y distance.
   tdy = (tn+1)*ldy  # test runs y distance.
-  cdy = sdy+rdy+1+tdy+2  # test case y distance.
-  rulerbox = (tdx, rdy+1)   # test ruler box size including space.
-  testsbox = (tdx, tdy+2)   # test run box size including space.
-  tcasebox = (tdx, cdy+2)   # test case box size including space.
+  cdy = sdy+rdy+tdy+2  # test case y distance.
+  rulerbox = (tdx, rdy)   # test ruler box size including space.
+  testsbox = (tdx, tdy)   # test run box size including space.
+  tcasebox = (tdx, cdy)   # test case box size including space.
   rtics = (0, t0x, (t0x+tex, tmx), tdx) # Ruler ticks.
   bnh = 4 # number of layers for bridge test supports.
   bnw = 2 # number of lines for bridge test supports.
@@ -226,7 +226,7 @@ class ExtrudeTest(GCodeCfgMixin, gcodegen.GCodeGen):
     if h is None: h=self.layer.h
     if w is None: w=self.layer.w
     # Save the current layer details for restoring at the end.
-    ln, lz = self.layer.n, self.layer.z
+    base = self.layer
     # Draw a brim line for the measure lines to attach to.
     x0 += sx
     self.hopdn(x0+dx-w, y0)
@@ -242,7 +242,6 @@ class ExtrudeTest(GCodeCfgMixin, gcodegen.GCodeGen):
       for l in range(nh):
         # before each layer except the first, increment the layer and hopdn at the next start.
         if l:
-          #self.move(dz=h)
           self.nextLayer()
           self.hopdn(dx=(1-nw)*w, de=0)
         for i in range(nw):
@@ -253,7 +252,7 @@ class ExtrudeTest(GCodeCfgMixin, gcodegen.GCodeGen):
           dyi*=-1
       self.hopup()
       # Set the layer back to the starting layer/height.
-      self.nextLayer(n=ln, z=lz)
+      self.nextLayer(*base)
 
   def bridgeline(self, x0, y0, dx=tex, dy=ldy, Bd=None, Bfw=1.0, Bfh=1.0, vl=None, ve=None, n=None, nh=bnh):
     """ Draw a bridge starting at x0,y0 of length dx with n crossings on top of supports with nh layers. """
@@ -272,15 +271,15 @@ class ExtrudeTest(GCodeCfgMixin, gcodegen.GCodeGen):
     Bh = Bd - Bfh*(Bd - Bl)
     Bz = (Bd - Bh)/2
     vl,ve,h,w,r = self._getVlVehwr(vl=vl, ve=ve, h=Bh, w=Bs, r=Bh*Bs/Ba)
-    ln,lz = self.layer.n, self.layer.z
+    base = self.layer
     if not n:
       # default n for 5 secs of extrusion, up to as many bridges as will fit.
       n = min(dy/Bs, ceil(vl*5/dx))
     # for even number of crossings, start on the opposite end.
     if not n%2:
       x0, dx = x0+dx,-dx
-    self.nextLayer(n=ln+nh+1,z=lz + nh*self.Lh, h=h)
-    self.hopdn(x0,y0,h=h+Bz)
+    self.nextLayer(n=base.n + nh + 1, z=base.z + nh*self.Lh, h=h)
+    self.hopdn(x0, y0, h=h+Bz)
     self.cmt('TYPE:Bridge')
     for i in range(n):
       # Before each line except the first, move to the next line position.
@@ -288,7 +287,7 @@ class ExtrudeTest(GCodeCfgMixin, gcodegen.GCodeGen):
       self.draw(dx=dx, dz=0, v=vl, h=h, w=w, r=r)
       dx*=-1
     # Set the layer back to the original layer.
-    self.nextLayer(n=ln,z=lz)
+    self.nextLayer(*base)
 
   def doTests(self, name, tests, linefn, prepfn=None, n=None, **kwargs):
     """Run up to as many tests as will fit.
@@ -304,20 +303,19 @@ class ExtrudeTest(GCodeCfgMixin, gcodegen.GCodeGen):
       n: optional index of a single test to run, otherwise run all.
       **kwargs: key-value args common to all tests and to put in the title.
     """
-    maxn = 140/self.tcasebox[1]
+    maxn = floor((140-self.sdy)/self.tcasebox[1])
     assert len(tests) <= maxn, f'Can only fit max {maxn} tests.'
     # set alltests for running all tests and initialize n=0 if needed.
-    alltests, n = n is None, n or 0
-    tnx, tny = self.tcasebox[0],self.tcasebox[1]*maxn
+    alltests, n = (n is None, n or 0)
+    tnx, tny = self.tcasebox[0], self.sdy + self.tcasebox[1]*maxn
     x0, y0 = -70, 70
     x1, y1 = x0+tnx, y0-tny
     self.preextrude(n=n)
     self.startLayer(Vp=10)
     # Only draw the title and brim if running test 0.
-    if n==0:
-      self.title(x0,y0, title=name, **kwargs)
-      self.brim(x0,y0,x1, y1)
-    y0 -= 5
+    if n==0: self.title(x0,y0, title=name, **kwargs)
+    y0 -= self.sdy
+    if n==0: self.brim(x0,y0,x1, y1)
     for i,t in enumerate(tests):
       # only run test n if not running all tests.
       if alltests or i == n:
