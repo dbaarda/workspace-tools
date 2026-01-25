@@ -2974,13 +2974,13 @@ def GCodeGenArgs(cmdline):
   """Add argparse cmdline arguments for GCodeGen params."""
   cmdline.add_argument('-Slicer', choices=GCodeGen.SlicerTypes, default=GCodeGen.FlashPrint,
       help='Slicer GCode format for comments and hints.')
-  cmdline.add_argument('-Te', type=RangeType(0, 265), default=245,
+  cmdline.add_argument('-Te', type=RangeType(0, 265), default=210,
       help='Extruder temperature.')
-  cmdline.add_argument('-Tp', type=RangeType(0, 100), default=100,
+  cmdline.add_argument('-Tp', type=RangeType(0, 100), default=50,
       help='Platform temperature.')
   cmdline.add_argument('-Fe', type=RangeType(0.0,1.0), default=1.0,
       help='Extruder fan speed between 0.0 to 1.0.')
-  cmdline.add_argument('-Fc', type=RangeType(0.0,1.0), default=0.0,
+  cmdline.add_argument('-Fc', type=RangeType(0.0,1.0), default=1.0,
       help='Case fan speed between 0.0 to 1.0.')
   cmdline.add_argument('-fKf', type=RangeType(0.0,4.0), default=0.0,
       help='Firmware Linear Advance factor between 0.0 to 4.0 in mm/mm/s.')
@@ -2988,7 +2988,7 @@ def GCodeGenArgs(cmdline):
       help='Linear Advance factor between 0.0 to 4.0 in mm/mm/s.')
   cmdline.add_argument('-Kb', type=RangeType(0.0,10.0), default=0.0,
       help='Bead backpressure factor between 0.0 to 10.0 in mm/mm.')
-  cmdline.add_argument('-Re', type=RangeType(0.0,10.0), default=1.0,
+  cmdline.add_argument('-Re', type=RangeType(0.0,10.0), default=5.0,
       help='Retraction distance between 0.0 to 10.0 in mm.')
   cmdline.add_argument('-Vp', type=RangeType(5,100), default=60,
       help='Base printing speed in mm/s.')
@@ -3000,7 +3000,7 @@ def GCodeGenArgs(cmdline):
       help='Base retract speed in mm/s.')
   cmdline.add_argument('-Vb', type=RangeType(1,50), default=30,
       help='Base restore speed in mm/s.')
-  cmdline.add_argument('-Lh', type=RangeType(0.1,0.4), default=0.3,
+  cmdline.add_argument('-Lh', type=RangeType(0.1,0.4), default=0.2,
       help='Layer height in mm.')
   cmdline.add_argument('-Lw', type=RangeType(0.2,0.8), default=0.5,
       help='Line width in mm.')
