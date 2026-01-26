@@ -279,7 +279,7 @@ class ExtrudeTest(GCodeCfgMixin, gcodegen.GCodeGen):
     Bs = Bd - Bfw*(Bd - Bl)
     Bh = Bd - Bfh*(Bd - Bl)
     Bz = (Bd - Bh)/2
-    vl,ve,h,w,r = self._getVlVehwr(vl=vl, ve=ve, h=Bh, w=Bs, r=Ba/Bh*Bs)
+    vl,ve,h,w,r = self._getVlVehwr(vl=vl, ve=ve, h=Bh, w=Bs, r=Ba/(Bh*Bs))
     base = self.layer
     if not n:
       # default n for 5 secs of extrusion, up to as many bridges as will fit.
