@@ -40,7 +40,7 @@ class GCodeCfgMixin(gcodegen.GCodeGenBase):
   """GCode mixin to dynamically changing config settings."""
 
   # These are printer configuration test arguments.
-  _CONF_ARGS = ('Kf','Kb','Re', 'fKf', 'dynret', 'dynext')
+  _CONF_ARGS = ('Kf','Kb','Re', 'fKf', 'Zh', 'dynret', 'dynext')
 
   def resetfile(self,*args,**kwargs):
     """Initialize confstack whenever we resetfile()."""
@@ -188,7 +188,7 @@ class ExtrudeTest(GCodeCfgMixin, gcodegen.GCodeGen):
         l = ml/2 if d % 10 else ml
         self.hopdn(dx=2,y=y0)
         self.draw(dy=-l)
-        self.hopup()
+        self.hopup(dz=0.1)
 
   def stabilize(self, x0, y0, dx=t0x, dy=ldy, v=20, w=None):
     """ Stabilize nozzle pressure by drawing filled rectangle."""
@@ -216,7 +216,7 @@ class ExtrudeTest(GCodeCfgMixin, gcodegen.GCodeGen):
     for i in range(n):
       self.move(dx=dx,v=vx)
       self.retract(de=de,ve=ve)
-    self.hopup(de=0)
+    #self.hopup(de=0)
 
   def bridgeprep(self, x0, y0, sx=t0x, dx=tex, dy=tdy, nh=bnh, nw=bnw, h=None, w=None):
     """Setup Bridge Test Base
@@ -241,13 +241,14 @@ class ExtrudeTest(GCodeCfgMixin, gcodegen.GCodeGen):
     self.draw(dy=-dy)
     self.draw(dx=w)
     self.draw(dy=dy)
-    self.hopup()
+    self.hopup(dz=0.1)
     for x,y in ((x0+5,y0),(x0+dx+(1-nw)*w-5, y0)):
       self.hopdn(x,y)
       self.cmt('TYPE:Support')
       dyi = -dy
       for l in range(nh):
-        # before each layer except the first, increment the layer and hopdn at the next start.
+        # before each layer except the first, increment the layer and hopdn at
+        # the next start.
         if l:
           self.nextLayer()
           self.hopdn(dx=(1-nw)*w, de=0)
@@ -257,9 +258,10 @@ class ExtrudeTest(GCodeCfgMixin, gcodegen.GCodeGen):
             self.draw(dx=w, dz=0, w=w, h=h)
           self.draw(dy=dyi, dz=0, w=w, h=h)
           dyi*=-1
-      self.hopup()
+      self.hopup(dz=0.1)
       # Set the layer back to the starting layer/height.
       self.nextLayer(*base)
+    self.Zh = nh * self.Lh
 
   def bridgeline(self, x0, y0, dx=tex, dy=ldy, Bd=None, Bfw=1.0, Bfh=1.0, vl=None, ve=None, n=None, nh=bnh):
     """ Draw a bridge starting at x0,y0 of length dx with n crossings on top of supports with nh layers. """
@@ -277,7 +279,7 @@ class ExtrudeTest(GCodeCfgMixin, gcodegen.GCodeGen):
     Bs = Bd - Bfw*(Bd - Bl)
     Bh = Bd - Bfh*(Bd - Bl)
     Bz = (Bd - Bh)/2
-    vl,ve,h,w,r = self._getVlVehwr(vl=vl, ve=ve, h=Bh, w=Bs, r=Bh*Bs/Ba)
+    vl,ve,h,w,r = self._getVlVehwr(vl=vl, ve=ve, h=Bh, w=Bs, r=Ba/Bh*Bs)
     base = self.layer
     if not n:
       # default n for 5 secs of extrusion, up to as many bridges as will fit.
@@ -335,7 +337,7 @@ class ExtrudeTest(GCodeCfgMixin, gcodegen.GCodeGen):
     allsteps = {k:self._getstep(self.tn, v) for k,v in allargs.items()}
     assert any(dv for _,_,dv in allsteps.values()), 'At least one arg in {allargs} must be a range.'
     self.log(f'Test {name} {self._fset(**allargs)}')
-    self.settings(x0, y0, title=name, sep=' ', **kwargs)
+    self.settings(x0, y0, sep=' ', **kwargs)
     y0 -= self.sdy
     self.ruler(x0, y0)
     y0 -= self.rdy
@@ -463,7 +465,7 @@ if __name__ == '__main__':
 
   gen=ExtrudeTest(**gcodegen.GCodeGetArgs(args))
 
-  bridgeargs=dict(name="BrPA", linefn=gen.bridgeline, prepfn=gen.bridgeprep, Kf=gen.Kf, Kb=gen.Kb, Re=gen.Re, tests=(
+  bridgeargs=dict(name="BrPA1", linefn=gen.bridgeline, prepfn=gen.bridgeprep, Kf=gen.Kf, Kb=gen.Kb, Re=gen.Re, tests=(
     dict(ve=(0.1, 2.6), vl=10),
     dict(ve=(2.5, 7.5), vl=40, de0=(0.0,-2.0)),))
 

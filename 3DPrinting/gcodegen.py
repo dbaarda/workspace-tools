@@ -2462,7 +2462,7 @@ class GCodeGen(GCodeCmtMixin,GCodeGenBase):
         h or self.Lh,
         w or self.Lw,
         r*self.Lr)
-    hz = l.z + l.h + self.Zh
+    hz = l.z + l.h
     if self.z < hz:
       self.hopup(z=hz, de=0)
     self.add(l)
