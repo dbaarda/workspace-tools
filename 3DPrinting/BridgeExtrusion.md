@@ -109,6 +109,7 @@ And from these settings the following attributes can be derived;
 * Printer and layer settings
    * An - `nozzle_area` or `Dn^2 * pi/4`.
 * Normal line attributes
+   * Ll - width of a rectangle with the same Lh and area La.
    * Lp - normal `perimeter_offset` from line center.
    * La - normal `line_area`
 * Bridge line attributes
@@ -131,10 +132,12 @@ and either `line_width` or `line_spacing`. The relationship between
 `line_width`, `line_spacing`, and `line_area` for normal and anchor lines is;
 
 ```
+Ll = Lw - Lh*(1-pi/4)          ; Ll from Lw, and Lh
+Ll = Ls - Lh*(1-Lfw)*(1-pi/4)  ; Ll from Ls, Lh, and Lfw
 Ls = Lw - Lfw*Lh*(1-pi/4)      ; Ls from Lw, Lh, and Lfw
 Lw = Ls + Lfw*Lh*(1-pi/4)      ; Lw from Ls, Lh, and Lfw
 
-La = Lh*(Lw - Lh*(1 - pi/4))
+La = Lh*Ll = Lh*(Lw - Lh*(1 - pi/4))
 Lp = (Lw - Lfp*Lh*(1-pi/4))/2
 ```
 
