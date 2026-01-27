@@ -203,7 +203,7 @@ class ExtrudeTest(GCodeCfgMixin, gcodegen.GCodeGen):
     self.hopup()
 
   def measure(self, x0, y0, de0=0.0, dx=1.0, de=-0.1, n=60,
-              vx=10, ve=None, h=None):
+              vx=5, ve=None, h=None):
     """Measure pressure required to start or stop flow.
 
     This works by hopping down, adjusting pressure by de0, then doing n steps
@@ -213,9 +213,17 @@ class ExtrudeTest(GCodeCfgMixin, gcodegen.GCodeGen):
     moves.
     """
     self.hopdn(x0, y0, h=h, de=de0, vb=ve)
+    # We move 0.2mm forward after each wipe, but there is no wipe before the first iteration.
+    self.move(dx=0.2,v=vx)
     for i in range(n):
-      self.move(dx=dx,v=vx)
+      self.move(dx=dx-0.2,v=vx)
       self.retract(de=de,ve=ve)
+      # Do a wipe over the previously drawn line.
+      self.move(dx=-0.5,dy=0.25,v=60)
+      self.move(dy=-0.5,v=60)
+      self.move(dx=0.7,dy=0.25,v=60)
+    # Restore any retraction that is above Re.
+    self.restore(de=-(self.Re+de0+n*de))
     #self.hopup(de=0)
 
   def bridgeprep(self, x0, y0, sx=t0x, dx=tex, dy=tdy, nh=bnh, nw=bnw, h=None, w=None):
@@ -263,7 +271,7 @@ class ExtrudeTest(GCodeCfgMixin, gcodegen.GCodeGen):
       self.nextLayer(*base)
     self.Zh = nh * self.Lh
 
-  def bridgeline(self, x0, y0, dx=tex, dy=ldy, Bd=None, Bfw=1.0, Bfh=1.0, vl=None, ve=None, n=None, nh=bnh):
+  def bridgeline(self, x0, y0, dx=tex, dy=ldy, Bd=None, Bfw=0.0, Bfh=1.0, vl=None, ve=None, n=None, nh=bnh):
     """ Draw a bridge starting at x0,y0 of length dx with n crossings on top of supports with nh layers. """
     assert (Bd,ve,vl).count(None) <= 1, "Must specify at least 2 of Bd, ve, and vl."
     # Take into account 5mm gaps before/after bridge supports.
@@ -465,9 +473,9 @@ if __name__ == '__main__':
 
   gen=ExtrudeTest(**gcodegen.GCodeGetArgs(args))
 
-  bridgeargs=dict(name="BrPA1", linefn=gen.bridgeline, prepfn=gen.bridgeprep, Kf=gen.Kf, Kb=gen.Kb, Re=gen.Re, tests=(
+  bridgeargs=dict(name="BrPA2", linefn=gen.bridgeline, prepfn=gen.bridgeprep, Kf=gen.Kf, Kb=gen.Kb, Re=gen.Re, tests=(
     dict(ve=(0.1, 2.6), vl=10),
-    dict(ve=(2.5, 7.5), vl=40, de0=(0.0,-2.0)),))
+    dict(ve=(2.5, 5.0), vl=60, de0=(0.0,-1.0)),))
 
   gen.startFile()
   gen.doTests(**bridgeargs)
