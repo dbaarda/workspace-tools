@@ -287,7 +287,7 @@ class ExtrudeTest(GCodeCfgMixin, gcodegen.GCodeGen):
     Bs = Bd - Bfw*(Bd - Bl)
     Bh = Bd - Bfh*(Bd - Bl)
     Bz = (Bd - Bh)/2
-    vl,ve,h,w,r = self._getVlVehwr(vl=vl, ve=ve, h=Bh, w=Bs, r=Ba/(Bh*Bs))
+    vl,ve,h,w,r = self.getVlVehwr(vl=vl, ve=ve, h=Bh, w=Bs, r=Ba/(Bh*Bs))
     base = self.layer
     if not n:
       # default n for 5 secs of extrusion, up to as many bridges as will fit.
@@ -375,90 +375,6 @@ class ExtrudeTest(GCodeCfgMixin, gcodegen.GCodeGen):
       y-=self.ldy
     # Restore the config arguments after the test.
     #self.popconf()
-
-  def _getLineArgs(self, dl=None, de=None, dt=None, vl=None, ve=None, h=None, w=None, r=1.0):
-    """ Get dl, de, dt, vl, ve, h, w, and r from each other. """
-    # Use default layer vl if there is not enough to derive it.
-    if (vl,ve) == (None,None) and None in (dl,dt) and None in (de,dt):
-      vl = self.layer.Vp if r else self.layer.Vt
-    # Derive vl,dl, and dt from each other.
-    if None not in (dl,dt):
-      assert vl is None, "cannot specify vl with dl and dt"
-      vl = dl/dt if dl else 0.0
-    elif None not in (vl,dt):
-      assert dl is None, "cannot specify dl with vl and dt"
-      dl = vl*dt
-    elif None not in (vl,dl):
-      assert dt is None, " cannot specify dt with vl and dl"
-      dt = dl/vl if dl else 0.0
-    # Derive ve, de, and dt from each other.
-    if None not in (de,dt):
-      assert ve is None, "cannot specify ve with de and dt"
-      ve = de/dt if de else 0.0
-    elif None not in (ve,dt):
-      assert de is None, "cannot specify de with ve and dt"
-      de = ve*dt
-    elif None not in (ve,de):
-      assert dt is None, "cannot specify dt with ve and de"
-      dt = de/ve if de else 0.0
-      # Also set derived vl and dl from dt.
-      if vl is None and dl is not None:
-        vl = dl/dt
-      elif dl is None and vl is not None:
-        dl = vl*dt
-    # Derive h,w,r,vl,ve from each other.
-    if vl and ve is not None:
-      assert None in (h,w,r), 'cannot specify all h,w,r with vl and ve'
-      if h is None: h = self.h if None in (w,r) else ve*self.Fa/(vl*w*r)
-      if w is None: w = self.w if None in (h,r) else ve*self.Fa/(vl*h*r)
-      if r is None: r = ve*self.Fa/(vl*h*w)
-    # Set h,w to defaults because we don't have enough to derive them.
-    else:
-      assert r is not None, 'require r if without ve and vl'
-      if h is None: h = self.h
-      if w is None: w = self.wl
-    # Derive vl,de,dt from ve and dl.
-    if vl is None:
-      assert ve is not None, 'should have ve if without vl'
-      assert r, 'require r!=0 to derive vl from ve'
-      vl = ve*self.Fa/(h*w*r)
-    if ve is None:
-      assert vl is not None, 'should have vl if without ve'
-      ve = vl*h*w*r/self.Fa
-    assert abs(ve*self.Fa - vl*h*w*r) < 0.0001
-    # Set dt from dl/vl or de/ve if we still don't have it.
-    if dt is None:
-      if vl and dl is not None:
-        dt=dl/vl
-      elif ve and de is not None:
-        dt=de/ve
-    # Set dl and de from dt if we still don't have them.
-    if dt is not None:
-      if dl is None:
-        dl = vl*dt
-      if de is None:
-        de = ve*dt
-    assert (dl,de,dt) == (None, None, None) or abs(de*self.Fa - dl*h*w*r) < 0.0001
-    return dl,de,dt,vl,ve,h,w,r
-
-  def _getVlVehwr(self, vl=None, ve=None, h=None, w=None, r=1.0):
-    """ Get vl, ve, h, w, and r from each other. """
-    assert any((ve,vl)), 'must specify at least ve or vl'
-    if vl is None:
-      if h is None: h = self.layer.h
-      if w is None: w = self.layer.w
-      # figure out vl from ve, w, h, and r.
-      vl = ve*self.Fa/(h*w*r)
-    if ve is None:
-      if h is None: h = self.layer.h
-      if w is None: w = self.layer.w
-      # figure out ve from vl, w, h, and r.
-      ve = h*w*r*vl/self.Fa
-    # Set h and w
-    if h is None: h = self.layer.h if w is None else ve*self.Fa/(w*r*vl)
-    if w is None: w = ve*self.Fa/(h*r*vl)
-    assert abs(ve*self.Fa - h*w*r*vl) < 0.0001
-    return vl,ve,h,w,r
 
 
 if __name__ == '__main__':

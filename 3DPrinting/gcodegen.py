@@ -1936,7 +1936,363 @@ class GCodeCmtMixin(GCodeGenBase):
     self.add(self.Footer[self.Slicer])
 
 
-class GCodeGen(GCodeCmtMixin,GCodeGenBase):
+class GCodeDrawMixin(GCodeGenBase):
+  """ A GCodeGen mixin to add advanced drawing primatives. """
+
+  def preExt(self,x0,y0,x1,y1,le=120.0, lw=60.0, m=10.0, ve=20.0, vw=20, h=0.2, r=4):
+    """Preextrude around a box with margin m.
+
+    This extrudes for `le` mm at speed `ve` mm/s, then wipes for another `lw`
+    mm at speed `vw` mm/s without extruding, and finally if we did a wipe
+    another 10mm at 1mm/s to stick the last bit of wipe ooze to the plate.
+    This should leave the nozzle primed with no residual advance pressure, and
+    prevent the wipe from becoming a big piece of stringing that messes with
+    the print.
+
+    Set `lw=0` to turn off the wipe and stick phases. Note this includes a
+    hopdn before and hopup at the end.
+    """
+    self.cmt('structure:pre-extrude')
+    x0,x1 = sorted([x0,x1])
+    y0,y1 = sorted([y0,y1])
+    x0-=m
+    x1+=m
+    y0-=m
+    y1+=m
+    x, y = x0, y0
+    l, v = le, ve
+    self.hopdn(x=x,y=y,h=h)
+    while l:
+      if self.x == x0 and self.y<y1:
+        dy = min(y1 - self.y, l)
+        self.draw(dy=dy,v=v,r=r)
+        l-=dy
+      elif self.y == y1 and self.x < x1:
+        dx = min(x1 - self.x, l)
+        self.draw(dx=dx,v=v,r=r)
+        l-=dx
+      elif self.x == x1 and self.y > y0:
+        dy = min(self.y - y0, l)
+        self.draw(dy=-dy, v=v, r=r)
+        l-=dy
+      else:
+        dx = min(self.x - x0, l)
+        self.draw(dx=-dx, v=v, r=r)
+        l-=dx
+      if (self.x, self.y) == (x1,y1):
+        # Reached top-right, widen y0,y1
+        y0-=2
+        y1+=2
+      elif (self.x, self.y) == (x1,y0):
+        # reached bottom-right, widen x0,x1
+        x0-=2
+        x1+=2
+      if l == 0 and r > 0:
+        # We have finished extruding, go another lw distance without extruding
+        # to relieve pressure and wipe ooze.
+        l, v, r = lw, vw, 0
+      elif l == 0 and r == 0 and v>1 and lw:
+        # We have finished the wipe, go another 10mm at 1mm/s to stick the
+        # final ooze to the plate.
+        l, v, r = 10,1,0
+    self.hopup()
+
+  def fbox(self,x0,y0,x1,y1,shells=None,**kwargs):
+    """ Fill a box with frame lines. """
+    if shells is None: shells = inf
+    w = kwargs.get('w', self.layer.w)
+    # make sure x0<x1 and y0<y1
+    x0,x1 = sorted((x0,x1))
+    y0,y1 = sorted((y0,y1))
+    x0+=w/2
+    x1-=w/2
+    y0+=w/2
+    y1-=w/2
+    s=0
+    self.hopdn(x0,y0)
+    while x1-x0>2*w and y1-y0>2*w and s<shells:
+      if shells==0:
+        self.cmt('structure:shell-outer')
+      elif s==1:
+        self.cmt('structure:shell-inner')
+      self.draw(x0,y1,**kwargs)
+      self.draw(x1,y1,**kwargs)
+      self.draw(x1,y0,**kwargs)
+      self.draw(x0+w,y0,**kwargs)
+      x0+=w
+      x1-=w
+      y0+=w
+      y1-=w
+      s+=1
+    if y1-y0 > 2*w and s<shells:
+      fw=x1-x0
+      self.move(x=(x0+x1)/2,y=y0+(fw-w)/2)
+      self.draw(y=y1-(fw-w)/2, w=fw)
+    elif s<shells:
+      fw=y1-y0
+      self.move(x=x0+(fw-w)/2,y=(y1+y0)/2)
+      self.draw(x=x1-(fw-w)/2, w=fw)
+    self.hopup()
+
+  def dbox(self,x0,y0,x1,y1,shells=3,**kwargs):
+    """ fill a box with diagonal lines. """
+    w = kwargs.get('w', self.layer.w)
+    x0,x1 = sorted((x0,x1))
+    y0,y1 = sorted((y0,y1))
+    if shells:
+      self.fbox(x0,y0,x1,y1,shells,**kwargs)
+    b=(shells+0.5)*w
+    x0,y0,x1,y1 = getnear(x0+b), getnear(y0+b), getnear(x1-b), getnear(y1-b)
+    self.cmt('structure:infill-solid')
+    dx=w*2**0.5
+    # Diagonal direction depends on odd vs even layers.
+    if self.layer.n % 2:
+      # initialize left and right diagonal ends at top left corner.
+      lx,ly=rx,ry=x0,y1
+      dy = -dx
+    else:
+      # initialize left and right diagonal ends at bottom left corner.
+      lx,ly=rx,ry=x0,y0
+      dy = dx
+    self.hopdn(rx,ry)
+    while lx<x1:
+      if rx<x1:
+        # right diagonal end is following top or bottom edge right.
+        rx+=dx
+        if rx>x1:
+          # hit the right corner, start going along right side.
+          if ry == y0:
+            ry+=(rx-x1)
+          else:
+            ry-=(rx-x1)
+          rx=x1
+      else:
+        # right diagonal end is following right side.
+        ry+=dy
+        ry=clamp(ry, y0, y1)
+      if lx==x0:
+        # left diagonal end is following left side.
+        ly+=dy
+        if ly<y0:
+          # hit the bottom corner, start following bottom.
+          lx+=y0-ly
+          ly=y0
+        elif y1<ly:
+          # hit the top corner, start following top.
+          lx+=ly-y1
+          ly=y1
+      else:
+        # left diagonal end is following the top.
+        lx+=dx
+        if lx>x1: lx=x1
+      #self.log(f'pos={{(x,y)}} l={(lx,ly)} r={(rx,ry)}')
+      if self.y == ry or self.x == rx or (rx - self.x) < (self.x - lx):
+        # starting diagonal from right point.
+        self.draw(x=rx,y=ry,**kwargs)
+        self.draw(x=lx,y=ly,**kwargs)
+      else:
+        # starting diagonal from left point.
+        self.draw(x=lx,y=ly,**kwargs)
+        self.draw(x=rx,y=ry,**kwargs)
+    self.hopup()
+
+  def dot(self, x, y, r=1.0, **kwargs):
+    # Note this doesn't seem to render anything in FlashPrint.
+    self.hopdn(x,y)
+    # Draw a tiny line so FlashPrint renders something.
+    self.draw(dy=-0.2,r=r, **kwargs)
+    self.hopup()
+
+  def line(self, l, r=1.0, **kwargs):
+    """Draw a line from a sequence of points.
+
+    l is a sequence of tuples or dicts that are the *args or **kwargs passed
+    to dot() (if there is only one point) or hopdn() and each draw().
+    """
+    kwargs |= dict(r=r)
+    p0 = l[0]
+    # If there is only one point, draw a dot instead.
+    if len(l) == 1 or (len(l) == 2 and l[0] == l[1]):
+      pargs, pkwargs = (p0,kwargs) if isinstance(p0,tuple) else ((), kwargs|p0)
+      return self.dot(*pargs,**pkwargs)
+    else:
+      # Don't include kwargs in args for the first hopdn.
+      pargs, pkwargs = (p0,{}) if isinstance(p0,tuple) else ((), p0)
+      self.hopdn(*pargs,**pkwargs)
+    for pn in l[1:]:
+      pargs, pkwargs = (pn,kwargs) if isinstance(pn,tuple) else ((), kwargs|pn)
+      self.draw(*pargs,**pkwargs)
+    self.hopup()
+
+  def text(self, t, x0, y0, x1=None, y1=None, fsize=5, angle=0, **kwargs):
+    self.cmt('TYPE:Outer wall')
+    self.log(f'text {[(x0,y0),(x1,y1)]} {fsize=} {angle=} {t!r}')
+    w = kwargs.get('w', self.layer.w)
+    v = vtext.ptext(t,x0,y0,x1,y1,fsize,angle,w)
+    for l in v:
+      self.line(l,**kwargs)
+
+  def lfw2r(lfw=1.0, h=None, w=None):
+    """ Calculate r for a given lfw overlap factor."""
+    if h is None: h = self.hl
+    if w is None: w = self.wl
+    l = w - h*(1-lfw)*(1-pi/4)
+    return l / w
+
+  def r2lfw(r=1.0, h=None, w=None):
+    """ Calculate r for a given lfw overlap factor."""
+    if h is None: h = self.hl
+    if w is None: w = self.wl
+    return 1 - w*(1-r)/(h*(1-pi/4))
+
+  def getVlVehwr(self, vl=None, ve=None, h=None, w=None, r=1.0):
+    """ Get vl, ve, h, w, and r from each other. """
+    if vl and ve is not None:
+      if h is None: h = self.hl if None in (w,r) else ve*self.Fa/(vl*w*r)
+      if w is None: w = self.wl if None in (h,r) else ve*self.Fa/(vl*h*r)
+      if r is None: r = ve*self.Fa/(vl*h*w)
+    # Set h,w to defaults because we don't have enough to derive them.
+    else:
+      assert r is not None, 'require r if without ve and vl'
+      if h is None: h = self.hl
+      if w is None: w = self.wl
+    # Derive vl from ve.
+    if vl is None:
+      assert ve is not None, 'should have ve if without vl'
+      assert r, 'require r!=0 to derive vl from ve'
+      vl = ve*self.Fa/(h*w*r)
+    # Derive ve from vl.
+    if ve is None:
+      assert vl is not None, 'should have vl if without ve'
+      ve = vl*h*w*r/self.Fa
+    assert isneareq(ve*self.Fa, vl*h*w*r), 'specified contradictory vl,ve,h,w,r'
+    return vl,ve,h,w,r
+
+  def getLineArgs(self, dl=None, de=None, dt=None, vl=None, ve=None, h=None, w=None, r=1.0):
+    """ Get dl, de, dt, vl, ve, h, w, and r from each other. """
+    # Use default layer vl if there is not enough to derive it.
+    if (vl,ve) == (None,None) and None in (dl,dt) and None in (de,dt):
+      vl = self.layer.Vp if r else self.layer.Vt
+    # Derive vl,dl, and dt from each other.
+    if None not in (dl,dt):
+      assert vl is None, "cannot specify vl with dl and dt"
+      vl = dl/dt if dl else 0.0
+    elif None not in (vl,dt):
+      assert dl is None, "cannot specify dl with vl and dt"
+      dl = vl*dt
+    elif None not in (vl,dl):
+      assert dt is None, " cannot specify dt with vl and dl"
+      dt = dl/vl if dl else 0.0
+    # Derive ve, de, and dt from each other.
+    if None not in (de,dt):
+      assert ve is None, "cannot specify ve with de and dt"
+      ve = de/dt if de else 0.0
+    elif None not in (ve,dt):
+      assert de is None, "cannot specify de with ve and dt"
+      de = ve*dt
+    elif None not in (ve,de):
+      assert dt is None, "cannot specify dt with ve and de"
+      dt = de/ve if de else 0.0
+      # Also set derived vl and dl from dt.
+      if vl is None and dl is not None:
+        vl = dl/dt
+      elif dl is None and vl is not None:
+        dl = vl*dt
+    # Derive vl,ve,h,w,r from each other.
+    vl, ve, h, w, r = self.getVlVehwr(vl, ve, h, w, r)
+    # Set dt from dl/vl or de/ve if we still don't have it.
+    if dt is None:
+      if vl and dl is not None:
+        dt=dl/vl
+      elif ve and de is not None:
+        dt=de/ve
+    # Set dl and de from dt if we still don't have them.
+    if dt is not None:
+      if dl is None:
+        dl = vl*dt
+      if de is None:
+        de = ve*dt
+    assert (dl,de,dt) == (None, None, None) or abs(de*self.Fa - dl*h*w*r) < 0.0001
+    return dl,de,dt,vl,ve,h,w,r
+
+  def rc2xy(self, R=None, C=None, dR=None, dC=None, x0=0.0, y0=0.0):
+    """Get x,y from R,C or dR,dC.
+
+    Note R and C default to the current R,C position with optional dR,dC offsets.
+    """
+    if dR is None: dR = 0.0
+    if dC is None: dC = 0.0
+    if R is None: R = dist((x0, y0), (self.x, self.y)) + dR
+    if C is None: C = atan2(self.y-y0, self.x-x0)/(2*pi) + dC
+    a = C*2*pi
+    return x0 + R*cos(a), y0 + R*sin(a)
+
+  def xy2rc(self, x=None, y=None, dx=None, dy=None, x0=0.0, y0=0.0):
+    """Get R,C from x,y or dx, dy.
+
+    Note x and y default to the current x,y position with optional dx,dy offsets.
+    """
+    if dx is None: dx = 0.0
+    if dy is None: dy = 0.0
+    if x is None: x = self.x + dx
+    if y is None: y = self.y + dy
+    return dist((x0, y0), (x, y)), atan2(y-y0, x-x0)/(2*pi)
+
+  def drawrc(self, R=None, C=None, dR=None, dC=None, x0=0.0, y0=0.0, **kwargs):
+    """ Draw a straight line to an RC point. """
+    x,y=self.rc2xy(R,C,dR,dC,x0,y0)
+    self.draw(x=x,y=y,**kwargs)
+
+  def hopdnrc(self, R=None, C=None, dR=None, dC=None, x0=0.0, y0=0.0, **kwargs):
+    x, y = self.rc2xy(R, C, dR, dC, x0, y0)
+    self.hopdn(x=x,y=y,**kwargs)
+
+  def spiral(self, R=None, C=None, dR=None, dC=None, dRdC=None, x0=0.0, y0=0.0,
+      dl=None, de=None, dt=None, vl=None, ve=None, h=None, w=None, r=1.0, pe=None):
+    """ Draw a spiral around x0,y0.
+
+    This draws a spiral from the current R0,C0 position to a position R,C. The
+    position R,C can be specified using any sufficient combination of
+    R,C,dR,dC,dRdC,dl.
+    """
+    R0,C0 = self.xy2rc(x0=x0,y0=y0)
+    if dl == 0:
+      # This is explicitly not a draw or move.
+      if h is not None:
+        # hop up then down to compensate for backlash.
+        self.move(h=h+0.4)
+        self.hopdn(h=h, de=de, pe=pe, ve=ve)
+      else:
+        self.retract(de=de, pe=pe, ve=ve)
+      return
+    R1,C1 = R,C
+    if R1 is not None: dR = R1 - R0
+    if C1 is not None: dC = C1 - C0
+    if dR is None and None not in (dC, dRdC): dR = dC*dRdC
+    if dC is None and dR is not None and dRdC: dC = dR/dRdC
+    if dR is not None and dC is not None: dRdC = dR/dC
+    # Get dl from dR and dC if provided.
+    if None not in (dR,dC):
+      assert dl is None, 'cannot specify dl with dR,dC'
+      dl = dC*pi*(2*R0 + dR)
+    dl, de, dt, vl, ve, h, w, r = self.getLineArgs(dl,de,dt,vl,ve,h,w,r)
+    # Get dC from dl.
+    if dC is None:
+      assert dl is not None, 'need to specify enough for dl without dC'
+      assert dRdC is not None, 'need to specify dRdC with dl'
+      # Solve dRdC*dC^2 + 2*R0*dC - dl/pi = 0 and take the smaller result.
+      dC = min(solvequad(a=dRdC, b=2*R0, c=-dl/pi))
+    if dR is None: dR = dC*dRdC
+    self.log(f'spiral RC0=({R0:.1f},{C0:.3f}) dRC=({dR:.1f},{dC:.3f}) {dl=:.1f}@{vl:.0f} {de=:.3f}@{ve:.1f} l={h:.2f}x{w:.2f}x{r:.2f}')
+    R, C, C1, dC = R0, C0, C0+dC, 1/72
+    while C < C1:
+      dC = min(dC, C1 - C)
+      C += dC
+      R += dC*dRdC
+      self.drawrc(R, C, x0=x0, y0=y0, v=vl, w=w, r=r)
+
+
+class GCodeGen(GCodeDrawMixin, GCodeCmtMixin, GCodeGenBase):
   """ GCodeGen gcode generator.
 
   There are many helper methods that generate and add() commands to do various
@@ -2588,14 +2944,14 @@ class GCodeGen(GCodeCmtMixin,GCodeGenBase):
       x=None, y=None, z=None, e=None,
       dx=None, dy=None, dz=None, de=None,
       vt=None, vz=None, ve=None, vb=None,
-      s=1.0, h=None, pe=None):
+      s=1.0, h=None, w=None, r=None, pe=None):
     """ Do a move, drop, and restore. """
     # default hop down is to layer height.
     if h is None: h = self.layer.h
     if (x, y, dx, dy) != (None, None, None, None):
       self.move(x=x, y=y, dx=dx, dy=dy, v=vt, s=s)
     self.move(z=z, dz=dz, v=vz, h=h, s=s)
-    self.restore(e=e, de=de, vb=vb, s=s, pe=pe)
+    self.restore(e=e, de=de, vb=vb, s=s, pe=pe, h=h, w=w, r=r)
 
   def wait(self, t):
     """ Do a pause. """
@@ -2776,189 +3132,6 @@ class GCodeGen(GCodeCmtMixin,GCodeGenBase):
   def filestats(self):
     self.log('file finished with {layer.n} layers.')
     self.log('{str(stats).replace(nl,nl+";")}')
-
-  def preExt(self,x0,y0,x1,y1,le=120.0, lw=60.0, m=10.0, ve=20.0, vw=20, h=0.2, r=4):
-    """Preextrude around a box with margin m.
-
-    This extrudes for `le` mm at speed `ve` mm/s, then wipes for another `lw`
-    mm at speed `vw` mm/s without extruding, and finally if we did a wipe
-    another 10mm at 1mm/s to stick the last bit of wipe ooze to the plate.
-    This should leave the nozzle primed with no residual advance pressure, and
-    prevent the wipe from becoming a big piece of stringing that messes with
-    the print.
-
-    Set `lw=0` to turn off the wipe and stick phases. Note this includes a
-    hopdn before and hopup at the end.
-    """
-    self.cmt('structure:pre-extrude')
-    x0,x1 = sorted([x0,x1])
-    y0,y1 = sorted([y0,y1])
-    x0-=m
-    x1+=m
-    y0-=m
-    y1+=m
-    x, y = x0, y0
-    l, v = le, ve
-    self.hopdn(x=x,y=y,h=h)
-    while l:
-      if self.x == x0 and self.y<y1:
-        dy = min(y1 - self.y, l)
-        self.draw(dy=dy,v=v,r=r)
-        l-=dy
-      elif self.y == y1 and self.x < x1:
-        dx = min(x1 - self.x, l)
-        self.draw(dx=dx,v=v,r=r)
-        l-=dx
-      elif self.x == x1 and self.y > y0:
-        dy = min(self.y - y0, l)
-        self.draw(dy=-dy, v=v, r=r)
-        l-=dy
-      else:
-        dx = min(self.x - x0, l)
-        self.draw(dx=-dx, v=v, r=r)
-        l-=dx
-      if (self.x, self.y) == (x1,y1):
-        # Reached top-right, widen y0,y1
-        y0-=2
-        y1+=2
-      elif (self.x, self.y) == (x1,y0):
-        # reached bottom-right, widen x0,x1
-        x0-=2
-        x1+=2
-      if l == 0 and r > 0:
-        # We have finished extruding, go another lw distance without extruding
-        # to relieve pressure and wipe ooze.
-        l, v, r = lw, vw, 0
-      elif l == 0 and r == 0 and v>1 and lw:
-        # We have finished the wipe, go another 10mm at 1mm/s to stick the
-        # final ooze to the plate.
-        l, v, r = 10,1,0
-    self.hopup()
-
-  def fbox(self,x0,y0,x1,y1,shells=None,**kwargs):
-    """ Fill a box with frame lines. """
-    if shells is None: shells = inf
-    w = kwargs.get('w', self.layer.w)
-    # make sure x0<x1 and y0<y1
-    x0,x1 = sorted((x0,x1))
-    y0,y1 = sorted((y0,y1))
-    x0+=w/2
-    x1-=w/2
-    y0+=w/2
-    y1-=w/2
-    s=0
-    self.hopdn(x0,y0)
-    while x1-x0>2*w and y1-y0>2*w and s<shells:
-      if shells==0:
-        self.cmt('structure:shell-outer')
-      elif s==1:
-        self.cmt('structure:shell-inner')
-      self.draw(x0,y1,**kwargs)
-      self.draw(x1,y1,**kwargs)
-      self.draw(x1,y0,**kwargs)
-      self.draw(x0+w,y0,**kwargs)
-      x0+=w
-      x1-=w
-      y0+=w
-      y1-=w
-      s+=1
-    if y1-y0 > 2*w and s<shells:
-      fw=x1-x0
-      self.move(x=(x0+x1)/2,y=y0+(fw-w)/2)
-      self.draw(y=y1-(fw-w)/2, w=fw)
-    elif s<shells:
-      fw=y1-y0
-      self.move(x=x0+(fw-w)/2,y=(y1+y0)/2)
-      self.draw(x=x1-(fw-w)/2, w=fw)
-    self.hopup()
-
-  def dbox(self,x0,y0,x1,y1,shells=3,**kwargs):
-    """ fill a box with diagonal lines. """
-    w = kwargs.get('w', self.layer.w)
-    x0,x1 = sorted((x0,x1))
-    y0,y1 = sorted((y0,y1))
-    if shells:
-      self.fbox(x0,y0,x1,y1,shells,**kwargs)
-    b=(shells+0.5)*w
-    x0,y0,x1,y1 = getnear(x0+b), getnear(y0+b), getnear(x1-b), getnear(y1-b)
-    self.cmt('structure:infill-solid')
-    dx=w*2**0.5
-    # Diagonal direction depends on odd vs even layers.
-    if self.layer.n % 2:
-      # initialize left and right diagonal ends at top left corner.
-      lx,ly=rx,ry=x0,y1
-      dy = -dx
-    else:
-      # initialize left and right diagonal ends at bottom left corner.
-      lx,ly=rx,ry=x0,y0
-      dy = dx
-    self.hopdn(rx,ry)
-    while lx<x1:
-      if rx<x1:
-        # right diagonal end is following top or bottom edge right.
-        rx+=dx
-        if rx>x1:
-          # hit the right corner, start going along right side.
-          if ry == y0:
-            ry+=(rx-x1)
-          else:
-            ry-=(rx-x1)
-          rx=x1
-      else:
-        # right diagonal end is following right side.
-        ry+=dy
-        ry=clamp(ry, y0, y1)
-      if lx==x0:
-        # left diagonal end is following left side.
-        ly+=dy
-        if ly<y0:
-          # hit the bottom corner, start following bottom.
-          lx+=y0-ly
-          ly=y0
-        elif y1<ly:
-          # hit the top corner, start following top.
-          lx+=ly-y1
-          ly=y1
-      else:
-        # left diagonal end is following the top.
-        lx+=dx
-        if lx>x1: lx=x1
-      #self.log(f'pos={{(x,y)}} l={(lx,ly)} r={(rx,ry)}')
-      if self.y == ry or self.x == rx or (rx - self.x) < (self.x - lx):
-        # starting diagonal from right point.
-        self.draw(x=rx,y=ry,**kwargs)
-        self.draw(x=lx,y=ly,**kwargs)
-      else:
-        # starting diagonal from left point.
-        self.draw(x=lx,y=ly,**kwargs)
-        self.draw(x=rx,y=ry,**kwargs)
-    self.hopup()
-
-  def dot(self, x, y, r=1.0, **kwargs):
-    # Note this doesn't seem to render anything in FlashPrint.
-    self.hopdn(x,y)
-    # Draw a tiny line so FlashPrint renders something.
-    self.draw(dy=-0.2,r=r, **kwargs)
-    self.hopup()
-
-  def line(self, l, r=1.0, **kwargs):
-    """Draw a line from a sequence of points."""
-    x0,y0 = l[0]
-    # If there is only one point, draw a dot instead.
-    if len(l) == 1 or (len(l) == 2 and l[0] == l[1]):
-      return self.dot(x0, y0, r, **kwargs)
-    self.hopdn(x0,y0)
-    for x,y in l[1:]:
-      self.draw(x,y, r=r, **kwargs)
-    self.hopup()
-
-  def text(self, t, x0, y0, x1=None, y1=None, fsize=5, angle=0, **kwargs):
-    self.cmt('TYPE:Outer wall')
-    self.log(f'text {[(x0,y0),(x1,y1)]} {fsize=} {angle=} {t!r}')
-    w = kwargs.get('w', self.layer.w)
-    v = vtext.ptext(t,x0,y0,x1,y1,fsize,angle,w)
-    for l in v:
-      self.line(l,**kwargs)
 
 
 def RangeType(min=-inf, max=inf):
