@@ -166,7 +166,7 @@ Re=3.0
 """
 import argparse
 import sys
-from math import e, pi, inf, sqrt, copysign
+from math import e, pi, inf, sqrt, copysign, sin, cos, atan2, dist
 from typing import NamedTuple
 from functools import cached_property
 from pprint import *
@@ -2009,7 +2009,7 @@ class GCodeDrawMixin(GCodeGenBase):
     y0+=w/2
     y1-=w/2
     s=0
-    self.hopdn(x0,y0)
+    self.hopdn(x0,y0,**kwargs)
     while x1-x0>2*w and y1-y0>2*w and s<shells:
       if shells==0:
         self.cmt('structure:shell-outer')
@@ -2054,7 +2054,7 @@ class GCodeDrawMixin(GCodeGenBase):
       # initialize left and right diagonal ends at bottom left corner.
       lx,ly=rx,ry=x0,y0
       dy = dx
-    self.hopdn(rx,ry)
+    self.hopdn(rx,ry,**kwargs)
     while lx<x1:
       if rx<x1:
         # right diagonal end is following top or bottom edge right.
@@ -2098,9 +2098,9 @@ class GCodeDrawMixin(GCodeGenBase):
 
   def dot(self, x, y, r=1.0, **kwargs):
     # Note this doesn't seem to render anything in FlashPrint.
-    self.hopdn(x,y)
+    self.hopdn(x, y, r=r, **kwargs)
     # Draw a tiny line so FlashPrint renders something.
-    self.draw(dy=-0.2,r=r, **kwargs)
+    self.draw(dy=-0.2, r=r, **kwargs)
     self.hopup()
 
   def line(self, l, r=1.0, **kwargs):
@@ -2111,13 +2111,11 @@ class GCodeDrawMixin(GCodeGenBase):
     """
     kwargs |= dict(r=r)
     p0 = l[0]
+    pargs, pkwargs = (p0,kwargs) if isinstance(p0,tuple) else ((), kwargs|p0)
     # If there is only one point, draw a dot instead.
     if len(l) == 1 or (len(l) == 2 and l[0] == l[1]):
-      pargs, pkwargs = (p0,kwargs) if isinstance(p0,tuple) else ((), kwargs|p0)
       return self.dot(*pargs,**pkwargs)
     else:
-      # Don't include kwargs in args for the first hopdn.
-      pargs, pkwargs = (p0,{}) if isinstance(p0,tuple) else ((), p0)
       self.hopdn(*pargs,**pkwargs)
     for pn in l[1:]:
       pargs, pkwargs = (pn,kwargs) if isinstance(pn,tuple) else ((), kwargs|pn)
@@ -2132,14 +2130,14 @@ class GCodeDrawMixin(GCodeGenBase):
     for l in v:
       self.line(l,**kwargs)
 
-  def lfw2r(lfw=1.0, h=None, w=None):
+  def lfw2r(self, lfw=1.0, h=None, w=None):
     """ Calculate r for a given lfw overlap factor."""
     if h is None: h = self.hl
     if w is None: w = self.wl
     l = w - h*(1-lfw)*(1-pi/4)
     return l / w
 
-  def r2lfw(r=1.0, h=None, w=None):
+  def r2lfw(self, r=1.0, h=None, w=None):
     """ Calculate r for a given lfw overlap factor."""
     if h is None: h = self.hl
     if w is None: w = self.wl
@@ -2248,7 +2246,7 @@ class GCodeDrawMixin(GCodeGenBase):
     self.hopdn(x=x,y=y,**kwargs)
 
   def spiral(self, R=None, C=None, dR=None, dC=None, dRdC=None, x0=0.0, y0=0.0,
-      dl=None, de=None, dt=None, vl=None, ve=None, h=None, w=None, r=1.0, pe=None):
+      dl=None, de=None, dt=None, vl=None, ve=None, h=None, w=None, r=1.0):
     """ Draw a spiral around x0,y0.
 
     This draws a spiral from the current R0,C0 position to a position R,C. The
@@ -2256,15 +2254,6 @@ class GCodeDrawMixin(GCodeGenBase):
     R,C,dR,dC,dRdC,dl.
     """
     R0,C0 = self.xy2rc(x0=x0,y0=y0)
-    if dl == 0:
-      # This is explicitly not a draw or move.
-      if h is not None:
-        # hop up then down to compensate for backlash.
-        self.move(h=h+0.4)
-        self.hopdn(h=h, de=de, pe=pe, ve=ve)
-      else:
-        self.retract(de=de, pe=pe, ve=ve)
-      return
     R1,C1 = R,C
     if R1 is not None: dR = R1 - R0
     if C1 is not None: dC = C1 - C0
@@ -2860,7 +2849,7 @@ class GCodeGen(GCodeDrawMixin, GCodeCmtMixin, GCodeGenBase):
     if w is None: w = self.wl
     # r is scaled by layer.r so changing layer.r scales all draws.
     r = self.layer.r * r
-    de = e - self.e if e is not None else de if de is not None else self.GMove._el(dl,w,h*r)
+    de = e - self.e if e is not None else de if de is not None else self.GMove._el(dl,h,w*r)
     if v is None:
       if de:
         v = s * (self.layer.Vp if dl else self.layer.Ve if de < 0 else self.layer.Vb)
@@ -2887,13 +2876,13 @@ class GCodeGen(GCodeDrawMixin, GCodeCmtMixin, GCodeGenBase):
     value so it draws instead of travels by default.
     """
     # For defaults use last move's h,w,r if it was a draw, else use layer's.
-    if h is None: h = self.hl if self.rl else self.layer.h
-    if w is None: w = self.wl if self.rl else self.layer.w
-    if r is None: r = self.rl if self.rl else 1.0
-    # Note we need r before scaling by layer.r.
-    self.move(x, y, z, h=h, w=w, r=r/self.layer.r, **kwargs)
+    if h is None: h = self.hl if self.rl>0 else self.layer.h
+    if w is None: w = self.wl if self.rl>0 else self.layer.w
+    # Note we need r defaults before scaling by layer.r.
+    if r is None: r = (self.rl if self.rl>0 else 1.0)/self.layer.r
+    self.move(x, y, z, h=h, w=w, r=r, **kwargs)
 
-  def retract(self, e=None, de=None, ve=None, s=1.0, pe=None):
+  def retract(self, e=None, de=None, ve=None, s=1.0):
     """Do a retract.
 
     This is a retraction that by default relieves any pressure and retracts to
@@ -2901,57 +2890,46 @@ class GCodeGen(GCodeDrawMixin, GCodeCmtMixin, GCodeGenBase):
     ignoring the current pressure. Note compensation for advance pressure is
     adjusted in post processing if enabled.
     """
-    #if pe is None: pe = -self.Re
-    #if de is None: de = -self.pe + pe
-    if de is None:
-      de = -self.Re if pe is None else -self.pe + pe
-    # If dynamic retraction is enabled and de is zero or more, set de to a
-    # tiny retraction so that it doesn't get optimized away or seen as a
-    # restore and can be dynamically adjusted later.
-    if self.dynret and de >= 0: de = -0.00001
+    if de is None: de = -self.Re
     self.move(e=e, de=de, v=ve, s=s)
 
-  def restore(self, e=None, de=None, vb=None, s=1.0, pe=None, h=None, w=None, r=None):
+  def restore(self, e=None, de=None, vb=None, s=1.0, h=None, w=None, r=None):
     """ Do a restore.
 
-    This is a restore that by default reverts any retraction and restores
-    pressure to pe which defaults to 0.0. Setting e or de will do a fixed
-    restore ignoring current retraction. Note adding starting dots and
-    compensating for advance pressure is added in post-processing if enabled.
+    This is a restore that by default restores by Re plus a starting dot.
+    Setting e or de will do a fixed restore without adding a starting dot.
+    Note compensating for advance pressure is added in post-processing if
+    enabled.
     """
-    #if pe is None: pe = 0.0
-    #if de is None: de = -self.pe + pe
-    if de is None:
-      de = self.Re if pe is None else -self.pe + pe
-    # If dynamic retraction is enabled and de is zero or less, set de to a
-    # tiny restore so that it doesn't get optimized away or seen as a
-    # retraction and can be dynamicly adjusted later.
-    if self.dynret and de <= 0: de = 0.00001
+    if h is None: h = self.layer.h
+    if w is None: w = self.layer.w
+    if r is None: r = 1.0
+    if de is None: de = self.Re + self.GMove._eb(h,w*r*self.layer.r)
     self.draw(dz=0, e=e, de=de, v=vb, s=s, h=h, w=w, r=r)
 
   def hopup(self,
       x=None, y=None, z=None, e=None,
       dx=None, dy=None, dz=None, de=None,
       vt=None, vz=None, ve=None, vb=None,
-      s=1.0, h=None, pe=None):
+      s=1.0, h=None):
     """ Do a retract and raise. """
     # default hopup is to Zh above layer height.
     if h is None: h = self.layer.h + self.Zh
-    self.retract(e=e, de=de, ve=ve, s=s, pe=pe)
+    self.retract(e=e, de=de, ve=ve, s=s)
     self.move(z=z, dz=dz, v=vz, s=s, h=h)
 
   def hopdn(self,
       x=None, y=None, z=None, e=None,
       dx=None, dy=None, dz=None, de=None,
       vt=None, vz=None, ve=None, vb=None,
-      s=1.0, h=None, w=None, r=None, pe=None):
+      v=None, s=1.0, h=None, w=None, r=None):
     """ Do a move, drop, and restore. """
     # default hop down is to layer height.
     if h is None: h = self.layer.h
     if (x, y, dx, dy) != (None, None, None, None):
       self.move(x=x, y=y, dx=dx, dy=dy, v=vt, s=s)
     self.move(z=z, dz=dz, v=vz, h=h, s=s)
-    self.restore(e=e, de=de, vb=vb, s=s, pe=pe, h=h, w=w, r=r)
+    self.restore(e=e, de=de, vb=vb, s=s, h=h, w=w, r=r)
 
   def wait(self, t):
     """ Do a pause. """
@@ -3145,7 +3123,7 @@ def RangeType(min=-inf, max=inf):
 
 def GCodeGenArgs(cmdline):
   """Add argparse cmdline arguments for GCodeGen params."""
-  cmdline.add_argument('-Slicer', choices=GCodeGen.SlicerTypes, default=GCodeGen.FlashPrint,
+  cmdline.add_argument('-Slicer', choices=GCodeGen.SlicerTypes, default=GCodeGen.OrcaSlicer,
       help='Slicer GCode format for comments and hints.')
   cmdline.add_argument('-Te', type=RangeType(0, 265), default=210,
       help='Extruder temperature.')
