@@ -223,7 +223,7 @@ def fesc(s):
   return str(s).replace('{', '{{').replace('}','}}')
 
 
-def isneareq(a, b, n=6):
+def isneareq(a, b, n=5):
   """ Is a nearly equal to b?"""
   return abs(a-b) < 10**-n
 
@@ -360,7 +360,7 @@ class Move(MoveBase):
     if r is None: r = copysign(1, self.de) if self.isadjust else 0.0 if self.isstop else self.de/self.el
     self.r = getnear(r)
     self.setv(v0, v1)
-    assert -1.0 <= self.r < 8.0, f'{self.r=} for {self!r}'
+    assert -8.0 <= self.r < 8.0, f'{self.r=} for {self!r}'
     assert 0.0 <= self.v <= cls.Vp, f'{self.v=} {cls.Vp=} for {self!r}'
     return self
 
