@@ -262,6 +262,10 @@ def solveqe(a,b,c):
   v2 = sqrt(b**2 - 4*a*c)*d  # sqrt(b^2 - 4*a*c)/(2*a)
   return v1 - v2, v1 + v2
 
+def absmin(a,b):
+  """ Return the value with the smallest absolute value. """
+  return a if abs(a) <= abs(b) else b
+
 
 class AttrDictMixin(object):
   """A mixin to add dict-like access to attributes for fstr()."""
@@ -2269,13 +2273,13 @@ class GCodeDrawMixin(GCodeGenBase):
     if dC is None:
       assert dl is not None, 'need to specify enough for dl without dC'
       assert dRdC is not None, 'need to specify dRdC with dl'
-      # Solve dRdC*dC^2 + 2*R0*dC - dl/pi = 0 and take the smaller result.
-      dC = min(solvequad(a=dRdC, b=2*R0, c=-dl/pi))
+      # Solve dRdC*dC^2 + 2*R0*dC - dl/pi = 0 and take the absolute-smallest result.
+      dC = absmin(*solvequad(a=dRdC, b=2*R0, c=-dl/pi))
     if dR is None: dR = dC*dRdC
     self.log(f'spiral RC0=({R0:.1f},{C0:.3f}) dRC=({dR:.1f},{dC:.3f}) {dl=:.1f}@{vl:.0f} {de=:.3f}@{ve:.1f} l={h:.2f}x{w:.2f}x{r:.2f}')
-    R, C, C1, dC = R0, C0, C0+dC, 1/72
-    while C < C1:
-      dC = min(dC, C1 - C)
+    R, C, C1, dC = R0, C0, C0+dC, copysign(1/72, dC)
+    while (C < C1 if dC > 0 else C > C1):
+      dC = absmin(dC, C1 - C)
       C += dC
       R += dC*dRdC
       self.drawrc(R, C, x0=x0, y0=y0, v=vl, w=w, r=r)
