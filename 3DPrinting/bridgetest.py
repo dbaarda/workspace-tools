@@ -190,11 +190,12 @@ class ExtrudeTest(GCodeCfgMixin, gcodegen.GCodeGen):
         self.draw(dy=-l)
         self.hopup(dz=0.1)
 
-  def stabilize(self, x0, y0, dx=t0x, dy=ldy, v=20, w=None):
+  def stabilize(self, x0, y0, dx=t0x, dy=ldy, v=10, w=None):
     """ Stabilize nozzle pressure by drawing filled rectangle."""
     if w is None: w = self.layer.w
     x0,dx = x0 + w, dx - 3*w
-    n = floor(dy / w)
+    # Set number of lines to min of what fits and takes 10secs.
+    n = min(floor(dy / w), ceil(10 * v/dx))
     self.hopdn(x0, y0)
     self.cmt('TYPE:Bottom surface')
     for i in range(n):
@@ -230,18 +231,19 @@ class ExtrudeTest(GCodeCfgMixin, gcodegen.GCodeGen):
     """ Draws a pressure measurement grid at `(x0,y0)` of size `(dx,dy)`.
 
     There are vertical lines every tx, and horizontal lines with a
-    gap of `w` between them every `ly`.
+    gap of 1mm between them every `ly`.
     """
     # get number of x and y lines and adjust dx and dy to fit.
-    assert ly >= 3*w, "grid test lines packed too dense"
-    ly,gy = copysign(ly,dy), copysign(2*w, dy)
+    assert ly >= 1+2*w, "grid test lines packed too dense"
+    ly,gy = copysign(ly,dy), copysign(1+w, dy)
     ny = floor(dy/ly)
-    x1,y1 = x0+dx, y0+dy
     self.cmt('TYPE:Outer wall')
     self.line([(x0-w,y0), dict(dy=dy)], h=h, w=w)
+    # Shift measure grid down by 1 to give the top-ticks clearance.
+    y0 -= 1
     for iy in range(ny):
       y = y0 + iy*ly
-      self.grid(x0,y,dx,gy, v=v, h=h, w=w)
+      self.grid(x0, y, dx, gy, gy=gy, v=v, h=h, w=w)
 
   def testprep(self, x0, y0, dx=tdx, dy=tdy, tl=(0,t0x-0.5, t0x+tex-0.5,t0x+tex+tmx+0.5, tdx), mx0=t0x+tex, mdx=tmx, h=0.2, w=0.5):
     self.Zh=0.1
@@ -275,7 +277,7 @@ class ExtrudeTest(GCodeCfgMixin, gcodegen.GCodeGen):
     1.87mm over the whole 6cm measurement line.
     """
     # Adjust y0 to align with measurement grid.
-    y0 -= w
+    y0 -= 1 + (1+w)/2
     # To minimize drool when moving into position for measure, if de0 is
     # positive, do a normal hopdn() to apply pressure after move, otherwise
     # retract() before hopdn() to relieve pressure before move.
@@ -287,8 +289,8 @@ class ExtrudeTest(GCodeCfgMixin, gcodegen.GCodeGen):
     self.cmt('WIPE_START')
     self.move(dx=dx, de=de, v=vx)
     self.cmt('WIPE_END')
-    # Restore any retraction that exceeds a normal -Re retract.
-    self.restore(de=-(self.Re+de0+de))
+    # Restore any retraction that exceeds a normal -Re retract, and add the line volume.
+    self.restore(de=-(self.Re+de0+de) + h*w*dx/self.Fa)
 
   def bridgeprep(self, x0, y0, sx=t0x, dx=tex, dy=tdy, nh=bnh, nw=bnw, h=None, w=None):
     """Setup Bridge Test Base
@@ -385,7 +387,7 @@ class ExtrudeTest(GCodeCfgMixin, gcodegen.GCodeGen):
     """Setup Grid Test Base"""
     self.grid(x0,y0,dx-5,-dy, gx=5, gy=dy, h=h, w=w)
 
-  def gridline(self, x0, y0, dx=tex, dy=ldy, dt=10, vx=10.0, h=0.2, w=0.5):
+  def gridline(self, x0, y0, dx=tex, dy=ldy, dt=20, vx=10.0, h=0.2, w=0.5):
     # Adjust start and size to fit grid.
     x0, y0, dx, dy = x0, y0-w, dx-5, dy-w
     # calc number of line passes required for dt secs that will fit.
@@ -486,7 +488,7 @@ if __name__ == '__main__':
 
   gridargs=dict(name="GrCal", linefn=gen.gridline, prepfn=gen.gridprep, Kf=gen.Kf, Kb=gen.Kb, Re=gen.Re, tests=[
     dict(de0=(-0.2, 5.8), vx=5),
-    dict(de0=(-0.2, 5.8), vx=60)])
+    dict(de0=(-0.2, 5.8), vx=20)])
 
   bridgeargs=dict(name="BrPA2", linefn=gen.bridgeline, prepfn=gen.bridgeprep, Kf=gen.Kf, Kb=gen.Kb, Re=gen.Re, tests=(
     dict(ve=(0.1, 2.6), vl=10),
