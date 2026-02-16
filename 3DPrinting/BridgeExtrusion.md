@@ -282,7 +282,7 @@ lines. Without accounting for this there will be nasty artifacts at the start
 and end of the bridge lines. Anchor line spacing is the same as bridge-spacing
 `Bs`, and `layer_height` is the same as normal lines `Lh`.
 
-```
+```python
 Al = Aw - Lh*Kda              # Al from Aw and Lh.
 Al = Bs - (1-Afw)*Lh*Kda      # Al from Bs, Lh, and Afw.
 Aw = Bs + Afw*Lh*Kda          # Aw from Bs, Lh, and Afw.
@@ -402,11 +402,11 @@ line-spacing (from `Lw=0.543` line width).
 
 |thick_bridge|bridge_flow|bridge_density|Bd  |Bh  |Bw  |Bs  |Bfw  |Ar  |
 |------------|-----------|--------------|----|----|----|----|-----|----|
-| Y          |1.0        |100%          |0.40|0.40|0.40|0.45|-1.10|1.40| 
+| Y          |1.0        |100%          |0.40|0.40|0.40|0.45|-1.10|1.40|
 | Y          |1.0        |114%          |0.40|0.40|0.40|0.40| 0.12|1.59|
 | Y          |1.0        |120%          |0.40|0.40|0.40|0.38| 0.55|1.68|
-| Y          |1.1        |120%          |0.42|0.42|0.42|0.39| 0.59|1.77| 
-| Y          |0.4        |120%          |0.25|0.25|0.25|0.25| 0.02|1.00| 
+| Y          |1.1        |120%          |0.42|0.42|0.42|0.39| 0.59|1.77|
+| Y          |0.4        |120%          |0.25|0.25|0.25|0.25| 0.02|1.00|
 | N          |1.0        |100%          |0.36|0.20|0.54|0.50|-3.53|1.00|
 | N          |1.0        |120%          |0.36|0.20|0.54|0.42|-1.47|1.20|
 | N          |1.4        |120%          |0.42|0.28|0.56|0.42| 0.12|1.68|
@@ -484,8 +484,8 @@ normally larger bridge layer-height, some bridge line height characteristics
 are fixed.
 
 ```python
-Bfh = 0.0  ; no vertical overlap for bridges.
-Bz = 0.0   ; no print-height offset for bridges.
+Bfh = 0.0  # no vertical overlap for bridges.
+Bz = 0.0   # no print-height offset for bridges.
 ```
 
 With no bridge height compensation at all, we cannot adjust the bridge's
@@ -496,7 +496,7 @@ the perimeter, we can calculate the `perimeter_error` between the bottom of
 the layer and the bridge's actual bottom perimeter.
 
 ```python
-Be = Bp - Lh  ; distance from layer bottom to bridge bottom perimeter.
+Be = Bp - Lh  # distance from layer bottom to bridge bottom perimeter.
 ```
 
 **NOTE:** for `Bfp=0` (ie, no perimeter overlap so use lowest point of the
@@ -590,8 +590,8 @@ Bfw_max = (1 - (Bd + 0.05)/(bridge_density_max*Bd))/Kdl # Bfw from Bd and bridge
 #### Legacy external bridges
 
 Legacy external bridges, use an adjusted solid infill line. This means it his
-heavily dependent on the solid infill line width. In the following
-`Ls`, `Lw`, and `La` refer to the solid infill line characteristics.
+heavily dependent on the solid infill line width and layer height. In the
+following `Ls`, `Lw`, and `La` refer to the solid infill line characteristics.
 
 The translations to our model from OrcaSlicer settings are;
 
@@ -612,7 +612,7 @@ bridge_density = Bls / Bs
 ```
 
 **Note: for `bridge_flow<1` this gives `Ar=bridge_density`, and when
-`bridge_density=100%` this gives `Bs=Ls*bridge_flow`. 
+`bridge_density=100%` this gives `Bs=Ls*bridge_flow`.
 
 The affect of the OrcaSlicer `bridge_density<=bridge_density_max` limit
 depends on whether `bridge_flow` is greater or less than one. If it is greater
@@ -734,7 +734,7 @@ Use a spacing equal to or slightly larger than your nozzle diameter. I use
 0.4mm or 0.5mm for a 0.4mm nozzle.
 
 ```python
-Dn = 0.4                # your printers nozzle diameter
+Dn = 0.4                # your printer's nozzle diameter
 Lh = 0.2                # the layer height setting to use in OrcaSlicer.
 Ls = 0.5                # your print's line spacing
 Lw = Ls + Lh*(1 - pi/4) # the line width setting to use in OrcaSlicer.
@@ -773,7 +773,7 @@ bridge_flow = Lh/Ls
 bridge_density = 100%
 ```
 
-If the the overlap for Afw=1 is too high you can keep the same diameter but
+If the the overlap for `Afw=1` is too high you can keep the same diameter but
 increase the spacing by reducing `bridge_density` to something below 100% but
 above 88.6% (for `Bfw=0`) like 94% (for `Bfw=0.5`). This keeps the dimensional
 accuracy but reduces the anchor extrusion ratio to `Ar=bridge_density` which
@@ -806,7 +806,7 @@ bridge_density = 120%
 
 This gives fast thick `Bd=0.9*Dn` bridges with minimal `Bfw=0.25` overlap,
 giving `Be=0.9*Dn-Lh` bottom perimeter error and `Ar=0.728*Dn/Lh` anchor
-extrusion. Use this for internal bridges, of maybe for external bridges if you
+extrusion. Use this for internal bridges, or maybe for external bridges if you
 have some mechanism like a post-processing script to dial down the anchor
 extrusion.
 
