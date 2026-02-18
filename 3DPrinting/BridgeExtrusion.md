@@ -699,16 +699,16 @@ The translations to our model from OrcaSlicer settings are;
 Blh = max(bridge_flow, 1)*Lh    # flow-adjusted solid infill layer height.
 Bls = min(bridge_flow, 1)*Ls    # flow-adjusted solid infill line spacing.
 Blw = Bls + Kda*Blh             # flow-adjusted solid infill line width.
-Bf = Lf * bridge_flow = Blh * Bls
+Bf = Lf*bridge_flow = Blh*Bls
 Bd = sqrt(Bf/Ka)
-Bs = Bls / bridge_density
+Bs = Bls/bridge_density
 ```
 
 The translation to OrcaSlicer settings from our model is;
 
-```
-bridge_flow = Bf / Lf
-bridge_density = Bls / Bs
+```python
+bridge_flow = Bf/Lf
+bridge_density = Bls/Bs
 ```
 
 **Note: for `bridge_flow<1` this gives `Ar=bridge_density`, and when
