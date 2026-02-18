@@ -659,7 +659,7 @@ don't have this problem`.
 With Thick external bridges enabled, the bridge and anchor characteristics from the
 settings `bridge_flow` and `bridge_density` are;
 
-```
+```python
 Blh = Bd
 Blw = Bd
 Bls = Bd + 0.05
@@ -671,7 +671,7 @@ Bs = Bls/bridge_density
 We can use this to calculate required settings from our target model's `Bf`,
 `Bd`, `Bs`, and `Bls` values with;
 
-```
+```python
 bridge_flow = Bf/Na = (Bd/Nd)^2
 bridge_density = Bls/Bs
 ```
