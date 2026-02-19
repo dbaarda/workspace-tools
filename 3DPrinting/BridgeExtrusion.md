@@ -127,13 +127,51 @@ The important characteristics of any line are;
   apart. Ideally this should directly correspond with how strong the bond
   between adjacent lines is, or what the line-size to line-space ratio is.
   These could be specified independently for horizontal and vertical contact,
-  but in practice when there is sufficient contact for both it is related to
-  the ratio of reserved-area to extruded-area so they are coupled.
+  but in practice when there is sufficient contact for both bonding is related
+  to the ratio of reserved-area to extruded-area so they are coupled.
 
 The `line_height` and `line_spacing` are pretty straightforward and directly
 correspond with the fundimental line parameters, but there are many different
 ways that `line_contact` could be specified. It largely depends on the model
-used.
+used, and typically on what special `line_width` it has for the
+width of the extruded line. Some possibilities are;
+
+* `extrusion_ratio = line_flow / line_area` - the ratio of extruded
+cross-section area to line cross-section area. This is 1 when the extruded
+flow matches the available line area, <1 when there are voids or gaps in the
+line, and >1 when the flow exceeds the available area. This is very useful for
+measuring/controlling over vs under extrusion that produces voids or bulges
+artifacts. It is less useful for measuring/controlling adjacent line/layer
+bonding or bridge support.
+
+* `overlap_ratio = (line_width - line_spacing)/line_width` - the ratio of
+overlap distance to line_width. This is 0 when lines just touch, >0 if they
+overlap, and <0 if there is a gap. It tends to 1 when line-spacing tends to 0.
+This is useful for measuring/controlling the overlap distance for dimensional
+accuracy, but doesn't give a clear indication of over vs under extrusion or
+adjacent line/layer bonding or bridge support.
+
+* `line_density = line_width/line_spacing` - the ratio of line_width to
+line_spacing. This is 1 when the lines just touch, >1 when the lines overlap,
+and <1 when there are gaps between the lines. It tends towards infinity as
+line_spacing tends towards 0 and tends towards 0 as line spacing tends towards
+infinity. This is good for measuring/controlling the percentage coverage when
+you want gaps. It is OK-ish for measuring/controlling adjacent line/layer
+bonding or bridge support because it has a gradient that reflects increasing
+sensitivity as the overlap increases, but the range of values for reasonable
+overlap is too small, (for this model it's between 100.0% and 112.8%). This
+also applys to using it for over/under extrusion.
+
+* `overlap_factor = <fancy model formula>` - A special model specific factor
+for measuring the amount of overlap that reflects the degree of adjacent
+line/layer bonding and bridge support. For example the [flow
+maths](https://manual.slic3r.org/advanced/flow-math) used by OrcaSlicer, which
+is 0 for "just touching", 1 for "full contact", and <0 for gaps. This is best
+for measuring/controlling adjacent layer/line bonding and bridge support,
+assuming the model does accurately reflect that. For this model it also nicely
+controls over/under extrusion because `overlap_factor=1` also corresponds with
+`extrusion_ratio=1`. However it's not useful for dimensional accuracy or
+percentage coverage.
 
 ## A Bridge Extrusion Model
 
@@ -1048,3 +1086,8 @@ I need to figure out exactly how the best bridging from empirical testing
 results translates into overlap. It's possible that the square for
 `overlap_factor=1` assumption doesn't match the best settings in practice, in
 which case maybe another target rectangle would be better.
+
+**NOTE:** the actual overlap distances are tiny, and the difference between
+`Bcw=0` "just touching" and `Bcw=1` "optimal/full overlap" is just 5.69% of `Bd`
+bridge diameter on each side, which is 0.046mm for a full 0.4mm nozzle
+diameter wide bridge, or 0.026mm for an optimal 0.2mm spaced bridge.
