@@ -18,10 +18,18 @@ This is based on ideas and discussions at;
 
 * https://manual.slic3r.org/advanced/flow-math
 * https://github.com/OrcaSlicer/OrcaSlicer/pull/11255
+* https://github.com/OrcaSlicer/OrcaSlicer/issues/11209
+* https://github.com/OrcaSlicer/OrcaSlicer/issues/11412
+* https://github.com/OrcaSlicer/OrcaSlicer/issues/11954
+
+Much of which was spawned by the following videos;
+
+* https://www.youtube.com/watch?v=xQBLv3cPUbo
+* https://www.youtube.com/watch?v=eaasEkFULKE
 
 There is also the following supporting documents
 
-* [spreadsheet for translating to/from OrcaSlicer](https://docs.google.com/spreadsheets/d/1q8VEJtvlpofTINNaKx3oTjjiWdCzXQhwqQcuNmZ9_eM/edit?usp=sharing)
+* [spreadsheet for translating to/from OrcaSlicer](https://docs.google.com/spreadsheets/d/1fX_NlD-0Lr_l3PO8elObgf09ENHlFkTImmb3xV1XEus/edit?usp=sharing)
 * [Onshape CAD model](https://cad.onshape.com/documents/d6c789081e4718027433abc0/w/fab8c0f8c830995797647553/e/4c161cfdaa646b1caebb929e?configuration=Advanced_Settings%3Dtrue%3BAfw%3D1.0%3BAtl%3D4.0E-4%2Bmeter%3BBd%3D3.8E-4%2Bmeter%3BBdr%3D0.95%3BBfh%3D1.0%3BBfp%3D0.0%3BBfw%3D1.0%3BBh%3D3.37E-4%2Bmeter%3BBs%3D3.37E-4%2Bmeter%3BDn%3D4.0E-4%2Bmeter%3BLfp%3D0.0%3BLfw%3D1.0%3BLh%3D2.0E-4%2Bmeter%3BList_10u8p1SlZapMRd%3DDefaults%3BList_vwkf0slImDvp20%3DSet_Line_Width%3BLs%3D4.0E-4%2Bmeter%3BLw%3D5.0E-4%2Bmeter&renderMode=0&uiState=6960a1006d2f50394174a759)
 
 ## Intro
@@ -47,7 +55,7 @@ derived atrribute are;
   bottom of the line.
 
 * `Ls` - the `line_spacing` the horizontal distance in mm between adjacent
-  lines.
+  lines with the same `line_spacing`.
 
 * `Lf` - the `line_flow` extruded volume per line length in mm^3/mm, or
   extruded cross-section area in mm^2.
@@ -60,15 +68,16 @@ them. The are printed adjacent to other lines with nothing underneath them, so
 they are not printed "squished" against a print surface but "strung" through
 space with only their ends supported by the layer below. This means their top
 and bottom surface is not clearly defined by the top surface of the layer
-below and the height of the print head. They can dangle down with their top
-surface below the height of the print head. This introduces another important
-parameter for printing bridge lines, giving us the following fundimental
-parameters and derived attribute;
+below and the height of the print head. They can dangle down with their
+defined top surface below the height of the print head. This introduces
+another important parameter for printing bridge lines, giving us the following
+fundimental parameters and derived attribute;
 
 * `Bh` - the `bridge height` vertical distance in mm between the defined top and
   bottom of the brige line.
 
-* `Bs` - the `bridge_spacing` horizontal distance in mm between adjacent lines.
+* `Bs` - the `bridge_spacing` horizontal distance in mm between adjacent lines
+with the same `bridge_spacing`.
 
 * `Bf` - the `bridge_flow` extruded volume per line length in mm^3/mm, or
   extruded cross-section area in mm^2.
@@ -118,60 +127,67 @@ The important characteristics of any line are;
   the line, so `N` lines above each other should have a height of
   `N*line_height`.
 
-* the horizontal `line_spacing` used by the line excluding any kind of
-  overlap with adjacent lines. This is the horizontal space reserved by the
-  line, so N adjacent lines beside each other should be `N*line_spacing` wide.
+* the horizontal `line_spacing` used by the line excluding any kind of overlap
+  with adjacent lines. This is the horizontal space reserved by the line, so N
+  adjacent lines beside each other should be `N*line_spacing` wide. Note that
+  OrcaSlicer doesn't use `line_spacing` and instead uses the model's internal
+  `line_width` which is wider than `line_spacing`. IMHO this is not ideal
+  because `line_width` doesn't reflect the line geometry of adjacent lines for
+  overall dimensional accuracy, but instead includes an extra overlapped
+  "bulge" that varies with `layer_height` which really only applies at the
+  external perimeters.
 
-* the degree of physical `line_contact` and bonding or space between adjacent
+* the degree of physical `line_contact` for bonding or space between adjacent
   lines. This is how tightly the extruded lines are packed together or spaced
-  apart. Ideally this should directly correspond with how strong the bond
-  between adjacent lines is, or what the line-size to line-space ratio is.
-  These could be specified independently for horizontal and vertical contact,
-  but in practice when there is sufficient contact for both bonding is related
-  to the ratio of reserved-area to extruded-area so they are coupled.
+  apart. Ideally this should directly correspond with how strong the bond and
+  support with adjacent lines is, what the surface coverage is for sparse
+  grills or internal supports, and/or the what the extrusion ratio is for the
+  degree of overfill or underfill of the printed volume. These could be
+  specified independently for horizontal and vertical contact but are often
+  coupled.
 
 The `line_height` and `line_spacing` are pretty straightforward and directly
 correspond with the fundimental line parameters, but there are many different
 ways that `line_contact` could be specified. It largely depends on the model
-used, and typically on what special `line_width` it has for the
-width of the extruded line. Some possibilities are;
+used, and typically on what special `line_width` it defines for the width of
+the extruded line cross-section. Some possibilities are;
 
 * `extrusion_ratio = line_flow / line_area` - the ratio of extruded
-cross-section area to line cross-section area. This is 1 when the extruded
-flow matches the available line area, <1 when there are voids or gaps in the
-line, and >1 when the flow exceeds the available area. This is very useful for
-measuring/controlling over vs under extrusion that produces voids or bulges
-artifacts. It is less useful for measuring/controlling adjacent line/layer
-bonding or bridge support.
+  cross-section area to line cross-section area. This is 1 when the extruded
+  flow matches the available line area, <1 when there are voids or gaps in the
+  line, and >1 when the flow exceeds the available area. This directly
+  controls over vs under extrusion that produces void or bulge artifacts. It
+  is less useful for controlling line bonding or surface coverage.
 
 * `overlap_ratio = (line_width - line_spacing)/line_width` - the ratio of
-overlap distance to line_width. This is 0 when lines just touch, >0 if they
-overlap, and <0 if there is a gap. It tends to 1 when line-spacing tends to 0.
-This is useful for measuring/controlling the overlap distance for dimensional
-accuracy, but doesn't give a clear indication of over vs under extrusion or
-adjacent line/layer bonding or bridge support.
+  overlap distance to line_width. This is 0 when lines just touch, >0 if they
+  overlap, <0 if there is a gap, and tends to 1 when line-spacing tends to 0.
+  This is useful for controlling the overlap distance relative to `line_width`
+  for dimensional accuracy, but doesn't give a clear indication of line
+  bonding, surface coverage, or extrusion ratio.
 
 * `line_density = line_width/line_spacing` - the ratio of line_width to
-line_spacing. This is 1 when the lines just touch, >1 when the lines overlap,
-and <1 when there are gaps between the lines. It tends towards infinity as
-line_spacing tends towards 0 and tends towards 0 as line spacing tends towards
-infinity. This is good for measuring/controlling the percentage coverage when
-you want gaps. It is OK-ish for measuring/controlling adjacent line/layer
-bonding or bridge support because it has a gradient that reflects increasing
-sensitivity as the overlap increases, but the range of values for reasonable
-overlap is too small, (for this model it's between 100.0% and 112.8%). This
-also applys to using it for over/under extrusion.
+  line_spacing. This is 1 when the lines just touch, >1 when the lines
+  overlap, <1 when there are gaps between the lines, tends towards infinity as
+  line_spacing tends towards 0, and tends towards 0 as line spacing tends
+  towards infinity. This is good for controlling surface coverage for grills
+  or internal supports. It is OK-ish for controlling line bonding because it
+  has a gradient that reflects increasing sensitivity as the overlap
+  increases, but the range of values for reasonable overlap is too small and
+  usually varies with `layer_height`. For this model it's between 100% to
+  112.8% for bridges and 100% to 104.3% for `line_spacing=0.5mm`,
+  `layer_height=0.1mm` lines. These problems also apply to using it for
+  extrusion ratio.
 
 * `overlap_factor = <fancy model formula>` - A special model specific factor
-for measuring the amount of overlap that reflects the degree of adjacent
-line/layer bonding and bridge support. For example the [flow
-maths](https://manual.slic3r.org/advanced/flow-math) used by OrcaSlicer, which
-is 0 for "just touching", 1 for "full contact", and <0 for gaps. This is best
-for measuring/controlling adjacent layer/line bonding and bridge support,
-assuming the model does accurately reflect that. For this model it also nicely
-controls over/under extrusion because `overlap_factor=1` also corresponds with
-`extrusion_ratio=1`. However it's not useful for dimensional accuracy or
-percentage coverage.
+  for measuring the amount of overlap that reflects the degree of line
+  bonding. For example the [flow
+  maths](https://manual.slic3r.org/advanced/flow-math) used by OrcaSlicer,
+  which is 0 for "just touching", 1 for "full contact", and <0 for gaps. This
+  is best for controlling line bonding. For this model it is nicely
+  independent of `layer_height`, and also controls extrusion ratio because
+  `overlap_factor=1` also corresponds with `extrusion_ratio=1`. However it's
+  not useful for surface coverage.
 
 ## A Bridge Extrusion Model
 
@@ -942,45 +958,102 @@ bridge_density = 120%
 
 #### Sugested OrcaSlicer changes
 
-Some possible changes to improve OrcaSlicer changes in increasing order of
-complexity are;
+Some possible changes to improve OrcaSlicer changes in order of increasing
+complexity and decreasing priority are;
 
 1. Remove the 0.05mm spacing from thick bridges. This makes bridge overlap
-vary with `bridge_flow` requiring very large `bridge_density` settings for
-small diameter bridges to get decent overlap. With that offset removed
-`bridge_density` will simply set the bridge spacing to `Bs=Bd/bridge_density`,
-which means it will directly set overlap to `Bcw=(1-1/bridge_density)/Kdl` so
-it will be independent of `bridge_flow`. A setting of `bridge_density=112.8%`
-would be equivalent to the optimal `Acw=1.0` overlap factor. This would make
-it possible to use thick bridges with very low `bridge_flow` settings to give
-small diameters and still get optimal overlap.
+   vary with `bridge_flow` requiring very large `bridge_density` settings for
+   small diameter bridges to get decent overlap. With that offset removed
+   `bridge_density` will simply set the bridge spacing to
+   `Bs=Bd/bridge_density`, which means it will directly set the
+   `overlap_factor` to `Bcw=(1-1/bridge_density)/Kdl` making it independent of
+   `bridge_flow`. A setting of `bridge_density=112.8%` would be equivalent to
+   the optimal `Acw=1.0` overlap factor for any `bridge_flow` setting. This
+   would make it possible to use thick bridges with any `bridge_flow` setting
+   and get optimal overlap, even for very small diameters.
 
 2. Increase the `bridge_density` limit to about 160%. When not using thick
-bridges with `bridge_flow=1` to get bridge diameters near the nozzle diameter,
-`bridge_density` settings up to 158% are required to get `Bcw=1` optimal
-overlap factors. Note with fix 1 above thick bridges will probably always be
-the best option so this is not required, but would still be nice-to-have and
-simple to implement.
+   bridges with `bridge_flow=1` to get bridge diameters near the nozzle
+   diameter, `bridge_density` settings up to 158% are required to get `Bcw=1`
+   optimal overlap factors. Note with fix 1 above thick bridges will probably
+   always be the best option so this is not required, but would still be
+   nice-to-have and simple to implement, at least until fix 4 below is
+   implemented.
 
-3. Adjust the flow of the anchor part of bridge-lines to prevent
-over-extrusion. The anchor lines should have a flow of `Af=Lh*Bs`, which is
-much less than the typical flow for bridge lines. This would allow bridge line
-settings to be set to the optimum values for bridging without having to worry
-about over-extrusion of the anchor lines.
+3. Change the UI settings to allow directly setting the bridge width. Perhaps
+   replace the `bridge_flow` setting with a `bridge_width` setting similar to
+   the `line_width` settings that can be a percentage of nozzle width or a
+   number distance in mm. For thick bridges this would be the
+   `bridge_diameter` for the circular model, and for legacy bridges it would
+   be the `line_width` for the normal line model. This would remove the
+   confusing and arbitrary coupling of legacy bridges and the internal solid
+   infill line settings.
 
-4. Adjust which layer bridges are on to take into account the bridge
-thickness. Optimal bridge diameters can be around 2x the layer height, which
-means they hang a full layer lower than the bottom of the layer they are
-printed on. Ideally the slicer should take into account bridge lines have a
-different layer-height and include them on the layer where their
-lower-perimeter most closely matches the model's perimeter. This would allow
-bridge settings for optimum bridge quality without worrying about trying to
-set bridge thickness close to the layer hight for dimensional accuracy.
+4. Adjust the flow of the anchor part of bridge-lines to prevent
+   over-extrusion. The anchor lines should have a flow of `Af=Lh*Bs`, which is
+   much less than the typical flow of `Bf=pi/4*Bd^2` for bridge lines. Perhaps
+   remove the `thick_bridges` option and always use the circular model for the
+   bridge parts and the legacy line model for anchor parts, changing the
+   reasonable limit for `bridge_density` back to about 120%. Note that
+   `bridge_density` should adjust the spacing without affecting the flow for
+   the bridge parts so that it controls bridge overlap, but it should also
+   adjust the flow for the anchor parts so they are not over-extruded when
+   there is overlap or under-extruded when there is gaps. This would allow
+   bridge line settings to be set to optimum values for bridging without
+   having to worry about over-extrusion of the anchor lines.
 
-5. Add Ui settings to allow setting `Bd` `bridge_diameter` or `Bs`
-`bridge_spacing` and `Bcw` overlap-factor directly. It would also be nice to
-be able to optionally set normal line thickness using `Ls` `line_spacing`
-instead of `Lw` `line_width`.
+5. Adjust which layer bridges are on to take into account the bridge
+   thickness. Optimal bridge diameters can be around 2x the layer height,
+   which means they hang a full layer lower than the bottom of the layer they
+   are printed on. Ideally the slicer should take into account the
+   `perimeter_offset` (`Bp`) using a `perimeter_factor` (`Bcp`), but assuming
+   a hard-coded `perimeter_factor=0` like there currently is for lines would
+   be fine until fix 9 below is implemented. Note it already sets the bridge's
+   `layer_height` to the bridge diameter (`Bd`) for thick lines, and using
+   this to define the lower perimeter would be equivalent to
+   `perimeter_factor=0` (`Bcp=Bch=0`). It should put the bridge lines on the
+   layer where their perimeter most closely matches the model's perimeter.
+   This would allow bridge settings for optimum bridge quality without
+   worrying about trying to set bridge thickness close to the `layer_height`
+   for dimensional accuracy.
+
+6. It would be nice to be able to optionally set line and bridge sizes using
+   spacing instead of width, since this better reflects the actual geometry
+   and makes the `line_spacing` and thus overall wall thickness independent of
+   `layer_height`.
+
+7. It would be nice to add another preview view mode that shows `line_spacing`
+   similar to the one that shows `line_width`.
+
+8. It would be nice to be able to set the `overlap_factor` for both lines and
+   bridges, instead of it being effectively hard-coded to `overlap_factor=1`.
+   This would give fine-grained control over the amount of overlap for
+   controlling adjacent line bonding and bridge support. Currently the overlap
+   can be controlled by adjusting the `flow_ratio` for lines and
+   `bridge_density` for bridges, but it is hard to map these into values that
+   correlate with line overlap, the range of reasonable values is tiny, and
+   they vary with `line_width` and `layer_height`. The `flow_ratios` settings
+   are better for compensating for systematic under/over extrusion or filament
+   expansion/contraction after the desired `overlap_factor` is applied.
+
+9. It would be nice to be able to set the `perimeter_factor` for both lines
+   and bridges instead of it being effectively hard-coded to
+   `perimeter_factor=0`. This would give fine-grained control over how the
+   perimeter is defined in terms of the edge-bulge overlap, with
+   `perimeter_factor=0` being outer-most-edge-of-bulge (important for
+   clearance fits), and `perimeter_factor=1` being average-edge-of-bulge
+   (important for interference fits or enclosed volume). For lines, this can
+   be controlled by adjusting the "X-Y hole compensation" and "X-Y contour
+   compensation" settings, but it is hard to map these into values that
+   correlate with perimeter overlap, the range of reasonable values is tiny,
+   and they vary with `line_width` and `layer_height`. These settings are
+   better for compensation for systematic dimension offets before
+   `perimeter_factor` is applied. For bridges, without fix 5 above the bridge
+   bottom perimeters are not taken into account at all and can even be on the
+   wrong layer, but you can control it by carefully setting the bridge
+   diameter based on the `layer_height`, but this is not easy and forces the
+   use of bridge diameters that might not be optimal for bridging.
+
 
 ## Other Factors
 
@@ -994,11 +1067,18 @@ Lower temperatures make the filament less fluid and probably more likely to
 "snap" than "string", particularly for bridge lines with diameters much
 smaller than the nozzle.
 
+In general it's probably best to just set the nozzle temperature to whatever
+is normally used for that fillament. For heated chambers, it may be worth it
+to slightly lower the chamber temperature.
+
 ### Fan Speeds
 
 Higher fan speeds increase cooling rates and should reduce sag. However, very
 strong fans could blow the the bridges away before they "set", potentially
 increasing sag, introducing sideways displacement, and maybe even "snapping".
+
+In general using max fan speeds is probably best, unless the extruder fan is
+particularly powerful.
 
 ### Print Speeds
 
@@ -1021,6 +1101,11 @@ However, there are also some possible risks for extremely slow print speeds.
   re-melting them and adding sagging.
 * Speeds significantly lower than used for printing other lines risk pressure
   and flow artifacts from large speed changes after/before printing slowly.
+
+Tests by others suggest a very slow 10mm/sec gives the best results, but its
+possible these very low speeds were required to mitigate affects from
+over-extruded anchor-lines and bad Pressure Advance, so getting those right
+might mean higher speeds can be used without adverse results.
 
 ### Pressure Advance
 
@@ -1058,13 +1143,19 @@ https://www.youtube.com/watch?v=eaasEkFULKE
 The only way to minimize the problems caused by different bridge and anchor
 flows for slicers like OrcaSlicer that don't differentiate between them is to
 pick settings that produce bridge and anchor lines with almost the same cross
-section area. Assuming anchor overlap-factor Acw=1 is reqired to maximise
+section area. Assuming anchor overlap-factor `Acw=1` is reqired to maximise
 anchor area and the optimal bridge overlap-factor is `Bcw=1`, the bridge and
 anchor areas are the same when the bridge spacing is the same as the layer
 height, or `Bs=Lh`.
 
 This is normally significantly less than the nozzle diameter, which might be
 OK for very stringy materials, but could cause "snapping" for some materials.
+
+Better PA handling would take into account the different advance needed when
+there is no backpressure from the print surface based on the layer below. Even
+better would be to take this into account when there is partial backpressure
+for overhangs. Failing that, PA problems can nearly always be mitigated by
+using slower speeds.
 
 ### Line Bonding Strength.
 
@@ -1088,6 +1179,8 @@ results translates into overlap. It's possible that the square for
 which case maybe another target rectangle would be better.
 
 **NOTE:** the actual overlap distances are tiny, and the difference between
-`Bcw=0` "just touching" and `Bcw=1` "optimal/full overlap" is just 5.69% of `Bd`
-bridge diameter on each side, which is 0.046mm for a full 0.4mm nozzle
-diameter wide bridge, or 0.026mm for an optimal 0.2mm spaced bridge.
+`Bcw=0` "just touching" and `Bcw=1` "optimal/full overlap" is just 5.69% of
+`Bd` bridge diameter on each side, which is 0.046mm for a full 0.4mm nozzle
+diameter wide bridge, or 0.026mm for an optimal
+`layer_height=bridge_spacing=0.2mm` bridge. For lines it's even less, and for
+a `layer_height=0.1mm,line_spacing=0.5mm` line it's a very tiny 0.011mm.
