@@ -1195,9 +1195,54 @@ complexity and decreasing priority are;
 
 ## Other Factors
 
+### Thermal Expansion
+
+Thermal expansion of the filament means it will have a larger volume when
+molten than it will have when it cools. This means the bridge diameter will be
+larger when it comes out of the nozzle than when it cools and hardens. This
+larger diameter means the `overlap_factor` will be larger, so the extruding
+bridge can contact adjacent bridges even if they would not contact when
+cooled. If they do make contact they stick, and as they cool and shrink it
+generates a tiny bit of transverse tension that stretches them until they
+harden into their final shape and position, still stuck to the adjacent
+bridge. So the `overlap_factor` where bridge-lines will be connected is
+actually a tiny bit less than 0 by an amount that depends on the thermal
+expansion of the molten fillament.
+
+This theory could help explain why [this test result
+analysis](https://github.com/OrcaSlicer/OrcaSlicer/pull/11255#issuecomment-3945087047)
+saw bridge lines contacting earlier than the extrusion model predicts.
+However, although thermal-expansion is probably contributing, the thermal
+expansion of PLA is not enough to fully explain it. PLA's thermal expansion
+coefficient is about 68e-6, which equates to 1.3% expansion for a 190degC temp
+change, or +0.005mm to a 0.4mm diameter bridge. The test examples seemed to
+make contact when the extrusion model had a 0.022mm gap, so thermal expansion
+wouldn't have been enough to close it and make them contact.
+
+So I suspect there is another affect contributing to adjacent line contact.
+For bridges with a diameter smaller than the nozzle, they exit the nozzle with
+the `nozzle_diameter`, but then get stretched and thin out to the smaller
+diameter of the extrusion flow. However the nozzle is close to the adjacent
+line as this happens, so the bridge could make contact before the diameter has
+completely thinned. The thinner the bridge line, the longer the
+stretching/thinning part probably extends from the nozzle, so the more likely
+this thinning transition part makes contacts. If it makes contact, the
+sticking-pulling-stretching affect modifies the bridge cross section as it
+cools and hardens into its final connected position and shape.
+
+It's also possible that the cooling shrinkage pulls the bridge slightly
+sideways, which suggests with exactly the right combination of settings you
+might get periodic gaps, where the small pull sideways with each line
+accumulates until the gap is too big to connect, and then it starts again. A
+similar affect has been
+[reported](https://github.com/OrcaSlicer/OrcaSlicer/pull/11255#issuecomment-3943548614)
+for small thermal stress vertical displacements that accumulate with each
+attached bridge until the displacement is too big and the bridge "jumps off"
+the nozzle.
+
 ### Nozzle Temperature
 
-Using higher temperatures makes the fillament more fluid and prone to sag. It
+Using higher temperatures makes the filament more fluid and prone to sag. It
 also increases the re-heating of adjacent bridge lines, risking more sag and
 reducing the support they can provide for the current line.
 
