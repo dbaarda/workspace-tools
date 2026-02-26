@@ -403,8 +403,8 @@ Ba = Bh*Bs
 Bf = Ka*Bd^2 = Bl^2              # Bf from Bd or Bl.
 Bgw = Bd/Bs
 Bgh = Bd/Bh
-Brw = Bf/Bs^2 = (Bl/Bs)^2
-Brh = Bf/Bh^2 = (Bl/Bh)^2
+Brw = Bf/Bs^2 = (Bl/Bs)^2 = Ka*(Bd/Bs)^2
+Brh = Bf/Bh^2 = (Bl/Bh)^2 = Ka*(Bd/Bh)^2
 Br = Bf/Ba = sqrt(Brw*Brh)
 Bz = (Bd - Bh)/2                 # Bz from Bd and Bh
 Bz = Kdl*Bch*Bd/2                # Bz from Bd and Bch
@@ -494,6 +494,40 @@ there should be a little hop-up at the transition from anchor to bridge line,
 and hop-down at the transition from bridge to anchor. However, in practice the
 ideal hop height is well below the minimum Z resolution of most printers, so
 it's not worth including.
+
+### Attribute Conversions
+
+The `overlap_factor`, `line_density`, and `extrusion_ratio` attributes are
+just different ways of expressing the same thing independently of line size.
+The formulas for converting between these are;
+
+```python
+# Line overlap metric conversions
+# Note line overlap metrics are not totaly independent of Lh and Lw, but
+# we can put them into an Lk aspect-ratio constant so these are independent of
+# size of lines with the same Lh/Lw aspect-ratio.
+Lk = Kda*(Lh/Lw)                 # The line's aspect-ratio constant.
+Lcw = (1 - 1/Lg)/Lk              # Lcw from Lg
+Lcw = (1 - (1 - Lk)/Lr)/Lk       # Lcw from Lr
+Lg = 1/(1 - Lk*Lcw)              # Lg from Lcw
+Lg = Lr/(1 - Lk)                 # Lg from Lr
+Lr = (1 - Lk)/(1 - Lk*Lcw)       # Lr from Lcw
+Lr = Lg*(1 - Lk)                 # Lr from Lg
+
+# Bridge horizontal and vertical overlap metric conversions
+# Here Bc,Bg,Br are Bcw,Bgw,Brw or Bch,Bgh,Brh
+Bc = (1 - 1/Bg)/Kdl            # Bc from Bg
+Bc = (1-Kl/sqrt(Br))/Kdl       # Bc from Br
+Bg = 1/(1-Bc*Kdl)              # Bg from Bc
+Bg = sqrt(Br)/Kl               # Bg from Br
+Br = Ka/(1-Bc*Kdl)^2           # Br from Bc
+Br = Ka*Bg^2                   # Br from Bg
+
+# Bridge area overlap metric conversions
+Br = sqrt(Brw*Brh)               # Br from Brw and Brh
+Br = Ka*Bgw*Bgh                  # Br from Bgw and Bgh
+Br = Ka/((1-Bcw*Kdl)*(1-Bch*Kdl))# Br from Bcw and Bch
+```
 
 ## OrcaSlicer v2.3.2-dev
 
