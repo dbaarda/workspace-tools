@@ -22,12 +22,12 @@ M651 S{during_print_exhaust_fan_speed_num[current_extruder]}
 M106
 {else}; Leaving extruder fan off for all layers.
 {endif};end machine start gcode
-;start nozzle wipe
+;start nozzle-wipe
 G1 X0 Y-75 F6000
 G1 Z0.1 F420
 G1 X0 Y-74 F300
 G1 Z0.4 F420
-;end wipe
+;end nozzle-wipe
 ;start preextrude
 G1 X-37.5 Y-74 F6000
 G1 Z0.2 F420
