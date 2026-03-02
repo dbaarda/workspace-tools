@@ -152,6 +152,14 @@ class ExtrudeTest(GCodeCfgMixin, gcodegen.GCodeGen):
   bnh = 4 # number of layers for bridge test supports.
   bnw = 2 # number of lines for bridge test supports.
 
+  def wipe(self, x0=0, y0=-75.0, dx=0.0, dy=1.0):
+    self.cmt('WIPE_START')
+    self.move(x0,y0)
+    self.move(h=0.1)
+    self.move(dx=dx, dy=dy, v=10.0)
+    self.move(h=0.4)
+    self.cmt('WIPE_END')
+
   def preextrude(self,n=0,x0=-40,y0=-74,x1=40,y1=-74,v=20):
     self.cmt('TYPE:Custom')
     self.line(l=((x0,y0-n),(x1,y0-n)), v=v, r=2)
@@ -204,46 +212,33 @@ class ExtrudeTest(GCodeCfgMixin, gcodegen.GCodeGen):
       dx = -dx
     self.hopup()
 
-  def grid(self, x0, y0, dx=tmx, dy=-tdy, gx=2, gy=1, v=None, h=0.2, w=0.5):
-    """ Draws a grid at `(x0,y0)` of size `(dx,dy)` with lines every gx,gy.
+  def grid(self, x0, y0, dx=tmx, dy=-tdy, gx=2, gy=1, gx0=0, gy0=0, v=None, h=0.2, w=0.5):
+    """ Draws a grid at `(x0,y0)` of size `(dx,dy)` with lines every gx,gy starting with offset gx0,gxy.
 
     The grid starts at `(x0,y0)` and extends in the direction of `(dx,dy)`, so
     inverted and reversed grids can be drawn with negative dx and/or dy.
     """
     # get number of x and y lines and adjust dx and dy to fit.
     gx,gy = copysign(gx,dx), copysign(gy,dy)
-    nx, ny = floor(dx/gx), floor(dy/gy)
-    dx,dy = nx*gx, ny*gy
+    gx0,gy0 = copysign(gx0,dx), copysign(gy0,dy)
+    nx, ny = floor((dx-gx0)/gx), floor((dy-gy0)/gy)
     x1,y1 = x0+dx, y0+dy
     lx0,lx1 = x0,x1
     for iy in range(ny+1):
-      y = y0 + iy*gy
+      y = y0 + gy0 + iy*gy
       self.line([(lx0,y),(lx1,y)], v=v, h=h, w=w)
       lx0, lx1 = lx1, lx0
     ly0, ly1 = y0, y1
     for ix in range(nx+1):
-      x = x0 + ix*gx
-      ty = 0 if ix % 5 else copysign(1, ly1-ly0)
+      x = x0 + gx0 + ix*gx
+      ty = 0 if ix % 5 else copysign(2, ly1-ly0)
       self.line([(x,ly0-ty), (x, ly1+ty)], v=v, h=h, w=w)
       ly0, ly1 = ly1, ly0
 
   def mgrid(self, x0, y0, dx=tmx, dy=-tdy, ly=ldy, tx=2, v=None, h=0.2, w=0.5):
-    """ Draws a pressure measurement grid at `(x0,y0)` of size `(dx,dy)`.
-
-    There are vertical lines every tx, and horizontal lines with a
-    gap of 1mm between them every `ly`.
-    """
-    # get number of x and y lines and adjust dx and dy to fit.
-    assert ly >= 1+2*w, "grid test lines packed too dense"
-    ly,gy = copysign(ly,dy), copysign(1+w, dy)
-    ny = floor(dy/ly)
+    """ Draws a pressure measurement grid at `(x0,y0)` of size `(dx,dy)`."""
     self.cmt('TYPE:Outer wall')
-    self.line([(x0-w,y0), dict(dy=dy)], h=h, w=w)
-    # Shift measure grid down by 1 to give the top-ticks clearance.
-    y0 -= 1
-    for iy in range(ny):
-      y = y0 + iy*ly
-      self.grid(x0, y, dx, gy, gy=gy, v=v, h=h, w=w)
+    self.grid(x0, y0, dx, dy, gy=dy, gx=tx, v=v, h=h, w=w)
 
   def testprep(self, x0, y0, dx=tdx, dy=tdy, tl=(0,t0x-0.5, t0x+tex-0.5,t0x+tex+tmx+0.5, tdx), mx0=t0x+tex, mdx=tmx, h=0.2, w=0.5):
     self.Zh=0.1
@@ -423,6 +418,7 @@ class ExtrudeTest(GCodeCfgMixin, gcodegen.GCodeGen):
     tnx, tny = self.tcasebox[0], self.sdy + self.tcasebox[1]*maxn
     x0, y0 = -70, 70
     x1, y1 = x0+tnx, y0-tny
+    self.wipe()
     self.preextrude(n=n)
     self.startLayer(Vp=10)
     # Only draw the title and brim if running test 0.
@@ -487,8 +483,8 @@ if __name__ == '__main__':
   gen=ExtrudeTest(**gcodegen.GCodeGetArgs(args))
 
   gridargs=dict(name="GrCal", linefn=gen.gridline, prepfn=gen.gridprep, Kf=gen.Kf, Kb=gen.Kb, Re=gen.Re, tests=[
-    dict(de0=(-0.2, 5.8), vx=5),
-    dict(de0=(-0.2, 5.8), vx=20)])
+    dict(de0=(0.0, 5.0), vx=5),
+    dict(de0=(0.0, 5.0), vx=20)])
 
   bridgeargs=dict(name="BrPA2", linefn=gen.bridgeline, prepfn=gen.bridgeprep, Kf=gen.Kf, Kb=gen.Kb, Re=gen.Re, tests=(
     dict(ve=(0.1, 2.6), vl=10),
