@@ -343,6 +343,12 @@ directly measure `Pb` without it being significantly impacted by `Pn`,
 assuming it doesn't vary with speeds. At low speeds we should be able to get
 several start/stop cycles per line with different retract/restore distances.
 
+### Backpressure effects for overhangs, bridging, and middle-walls.
+
+For overhangs and bridging I'd expect the backpressure to be reduced by the
+percentage overhang, so for bridging it would be zero. Note Orca has settings
+for different pressure-advance for bridging.
+
 ### Backpressure Testing
 
 We need to measure the `Pb` values to see how they vary with;
@@ -445,3 +451,188 @@ For the 4 tests use;
 
 The results of this are in [Retracttest2](#RetractTest2) below.
 
+
+# Printer Tolerance
+
+## Mesh approximation affects
+
+Note with outer walls CAD programs typically export by creating an approximate
+polygon mesh out of points on the model surface. There is usually a tollerance
+resolution setting (onshape calls it "Chordal tolerance") which is the max
+distance between the model surface and the closest polygon surface. This means
+that for concave surfaces (eg holes), the mesh "fills over curves" compared to
+the model, and for convex surfaces (eg cylinders) it "cuts off curves", by as
+much as the tolerance setting. For fitting parts, you care about the maximum
+dimensions for convex surfaces and the minimum dimensions for concave
+surfaces. With convex surfaces the maximum dimensions are the points, which
+are correct and don't need adjustment, but for concave surfaces the minimum
+dimension is the middle of the polygons which is too small by the tolerance
+distance and needs to be adjusted outwards by that much. So the diameter of
+cylinders should not need adjusting, but the diameter of holes will need to be
+increased by 2*tolerance. For OnShape "fine" settings tolerance=0.06mm, so the
+diameter of holes need to be increased by 0.12mm.
+
+## Slicer approximation affects
+
+When the slicer converts the mesh into layers, another similar approximation
+is applied which can further reduce hole sizes. This is controlled by the
+slicer precision setting (Orca has "Quality; Resolution; Precision"). This is
+approximating polygon cross-sections with simpler (less sides) polygons that
+deviate by less than precision from the cross-sections. This can reduce
+hole-sizes similar to the mesh approximation, and shouldn't adversely affect
+external contours much. However, in this case the max deviation would be from
+the cross-section polygon points when the simplification "cuts a polygon point
+off", and the mesh points are accurately on the model surface. Note the
+slice-polygon points correspond with a mesh edge, and not necessarily with a
+mesh point, but they are closer to the real model surface than the middle of
+the polygon slice lines. So the larger out of precision and tolerance has the
+most effect, but the smaller can also contribute a bit.
+
+A rough guess of the combined reduction in hole diameter would be
+`2*sqrt(precision^2 + tolerance^2)`. Note that setting precision super small
+will make the slicing approximation closer and closer to the mesh
+approximation, and cannot go finer. So in practice setting precision to
+something really small like 0.01mm means your quality and gcode size is bound
+by the tolerance used to export the model. For precision=0.01mm and
+tolerance=0.06mm the precision effect is negligable and the diameter increase
+needed for holes is still about 0.12mm.
+
+### Line shape compensation
+
+https://manual.slic3r.org/advanced/flow-math
+https://github.com/SoftFever/OrcaSlicer/issues/8313#issuecomment-3082244171
+
+This attempts to take into account that the line cross-section is not
+rectangular, but bulges out the sides giving a wider line-width. It then
+"overlaps" the bulges between adjacent lines to fill the gaps. Unfortunately
+after all this maths feedback shows the required overlap is to fill the gaps
+100%, which means it's equivalent to just using a simple rectangular cross
+section.
+
+At least everywhere except the outer wall. For the outer wall it does give you
+a perimiter that tries to match the outer-edge of the layer-bulges to the
+perimiter, which could be good for non-interference fits. However, for other
+applications the average outer-edge is a more useful solution.
+
+In orca this manifests as the line-spacing (which is the effective line width)
+being less than the line-width setting by an amount that varys with the layer
+height. So effective line-widths are `layer_height * (1 - PI/4)` or roughly
+`layer_height/5` narrower than the line-width setting used. It also moves the
+outer wall inward by `layer_height * (1-PI/4)/2` or roughly `layer_height/10`
+compared to "rectangular" slicers.
+
+### Polyholes
+
+Orca also has "convert holes to polyholes", which is an interesting idea
+because it attempts to correct the "holes are smaller" problem by using a
+polygon where the middle of the edges is on the model boundary instead of the
+points. However, in this case the hole is already a mesh approximation of the
+real model boundry, and I think polyholes also has been tuned to try and also
+compensate for that. It does some strange things like reducing the number of
+polygon edges as the hole gets smaller, which effectively reduces the amount
+extruded at the hole edge in a way that is a bit hard to analyse and possibly
+varies in hard-to-characterize ways with other dimensions like layer-height.
+
+### Arc Compensation
+
+https://reprap.org/wiki/ArcCompensation
+
+The theory is that curved lines extrude even volumes on the inside and outside
+of the line, but because the inside is a shorter path than the outside, it
+ends up over-extruded on the inside and under extruded on the outside,
+resulting in an overall reduction in the arc radius. This affect depends on
+the hole radius, and increases as the hole gets smaller.
+
+Even in theory this affect is usually small, with a hole diameter larger than
+13mm not needing compensation, and a 2mm hole only needing a 0.06mm increase
+in diameter, but does get significant for smaller holes, with a 1mm diameter
+hole needing to be increased by 0.48mm.
+
+In practice I suspect the backpressure effect causes some of the inside
+over-extrusion to be pushed back inside, reducing the affect, and probably
+quite significantly. With backpressure linearly proportional to bead width, I
+would guess the affect is at least halved.
+
+The estimated required radius `r` or diameter 'd' for a hole of radius `R` or
+diameter `D` and line-thickness `t` is;
+
+```python
+  r = (t + sqrt(t^2 + 4*R^2))/2
+  d = (t + sqrt(t^2 + D^2))
+```
+
+Another possible related effect is "corner pulling" where the filament is
+pulled inwards on a bend by (cooling?) tension.
+
+### Thermal expansion/shrinkage effects
+
+As extruded fillament cools it shrinks, which will tend to reduce outside and
+inside dimensions. I'm not sure how much difference this makes. Note that
+extruded volumes are normally measured in input fillament volume which is
+cool. This means the thermal expansion effects on the extruded fillament are an
+over-extrusion while hot that shrinks back to the desired volume when cool,
+So in theory it should kinda cancel out.
+
+Bed and enclosure temperatures can also have an effect, as these mean the
+filament doesn't cool all the way back to ambient until after the print is
+finished and removed. Perhaps on those cases it should be taken into account?
+
+Exceptions are special filaments that have some permanent expansion after
+heating, like foaming filaments, or perhaps some with tempering affects?
+
+### Arc Fitting
+
+https://github.com/SoftFever/OrcaSlicer/wiki/quality_settings_precision#arc-fitting
+
+This attempts to map sliced polygons back into circular arcs. This is of
+questionable value because;
+
+* Not many printers support the G2 and G3 arc move commands.
+
+* Even printers that support G2 and G3 ususally implement them by
+  approximating the curve with straight lines, which might have worse
+  resolution than the polygons the arcs were approximated from.
+
+* Approximating polygons back to arcs can get it wrong; maybe the original
+  model didn't even have curves? Even if the original model did slice to arcs,
+  the mesh approximation can distort and shift them so the generated arc
+  doesn't match them.
+
+* Most curved surfaces don't project into circular arcs when sliced. Even
+  circular holes become elipses when cut diagonally.
+
+However it could be useful if;
+
+* When you have a very course mesh, this might do a good job of improving the
+  resolution of the output.
+
+* It can significantly reduce gcode size while retaining resolution for a very
+  fine resolution mesh.
+
+* It lets the printer use it's own optimal curve resolution instead of
+  under/over doing it in the gcode.
+
+* If the printer's internal resolution is higher than the mesh-model then arcs
+  will probably be closer to the original model dimensions.
+
+### layer slice height tweaks
+
+I can't remember the details, but I read that some slicers have settings that
+let you adjust the slice-plane height between the top/middle/bottom of the
+layer depending
+on the wall slope.
+
+Normally the middle of the layer is used as the slice-plane
+for calculating the edge polygons, but for sloping sides there is a
+"stair-case" effect that gives outermost and innermost edges that deviate from
+the slope, increasing the outer-edges, reducing internal hole sizes and
+increasing external
+contours.
+
+By using the the layer bottom height as the slice plane you shift the
+outer-wall in for outward-sloping surfaces, and out for inward sloping
+surfaces, and the opposite when using the layer top height, where the amount
+shifted depends on the slope.
+
+Slicers with this setting usually offer the option of using the combination
+that shifts the layers inwards, improving fits for non-vertical holes.
