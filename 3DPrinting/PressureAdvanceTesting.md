@@ -11,10 +11,10 @@ Kf value, and scales the retract/restore actions to relieve/preapply the
 necessary pressure advance based on the prev/next commands. The printed result
 looks like this.
 
-![StartStopTest1 -Kf=1 -Re=1 Result Annotated](StartStopTest1A.jpg "StartStopTest1 Result")
+![StartStopTest1 -Kf=1 -Re=1 Result Annotated](data/StartStopTest1A.jpg "StartStopTest1 Result")
 
 The commented version of gcode output for this is in
-[StartStopTest1_Kf1_Re1.g](./StartStopTest1_Kf1_Re1.g).
+[StartStopTest1_Kf1_Re1.g](data/StartStopTest1_Kf1_Re1.g).
 
 Each test line has the following sequence (blue markers);
 
@@ -24,11 +24,11 @@ nozzle primed with fillament and some small residual pressure.
 2. move 10mm@1mm/s - slow move to drain accumulated pressure as drool. Should
 leave the nozzle primed with nearly zero residual pressure.
 
-3. draw 50mm@<vx>mm/s - fast draw to see fast line quality.
+3. draw `50mm@<vx>`mm/s - fast draw to see fast line quality.
 
-4. move 10mm@1mm/s - slow move to see if there is any residual pressure drool.
+4. move `10mm@1`mm/s - slow move to see if there is any residual pressure drool.
 
-5. draw 15mm@5mm/s - slow draw to see slow line quality after a fast line.
+5. draw `15mm@5`mm/s - slow draw to see slow line quality after a fast line.
 
 This has the following important transitions (green markers);
 
@@ -158,10 +158,10 @@ So it looks like the following settings would be about right;
 
 ## StartStopTest2
 
-![StartStopTest2 Result](StartStopTest2.jpg "StartStopTest2 Result")
+![StartStopTest2 Result](data/StartStopTest2.jpg "StartStopTest2 Result")
 
 The commented version of gcode output for this is in
-[StartStopTest2_Kf085_Re15.g](./StartStopTest2_Kf085_Re15.g).
+[StartStopTest2_Kf085_Re15.g](data/StartStopTest2_Kf085_Re15.g).
 
 Second test points;
 
@@ -235,7 +235,7 @@ This was a rough ad-hock test in the middle of testing if pending code changes
 worked or made sense. Appologies to future me for not keeping all the details
 better.
 
-![RetractTest1 -Kf=0.4 -Kb=3.0 -Re=1.0 result](RetractTest1.jpg "RetractTest1 result")
+![RetractTest1 -Kf=0.4 -Kb=3.0 -Re=1.0 result](data/RetractTest1.jpg "RetractTest1 result")
 
 This test was run with the default width changed to `w=0.4mm` so the lines are
 thinner;
@@ -245,7 +245,7 @@ thinner;
 ```
 
 The verbose commented version of gcode output for this is in
-[RetractTest1_Kf04_Kb20_Cb00_Re10_RPv.g](./RetractTest1_Kf04_Kb20_Cb00_Re10_RPv.g)
+[RetractTest1_Kf04_Kb20_Cb00_Re10_RPv.g](data/RetractTest1_Kf04_Kb20_Cb00_Re10_RPv.g)
 
 Note that this does have `-P` pressure advance compensation on, and the `-v`
 version of the output shows it has split the draw's into acceleration and
@@ -302,7 +302,7 @@ of keeping extrusion rates consistent during accelerations.
 
 1. For the 3rd test the slow draws had acceleration distances that were too
 small to break into separate phases. The lines mostly look OK except there is
-clear over-estrusion at the start of the <3mm/s lines, and some
+clear over-estrusion at the start of the `<3`mm/s lines, and some
 under-extrusion at the start of the >7mm/s lines. This suggests the criteria
 for deciding whether to break apart phases should be not be if the distance
 travelled when accelerating is greater than some small threshold (which is
@@ -412,9 +412,9 @@ https://docs.google.com/spreadsheets/d/1lqm9OUPRjJmuuPAP1AJQVks3GbTPaaQwL20jl991
 ## RetractTest2
 
 This was a more thorough test to see how pressure varied with different
-parameters as documented under [#backpressure-testing](#backpressure-testing).
+parameters as documented under [#backpressure-testing](3DPrinting.md#backpressure-testing).
 
-![RetractTest2 -Kf=0.4 -Kb=3.0 -Re=1.0 result](RetractTest2.jpg "RetractTest2 result")
+![RetractTest2 -Kf=0.4 -Kb=3.0 -Re=1.0 result](data/RetractTest2.jpg "RetractTest2 result")
 
 This `gcodegen.py` was changed to have the following defaults for ASA filament;
 
@@ -442,7 +442,7 @@ And was run with these arguments;
 ```
 
 The verbose commented version of gcode output for this is in
-[RetractTest2_Kf04_Kb30_Cb00_Re10_Rv.g](./RetractTest2_Kf04_Kb30_Cb00_Re10_Rv.g)
+[RetractTest2_Kf04_Kb30_Cb00_Re10_Rv.g](data/RetractTest2_Kf04_Kb30_Cb00_Re10_Rv.g)
 
 Note the test phases are;
 
@@ -538,10 +538,10 @@ un-compensated backlash.
 
 ## StartStopTest3
 
-![StartStopTest3 Result](StartStopTest3.jpg "StartStopTest3 Result")
+![StartStopTest3 Result](data/StartStopTest3.jpg "StartStopTest3 Result")
 
 The commented version of gcode output for this is in
-[StartStopTest3_Kf08_Kb10_Re10_Lh03_Lw05_Rv.g](./StartStopTest3_Kf08_Kb10_Re10_Lh03_Lw05_Rv.g).
+[StartStopTest3_Kf08_Kb10_Re10_Lh03_Lw05_Rv.g](data/StartStopTest3_Kf08_Kb10_Re10_Lh03_Lw05_Rv.g).
 
 ### Observations
 
@@ -566,10 +566,10 @@ retract/restore distances of `de=1.9671` compared to `de=2.3919` in
 I had to switch fillaments to PLA for a different print, and while it was
 there I thought I'd run some of these tests with it.
 
-![StartStopTestPLA1 Result](StartStopTestPLA1.jpg "StartStopTestPLA1 Result")
+![StartStopTestPLA1 Result](data/StartStopTestPLA1.jpg "StartStopTestPLA1 Result")
 
 The commented version of gcode output for this is in
-[StartStopTestPLA1_Kf10_Kb20_Re10_RPv.g](./StartStopTestPLA1_Kf10_Kb20_Re10_RPv.g).
+[StartStopTestPLA1_Kf10_Kb20_Re10_RPv.g](data/StartStopTestPLA1_Kf10_Kb20_Re10_RPv.g).
 
 And was run with these arguments;
 
@@ -601,10 +601,10 @@ problems;
 This was a quick attempt to do the previous test again with `-P` turned off
 and retraction turned up a bit to try and reduce the stringing.
 
-![StartStopTestPLA2 Result](StartStopTestPLA2.jpg "StartStopTestPLA2 Result")
+![StartStopTestPLA2 Result](data/StartStopTestPLA2.jpg "StartStopTestPLA2 Result")
 
 The commented version of gcode output for this is in
-[StartStopTestPLA2_Kf10_Kb20_Re15_RPv.g](./StartStopTestPLA2_Kf10_Kb20_Re15_RPv.g).
+[StartStopTestPLA2_Kf10_Kb20_Re15_RPv.g](data/StartStopTestPLA2_Kf10_Kb20_Re15_RPv.g).
 
 ```bash
 ./gcodegen.py -Te 210 -Tp 50 -Fe 1.0 -Fc 1.0 -Kf 1.0 -Kb 2.0 -Re 1.5 -R >StartStopTestPLA2_Kf10_Kb20_Re15_R.g
@@ -626,9 +626,9 @@ This tested retract and restore distances for different speeds. It has the
 following phases;
 
 * 0mm: default drop and restore to pre-apply pressure before draw.
-* 45mm: draw at <vx>mm/s to stabilize pressure at that speed.
-* 20mm: moving retract of <re>mm at 5mm/s to measure required retraction.
-* 20mm: moving restore of <re>mm at 5mm/s to measure required restore.
+* 45mm: draw at `<vx>`mm/s to stabilize pressure at that speed.
+* 20mm: moving retract of `<re>`mm at 5mm/s to measure required retraction.
+* 20mm: moving restore of `<re>`mm at 5mm/s to measure required restore.
 * 5mm: draw at 5mm to finalize line and stabilize pressure.
 * 0mm: default retract and raise to relieve any vestigial pressure.
 
@@ -637,10 +637,10 @@ following phases;
 ./gcodegen.py -Kf=0.5 -Kb=2.0 -Re=1.5 -Lh=0.3 -Lw=0.5 -R >BacklashTest1_Kf05_Kb20_Re15_Lh03_Lw05_R.g
 ```
 
-![BacklashTest1 Result](BacklashTest1.jpg "BacklashTest1 Result")
+![BacklashTest1 Result](data/BacklashTest1.jpg "BacklashTest1 Result")
 
 The commented version of gcode output for this is in
-[BacklashTest1_Kf05_Kb20_Re15_Lh03_Lw05_Rv.g](./BacklashTest1_Kf05_Kb20_Re15_Lh03_Lw05_Rv.g).
+[BacklashTest1_Kf05_Kb20_Re15_Lh03_Lw05_Rv.g](data/BacklashTest1_Kf05_Kb20_Re15_Lh03_Lw05_Rv.g).
 
 ### Observations
 
@@ -818,10 +818,10 @@ The cmdline run was;
 ./gcodegen.py -Fe=0.0 -Kf=0.6 -Kb=3.0 -Re=2.5 -R -V -E -v >BacklashTest2_Fe00Kf06Kb30Re25RVEv.g
 ```
 
-![BacklashTest2 Result](BacklashTest2.jpg "BacklashTest2 Result")
+![BacklashTest2 Result](data/BacklashTest2.jpg "BacklashTest2 Result")
 
 The commented version of gcode output for this is in
-[BacklashTest2_Fe00Kf06Kb30Re25RVEv.g](./BacklashTest2_Fe00Kf06Kb30Re25RVEv.g).
+[BacklashTest2_Fe00Kf06Kb30Re25RVEv.g](data/BacklashTest2_Fe00Kf06Kb30Re25RVEv.g).
 
 ### Observations
 
@@ -889,7 +889,7 @@ see the retraction required for the wider lines. It added an optional `r0`
 initial retraction to apply that would be executed over the first 1mm of the
 moving retract. The results are WTF!
 
-![BacklashTest3 Result](BacklashTest3.jpg "BacklashTest3 Result")
+![BacklashTest3 Result](data/BacklashTest3.jpg "BacklashTest3 Result")
 
 I'm not going to bother including details.
 
@@ -949,14 +949,14 @@ test does;
 
 The results were;
 
-![fKfTest1 Result](fKfTest1.jpg "fKfTest1 Result")
+![fKfTest1 Result](data/fKfTest1.jpg "fKfTest1 Result")
 
 The commented version of gcode output for this is in
 
-* [fKfTest1_Te210Tp50Fe10Fc10Kf00Kb00Re50n0v.g](./fKfTest1_Te210Tp50Fe10Fc10Kf00Kb00Re50n0v.g).
-* [fKfTest1_Te210Tp50Fe10Fc10Kf00Kb00Re50n1v.g](./fKfTest1_Te210Tp50Fe10Fc10Kf00Kb00Re50n1v.g).
-* [fKfTest1_Te210Tp50Fe10Fc10Kf00Kb00Re50n2v.g](./fKfTest1_Te210Tp50Fe10Fc10Kf00Kb00Re50n2v.g).
-* [fKfTest1_Te210Tp50Fe10Fc10Kf00Kb00Re50n3v.g](./fKfTest1_Te210Tp50Fe10Fc10Kf00Kb00Re50n3v.g).
+* [fKfTest1_Te210Tp50Fe10Fc10Kf00Kb00Re50n0v.g](data/fKfTest1_Te210Tp50Fe10Fc10Kf00Kb00Re50n0v.g).
+* [fKfTest1_Te210Tp50Fe10Fc10Kf00Kb00Re50n1v.g](data/fKfTest1_Te210Tp50Fe10Fc10Kf00Kb00Re50n1v.g).
+* [fKfTest1_Te210Tp50Fe10Fc10Kf00Kb00Re50n2v.g](data/fKfTest1_Te210Tp50Fe10Fc10Kf00Kb00Re50n2v.g).
+* [fKfTest1_Te210Tp50Fe10Fc10Kf00Kb00Re50n3v.g](data/fKfTest1_Te210Tp50Fe10Fc10Kf00Kb00Re50n3v.g).
 
 ### Observations
 
@@ -970,21 +970,21 @@ to 2.0.
 
 The results were;
 
-![fKfTest2 Result](fKfTest2.jpg "fKfTest2 Result")
+![fKfTest2 Result](data/fKfTest2.jpg "fKfTest2 Result")
 
 The commented version of gcode output for this is in
 
-* [fKfTest2_Te210Tp50Fe10Fc10Kf00Kb00Re50n0v.g](./fKfTest2_Te210Tp50Fe10Fc10Kf00Kb00Re50n0v.g).
-* [fKfTest2_Te210Tp50Fe10Fc10Kf00Kb00Re50n1v.g](./fKfTest2_Te210Tp50Fe10Fc10Kf00Kb00Re50n1v.g).
-* [fKfTest2_Te210Tp50Fe10Fc10Kf00Kb00Re50n2v.g](./fKfTest2_Te210Tp50Fe10Fc10Kf00Kb00Re50n2v.g).
-* [fKfTest2_Te210Tp50Fe10Fc10Kf00Kb00Re50n3v.g](./fKfTest2_Te210Tp50Fe10Fc10Kf00Kb00Re50n2v.g).
+* [fKfTest2_Te210Tp50Fe10Fc10Kf00Kb00Re50n0v.g](data/fKfTest2_Te210Tp50Fe10Fc10Kf00Kb00Re50n0v.g).
+* [fKfTest2_Te210Tp50Fe10Fc10Kf00Kb00Re50n1v.g](data/fKfTest2_Te210Tp50Fe10Fc10Kf00Kb00Re50n1v.g).
+* [fKfTest2_Te210Tp50Fe10Fc10Kf00Kb00Re50n2v.g](data/fKfTest2_Te210Tp50Fe10Fc10Kf00Kb00Re50n2v.g).
+* [fKfTest2_Te210Tp50Fe10Fc10Kf00Kb00Re50n3v.g](data/fKfTest2_Te210Tp50Fe10Fc10Kf00Kb00Re50n2v.g).
 
 ### Observations
 
 Again, no difference between any of the lines. It seems the Adv3 really
 doesn't support PA. Theory confirmed.
 
-### BacklashTest4
+## BacklashTest4
 
 Here I go back to trying to validate/calibrate the model. I've largely
 forgotten all the lessons learned by now, but it largely seemed to defy
@@ -1006,7 +1006,7 @@ There are a few thoughts that modified my direction a bit.
    pointless. Speeds of 1mm/s are always going to leave a line. The best we
    can do is something like define zero-pressure as no line at h=0.2mm
    vx=10mm/s.
-   
+
 3. Bed leveling deviations completely mess with attempts to consistently
    measure extrusion widths. Maybe we need to do a filled in first layer to
    test on top of.
@@ -1038,10 +1038,10 @@ The tests were run with;
 
 The results were;
 
-![BacklashTest4 Result](BacklashTest4.jpg "BacklashTest4 Result")
+![BacklashTest4 Result](data/BacklashTest4.jpg "BacklashTest4 Result")
 
 The commented version of gcode output for this is in
-[BacklashTest4_Te210Tp50Fe10Fc10Kf00Kb00Re40v.g](./BacklashTest4_Te210Tp50Fe10Fc10Kf00Kb00Re40v.g).
+[BacklashTest4_Te210Tp50Fe10Fc10Kf00Kb00Re40v.g](data/BacklashTest4_Te210Tp50Fe10Fc10Kf00Kb00Re40v.g).
 
 ### Observations
 
@@ -1059,3 +1059,779 @@ Interestingly the first test does seem to clearly show the backlash
 as around 0.5 to 1mm.
 
 I'll need to have a think about what the next test should be...
+
+
+### SpStartStopTest1
+
+The problem is the line lengths used in the previous tests are too short for
+the pressure to stablize. We need longer lines, so a spiral test is better.
+The spiral coordinates used are R (radius) and C (number of revolutions).
+Additionally the spirals move inward by dRdC=2mm per revolution. Line lengths
+can be specified in mm (dl), circles "C" (dC), or seconds (dt).
+
+This test is similar to the old StartStopTest but in a spiral for longer line
+lengths. The test phases are;
+
+* warmup
+  * 0mm: hopdn and restore with `de=1.0`.
+  * 4/72C: draw at 5mm/s to prime nozzle.
+  * 4/72C: move at 5mm/s to drain nozzle.
+* test
+  * 0mm: restore with `de=<Re>` to apply pressure.
+  * 3s: draw with `de=<ve>,h=<h>,w=<w>,r=1` to check line quality.
+  * 0mm: retract with `de=-<Re>` to relieve pressure.
+  * 20mm: move at `vl=5mm/s` to check for sufficient retraction.
+  * 0mm: restore pressure with `de=<Re>` to what it was before retracting.
+* cooldown
+  * 5mm: draw at 5mm/s to finalize line and stabilize pressure.
+  * 0mm: retract and hopup with `de=-1mm`.
+
+The objective is to find the ideal retraction and restore distances for
+ve=1.0mm, h=0.3 with different w values.
+
+The tests were run with the cmdline;
+
+```bash
+$ ./gcodetest.py -Te=210 -Tp=50 -Fe=1.0 -Fc=1.0 -Kf=1.0 -Kb=1.0 -Re=1.0 -R >test.g
+```
+
+Note this turns on dynamic retraction with `Kf=1.0 Kb=1.0 Re=1.0` which is
+used to draw the dial ruler and test text, but those settings are overridden
+for the testlines to turn of dynamic retraction while keeping the Kf and Kb
+settings so that the generated logging can show the estimated pressures for
+those settings without changing anything. The test args were;
+
+* common args: ve=1.0, h=0.3, dynret=False
+* test1: Re=(0.0,5.0), w=0.3
+* test2: Re=(0.0,5.0), w=0.4
+* test3: Re=(0.0,5.0), w=0.8
+* test4: Re=(0.0,5.0), w=1.6
+
+The results were;
+
+![SpStartStopTest1 Result](data/SpStartStopTest1.jpg "SpStartStopTest1 Result")
+
+The commented version of gcode output for this is in
+[SpStartStopTest1_Te210Tp50Fe10Fc10Kf10Kb10Re10Rv.g](data/SpStartStopTest1_Te210Tp50Fe10Fc10Kf10Kb10Re10Rv.g).
+
+### Observations
+
+The Kf=1.0,Kb=1.0,Re=1.0 settings are rather wrong as the dial and text is
+under-extruded with poor bed adhesion and under retracted with stringing.
+Interestingly it appears to have got worse as it went around the dial drawing
+the 'ticks', I believe this is because gcodegen.py had a `P=0.8` scaledown on
+the target restore pressure to try and reduce oscillations when playing with
+dynamic extrusion adjustments. However this means it's sacrificing 20% of the
+pressure every retract-restore cycle, so I'm going to remove this when dynamic
+extraction is off.
+
+The pre-extrusion pressure and retraction was overestimated resulting in the
+first text after that failing to print until the second line.
+
+The tests largely succeeded at narrowing down the ideal retract and restore
+distances. For all widths the ideal restore is near 3.0, and the ideal
+retraction is somewhere below 4.0. the resolution is not fine enough to
+identify any differences between widths, but there is maybe a hint that wider
+widths do need slightly higher pressures.
+
+## SpStartStopTest2
+
+Trying again with a slightly tweaked version of the test and narrowing in on
+the retraction distances around 3.0mm. I've fixed the dynamic retraction not
+use the 0.8 scaling if dynamic extrusion is off. I've extended the time and
+reduced the distance of the warmup and cooldown phases by moving at 1mms for
+most of it. I changed the initial hopdn restore and final hopup retract to use
+`pe=` target pressure instead of `de=` extruder distance so that it attempts
+to compensate/cancel accumulated pressure as estimated by the current Kf/Kb
+settings.
+
+* warmup
+  * 0mm: hopdn and restore to `pe=1.0`.
+  * 1/72C: draw at 1mm/s to prime nozzle.
+  * 2/72C: move at 1mm/s to drain nozzle.
+  * 1/72C: move at 5mm/s to check nozzle pressure.
+* test
+  * 0mm: restore with `de=<Re>` to apply pressure.
+  * 3s: draw at `de=<ve>,w=<w>` check line quality.
+  * 0mm: retract with `de=-<Re>` to relieve pressure.
+  * 20mm: move at `vl=5mm/s` to see if there is drool.
+  * 0mm: restore pressure with `de=<Re>` to what it was before retracting.
+* cooldown
+  * 5mm: draw at 5mm/s to finalize line and stabilize pressure.
+  * 0mm: retract and hopup with `pe=-1.5mm`.
+
+The tests were run with the cmdline;
+
+```bash
+$ ./gcodetest.py -Te=210 -Tp=50 -Fe=1.0 -Fc=1.0 -Kf=0.4 -Kb=1.0 -Re=1.5 -R >test.g
+```
+
+* common args: ve=1.0, h=0.3, dynret=False
+* test1: Re=(2.0,4.0), w=0.3
+* test2: Re=(2.0,4.0), w=0.4
+* test3: Re=(2.0,4.0), w=0.8
+* test4: Re=(2.0,4.0), w=1.6
+
+The results were;
+
+![SpStartStopTest2 Result](data/SpStartStopTest2.jpg "SpStartStopTest2 Result")
+
+The commented version of gcode output for this is in
+[SpStartStopTest2_Te210Tp50Fe10Fc10Kf04Kb10Re15Rv.g](data/SpStartStopTest2_Te210Tp50Fe10Fc10Kf04Kb10Re15Rv.g).
+
+### Observations.
+
+The starting text is a little better but still seems to suffer from the
+pre-extrude pressure being over-estimated and over-retracted. The dial is
+still terrible and appears to still get worse as it went around adding ticks.
+Looking at the output logging it looks like the pressure model is maybe
+oscilating? Looking again did I imagine that?
+
+Otherwise the test seem to generally show what was expected.
+
+There does appear to be a pattern that lines that start under-restored do
+increase in width as they go, but lines that start over-restored seem to not
+decrease in width, or at least not as quickly. It seems it's easier to
+increase a low pressure than it is to shed a high pressure.
+
+Actually, some of the line-width variation is probably bed-leveling related.
+I've measured the thickness of the lines after peeling them off and they vary
+between about 0.24mm and 0.31mm. This explains why the w=0.3 and w=0.4 lines
+get wider as they go. The line widths at the end are way wider than the target
+0.3mm and 0.4mm.
+
+## SpStartStopTest3
+
+Narrowing in even more. The restore distance to start the lines is less
+than the retraction distance to end them. This is expected, since the restore
+doesn't have to undo backlash because its starting from a passively drained
+nozzle, whereas the retraction needs to undo backlash and relieve pressure,
+and possibly a bit extra to stop/reduce drool.
+
+To handle this I've added a `Be` argument to the test, and the retraction
+distance is `Be+Re`. The target `Re` values have diverged sufficiently to need
+to search different ranges for each line width.
+
+The tests were run with the cmdline;
+
+```bash
+$ ./gcodetest.py -Te=210 -Tp=50 -Fe=1.0 -Fc=1.0 -Kf=0.5 -Kb=2.0 -Re=2.0 -R >test.g
+```
+
+* common args: ve=1.0, h=0.3, dynret=False, Be=0.4
+* test1: Re=(2.6,3.6), w=0.3
+* test2: Re=(2.8,3.8), w=0.4
+* test3: Re=(3.2,4.2), w=0.8
+* test4: Re=(3.6,4.6), w=1.6
+
+The results were;
+
+![SpStartStopTest3 Result](data/SpStartStopTest3.jpg "SpStartStopTest3 Result")
+
+The commented version of gcode output for this is in
+[SpStartStopTest3_Te210Tp50Fe10Fc10Kf05Kb20Re20Rv.g](data/SpStartStopTest3_Te210Tp50Fe10Fc10Kf05Kb20Re20Rv.g).
+
+### Observations.
+
+The dial is much better, but still has a bit of stringing. The start text is
+still lost from over-estimating the pre-extrude pressure. Also the line starts
+for test 4 with `w-1.6` are non-existant except for the first line, showing that the
+`pe=-1.5` retraction at the end of each line is over-estimating the pressure
+at the end of the test line, and this is also visible to a lesser extent for
+test 3 with `w=0.8`. The start of the first line is consistently overextruded
+for all tests, which means the pressure after writing the text summary is
+under-estimated.
+
+This all suggests the `Kf=0.5, Kb=2.0` are wrong, underestimating pressure for
+normal lines (`vl=10,ve=0.62,l=0.3x0.5x1.0`, estimated as `pe=1.31`) lines and
+overestimating the pressure for thick lines (`vl=10,ve=1.33,l=0.2x0.4x4.0`,
+estimated as `pe=3.87`, and `vl=5,ve=1.0,l=0.3x1.6x1.0` estimated as
+`pe=3.70`). Also looking at the estimated pressures, test 4 with w=1.6 is
+estimating that the drawn test line starts very over-restored and doesn't go
+for long enough to stabilize back to `pe=3.7` still estimating `pe=4.19` for
+the last line test. So the pressure is over-estimated even more from the
+restore, but the increasing line widths suggests that actually they were
+under-restored and the pressure was still building.
+
+The test-text to line-start transition goes from
+`vl=10,ve=0.62,l=0.3x0.5x1.0`, estimated as `pe=1.31` to
+`vl=1,ve=0.06,l=0.3x0.5x1.0` estimated as `pe=1.03`, which is the same line
+width but a much lower ve. This means it's under-estimating the pressure
+difference needed for a ve difference, which suggests Kf should be higher.
+
+But the transition from preextrude (`vl=10,ve=1.33,l=0.2x0.4x4.0` estimated as
+`pe=3.87`) to title-text (`vl=10,ve=0.62,l=0.3x0.5x1.0` estimated as
+`pe=1.31`) is over-estimating the pressure difference needed. Since this
+includes a large width change, this suggests Kb should be smaller.
+
+Looking at the restore pressures against width so far it looks like `Kb=3.0` is
+roughly right but somewhere near w=0.8 it flattens out. This matches what I
+expected, where once the bead exceeds the outer width of the nozzle it
+"bulges up" instead of having to push out, so the pressure stops building.
+
+![SpStartStopTest3 Retract and Restore Distances](data/SpStartStopTest3Graph.png
+"SpStartStopTest3 Retract and Restore Distances")
+
+The retract distances are interesting as they seem to be increasing slower
+than the restore distances. This is not what I expected, since a constant
+backlash would have kept the difference constant. However, we really don't
+have enough points to clearly nail down what is happening.
+
+I'm going to change the pressure model so that bead pressure maxes at 2x the
+nozzle width, and collect more points between w=0.4 and w=0.8 using
+Kf=2.0,Kb=3.0.
+
+## SpStartStopTest4
+
+I decided to repeat the previous test and just narrow in a bit more, adjust
+the warmup a little bit, and use the better Kf and Kb vlues. I wanted to
+quickly validate the previous results before moving on.
+
+A theory about why the backlash in the previous test was so different for
+test1&2 vs test3&4 is related to the warmup lines being more defined for
+test1&2 than test3&4 because of the vestigial pressure differences after the
+previous line's cooldown. What if this vesigial pressure difference is still
+significant after the warmup? That would mean the restore values in test1&2
+are under-measured, and possibly over-measured in test3&4. If the retract
+measurements are correct for all tests, then this would explain the apparently
+different backlash for the tests. The backlash for test1&2 is about 1mm and
+for test3&4 is about 0.4mm, but that difference of 0.6mm could be a 0.3mm
+restore under-measure in test1&2, and a 0.3mm over measure in test3&4.
+
+So the test warmup was changed to drain the nozzle longer, replacing the 1/72C of
+@10mm/s movement with another 1/73C of @1mm draining.
+
+* warmup
+  * 0mm: hopdn and restore to `pe=1.0`.
+  * 1/72C: draw at 1mm/s to prime nozzle.
+  * 3/72C: move at 1mm/s to drain nozzle.
+* test
+  * 0mm: restore with `de=<Re>` to apply pressure.
+  * 3s: draw at `de=<ve>,w=<w>` check line quality.
+  * 0mm: retract with `de=-(<Re>+><Be>)` to relieve pressure.
+  * 20mm: move at `vl=5mm/s` to see if there is drool.
+  * 0mm: restore pressure with `de=(<Re>+<Be>)` to what it was before retracting.
+* cooldown
+  * 1/72C: draw at 1mm/s to finalize line and stabilize pressure.
+  * 0mm: retract and hopup with `pe=-1.5mm`.
+
+The tests were run with the cmdline;
+
+```bash
+$ ./gcodetest.py -Te=210 -Tp=50 -Fe=1.0 -Fc=1.0 -Kf=2.0 -Kb=3.0 -Re=1.0 -R >test.g
+```
+
+For the test arguments I zoomed in to 0.1mm Re difference per line centered on
+the previously measured values. The backlash is so different I've specified it
+individually for each test.
+
+* common args: ve=1.0, h=0.3, dynret=False
+* test1: Re=(2.7,3.2), Be=0.9, w=0.3
+* test2: Re=(2.9,3.4), Be=0.9, w=0.4
+* test3: Re=(4.0,4.5), Be=0.5, w=0.8
+* test4: Re=(4.2,4.7), Be=0.5 w=1.6
+
+The results were;
+
+![SpStartStopTest4 Result](data/SpStartStopTest4.jpg "SpStartStopTest4 Result")
+
+The commented version of gcode output for this is in
+[SpStartStopTest4_Te210Tp50Fe10Fc10Kf20Kb30Re10Rv.g](data/SpStartStopTest4_Te210Tp50Fe10Fc10Kf20Kb30Re10Rv.g).
+
+### Observations.
+
+The dial almost identical to the previous test, which is a surprise given how
+different the cmdline arguments are. The reduced -Re=1.0 is compensating for
+the increased -Kf and -Kb to end up with almost the same retraction/restore
+distances for those lines.
+
+The starting text is worse than before. The increased Kf and Kb is more than
+compensating for the capping of bead backpressure to make the over-pressure
+estimation worse.
+
+The test lines are notable for how little difference there is between them. It
+seems +-0.25mm of restore doesn't make much difference when you are close to
+the right value.
+
+The warmup lines for test1&2 start less overextruded but taper down to about
+the same as the previous test, and the restore distances are pretty much
+identical. This suggests the was no vestigial overpressure before, and the
+slow drain worked. The retraction distances are also almost the same, if
+anything a tiny bit longer. I failed to center the retraction distances well
+because I was expecting them to drop a little but the didn't.
+
+The warmup lines for test3 were completely under-extruded except for the first
+after writing the test text. The restore distances seem slightly increased,
+probably because they are starting with a partial retraction. The retractions
+are all over retracted, but for the previous test it first retracted enough at
+4.5mm for this test that's where we started, so it's probably about the same.
+I failed to center this because I was expecting it to increase relative to the
+restore distance. Note that this means retract distance == restore distance,
+which strongly suggests the restore distances are incorrectly too high because
+of starting with a partial retraction.
+
+For test4 the warmup lines were about the same as the previous test run;
+almost non existent. The restore distances seem about the same, but the
+retraction distances increased pretty significantly. I suspect this is because
+in the previous test the lines never stabilized at the final target pressure,
+except for maybe the final line, but on that line the retraction was too
+high.
+
+I think we've not really probed the high-flow end to it's limits. The line
+lengths are too short to stabilize at those flow rates, and the cooldown
+leaves too much vestigial pressure mess for the next test line to be valid.
+
+## SpStartStopTest5
+
+I decided to get some additional width datapoints for w=0.6 and w=1.2 and
+explore the higher restore distances for w=0.8 and w=1.6. To give the line
+longer to stabilize I extended it from 3s to 4s. To improve the
+cooldown I changed it to do a pressure-compensating restore with pe=3.0
+instead of restoring the whole end-of-line pressure and extrude for 3x longer
+to stabilize the pressure. This means the test is now;
+
+* warmup
+  * 0mm: hopdn and restore to `pe=1.0`.
+  * 1/72C: draw at 1mm/s to prime nozzle.
+  * 3/72C: move at 1mm/s to drain nozzle.
+* test
+  * 0mm: restore with `de=<Re>` to apply pressure.
+  * 4s: draw at `de=<ve>,w=<w>` check line quality.
+  * 0mm: retract with `de=-(<Re>+Be)` to relieve pressure.
+  * 20mm: move at `vl=5mm/s` to see if there is drool.
+* cooldown
+  * 0mm: restore pressure with `pe=3.0` to ensure we get flow but not too much.
+  * 3/72C: draw at 1mm/s to finalize line and stabilize pressure.
+  * 0mm: retract and hopup with `pe=-1.5mm`.
+
+The tests were run with the cmdline;
+
+```bash
+$ ./gcodetest.py -Te=210 -Tp=50 -Fe=1.0 -Fc=1.0 -Kf=1.0 -Kb=2.0 -Re=2.0 -R >test.g
+```
+
+For the test arguments I chose these;
+
+* common: ve=1.0, h=0.3, dynret=False
+* test1: Re=(3.4,4.4), Be=0.6, w=0.6
+* test2: Re=(4.0,5.0), Be=0.1, w=0.8
+* test3: Re=(4.1,5.1), Be=0.1, w=1.2
+* test4: Re=(4.2,5.2), Be=0.1, w=1.6
+
+The results were;
+
+![SpStartStopTest5 Result](data/SpStartStopTest5.jpg "SpStartStopTest5 Result")
+
+The commented version of gcode output for this is in
+[SpStartStopTest5_Te210Tp50Fe10Fc10Kf10Kb20Re20Rv.g](data/SpStartStopTest4_Te210Tp50Fe10Fc10Kf10Kb20Re20Rv.g).
+
+### Observations.
+
+This is the cleanest test yet, and it finally has warmup and cooldown traces
+that give me enough trust that there are not vestigial pressure artifacts
+messing with the measurements.
+
+I've figured out the backlash enigma! At higher pressures and longer
+retraction distances the backlash relieves itself. The fillament momentum
+built up while retracting with assistance from the pressure carries it all the
+way through the backlash. This is why the retract distances equal the restore
+distances for w>=0.8.
+
+There is even a bit of retract distances less than the restore distances. At
+first I was thinking maybe there's some kind of startup-momentum-tax, and
+maybe there is, but a far more obvious thing I'd been missing is the initial
+blob extrusion. I include this in the gcodegen.py pressure model, but I'd
+forgotten about it in these tests. For the wider lines the initial blob has a
+significant volume which is immediately subtracted from the pressure.
+
+When we factor this in and plot the graphs for what we have so far, it looks
+like this;
+
+![SpStartStopTest5 Retract and Restore Distances](data/SpStartStopTest5Graph.png
+"SpStartStopTest5 Retract and Restore Distances")
+
+You can see the estimated pressure from the restore distance minus the initial
+bead almost exactly matches the retract distances for w>=0.8 because the
+backlash is fully resolved by the retracting momentum. For widths/pressures
+less than that there is a pretty linear increase in the backlash up to 1.3mm.
+
+A rough guestimate at the settings to match this is `Kf=1.6,Kb=3.2,Re=1.5`.
+This should slightly underestimate pressures by about the same amount for all
+widths, but give some additional retraction to take up the difference.
+
+
+## SpStartStopTest6
+
+Just one more test to validate the last conclusions I thought. It all looked
+great, the dial is nearly perfect, the first two tests exactly matched, then
+the third... and forth. Sigh.
+
+For the test sequence the only change is I reduced the restore for the
+cooldown draw from pe=3.0 to pe=1.0 because it was very over-extruded.
+
+The tests were run with the cmdline;
+
+```bash
+$ ./gcodetest.py -Te=210 -Tp=50 -Fe=1.0 -Fc=1.0 -Kf=1.6 -Kb=3.2 -Re=1.5 -R >test.g
+```
+
+For the test arguments I chose these;
+
+* common: ve=1.0, h=0.3, dynret=False
+* test1: Re=(2.7,3.7), Be=1.1, w=0.4
+* test2: Re=(3.5,4.5), Be=0.4, w=0.6
+* test3: Re=(4.0,5.0), Be=0.0, w=0.8
+* test4: Re=(4.5,5.5), Be=-0.2, w=1.6
+
+The results were;
+
+![SpStartStopTest6 Result](data/SpStartStopTest6.jpg "SpStartStopTest6 Result")
+
+The commented version of gcode output for this is in
+[SpStartStopTest6_Te210Tp50Fe10Fc10Kf16Kb32Re15Rv.g](data/SpStartStopTest6_Te210Tp50Fe10Fc10Kf16Kb32Re15Rv.g).
+
+### Observations
+
+The cooldowns for test three and four completely failed to print anything
+apart from a tiny whisp at the end of the last line of test4. The figures
+chosen were expected to under-estimate the pressure for thicker lines, and yet
+it looks like it severly over-estimated them.
+
+I've got three theories for what is happening;
+
+1. The extruder is slipping or skipping, either in restores when re-applying
+   pressure, or (more likely?) during the draw under high pressure, or when
+   retracting failing to stop at the end of retraction when the momentum of
+   the filament hits the end of the backlash (most likely). Note we are
+   retracting at 40mm/sec which might be too high.
+
+2. The pressure at the end of the line is lower than predicted because more
+   filament bleeds out into the line during deceleration and the ending dot
+   during retraction. I've assumed extra filament is needed for the starting
+   dot in restores which does seem to be reflected in the tests so far, but
+   actually a half-dot is required at the start and end of the line. During
+   restore the extra half-dot is extra pressure which bleeds away during the
+   line as it converges on the steady-state extrusion rate and pressure. At the end
+   of the line the deceleration phase decelerates the ve extrusion rate while
+   the existing pressure pushes out too much filament giving you the classic
+   no-PA thick-line-end artifact, which also reduces the pressure below the
+   line's steady-state pressure. Finally during the retract the excess
+   pressure continues to push out filament that completes the end-of-line
+   half-dot. This all means more filament is pushed out at the end-of-line
+   than we've accounted for, which significantly lowers the final pressure
+   below the line's steady-state pressure. The current model should account
+   for the deceleration phase extra extrusion, but the restore/retract part of
+   the model doesn't include extruder acceleration limits, so it
+   under-estimates the extrusion during those actions.
+
+3. The firmware is doing it's own fiddling with the extrusion rates that our
+   model doesn't know about. The Adventurer3 doesn't appear to support PA, but
+   it might include it's own internal primitive attempts to do the same thing.
+   As a boden printer it's highly vulnerable to PA artifacts, and although they
+   are visible, it does do remarkably well most of the time. Maybe it does so
+   well because it does include some PA compensation?
+
+Or it could be a combination of these factors. I suspect at least 2 is
+contributing and needs to be addressed. We need to look closer at these to see
+whats going on. Looking closely at test4 line0 as an example;
+
+PA settings: Kf,Kb,Re=1.6,3.2,1.5
+Test4 line0: ve=1.0 dynret=0 Re=4.5 Be=-0.2 h=0.3 w=1.6 r=1.0
+
+Previous testing suggests this requires a 5.0mm restore and 4.8mm retract,
+with a 0.25mm bead suggesting Pe=4.75mm during steady-state-draw. The Pa
+settings used should estimate Pe=4.16mm with 4.41mm restore and 5.66mm retract.
+
+test line: spiral RC0=(55.9,-0.444) dRC=(-0.1,0.057) dl=20.0@5 de=4.000@1.0 l=0.30x1.60x1.00
+vl = ve*Fa/(h*w*r) = 5.01
+eb = h*pi*(w/2)**2/Fa = 0.251
+Pn,Pb = Kf*ve,min(w,0.8)*Kb = 1.600, 2.560
+Pe = Pn+Pb = 4.160
+-(Re + Be) = -4.3
+
+cooldown line: spiral RC0=(55.7,-0.330) dRC=(-0.1,0.042) dl=14.6@1 de=0.908@0.1 l=0.30x0.50x1.00
+vl=1
+h,w,r=0.3,0.5,1.0
+ve = vl*h*w*r/Fa = 0.062
+eb = h*pi*(w/2)**2 = 0.059
+Pn,Pb = Kf*ve,min(w,0.8)*Kb = 0.100, 1.600
+Pe = Pn+Pb = 1.700
+-(Re + Be) = -2.7
+
+The verbose gcode output trimmed to only include relevant details and annotated looks like this;
+
+```gcode
+;00:18:58.246: pe=-1.5041 eb=0.0000 ve=0.0000 vn=0.0000 vl=0.000 db=0.00
+; 1. This is the restore before the warmup extrude line.
+G1 E233.5891 F1800                      ; restore de=2.5001@30.0 r=0.40
+;00:18:58.330: pe=0.9920 eb=0.0040 ve=30.0000 vn=0.2177 vl=0.000 db=0.20
+; 2. This is the warmup extrude line. This extruded OK for the first line.
+;00:18:58.330: spiral RC0=(56.0,0.500) dRC=(-0.0,0.014) dl=4.9@1 de=0.305@0.1 l=0.30x0.50x1.00
+G1 X-55.76 Y-4.88 E233.8937 F60         ; draw dl=4.9@1(0<1>1) de=0.305@0.06(0.0<0.06>0.06) l=0.30x0.50x1.00 r=0.64
+;00:19:03.215: pe=1.1030 eb=0.0103 ve=0.0624 vn=0.0408 vl=1.000 db=0.32
+; 3. This is the warmup drain line. It had a thin trail to the start of the test line.
+;00:19:03.215: spiral RC0=(56.0,-0.486) dRC=(-0.1,0.042) dl=14.6@1 de=0.000@0.0 l=0.30x0.50x0.00
+...
+;00:19:17.854: pe=0.6493 eb=0.0036 ve=0.0000 vn=0.0223 vl=0.000 db=0.19
+; 4. This is the restore before the test line. It looked under-restored for this line.
+G1 E238.3937 F1800                      ; restore de=4.5000@30.0 r=2.10
+;00:19:18.004: pe=5.0451 eb=0.1078 ve=30.0000 vn=1.5532 vl=0.000 db=1.05
+; 5. This is the test line. It got thicker as it went and looked about right at the end.
+;00:19:18.004: spiral RC0=(55.9,-0.444) dRC=(-0.1,0.057) dl=20.0@5 de=4.000@1.0 l=0.30x1.60x1.00
+...
+G1 X-42.37 Y-36.27 E242.3926            ; draw dl=0.6@5(5<5>0) de=0.111@0.96(1.0<1.0>0.0) l=0.30x1.60x1.00 r=1.09
+;00:19:22.013: pe=4.2269 eb=0.2913 ve=0.0000 vn=1.0418 vl=0.000 db=1.72
+; 6. This is the retract at the end of the test line. It looked clean.
+G1 E238.0926 F2400                      ; retract de=-4.3000@-40.0 r=1.12
+;00:19:22.120: pe=-0.0939 eb=0.3122 ve=-40.0000 vn=0.0000 vl=0.000 db=1.79
+; 7. This is the cooldown drool check line. It showed no drool.
+;00:19:22.120: spiral RC0=(55.8,-0.387) dRC=(-0.1,0.057) dl=20.0@5 de=0.000@0.0 l=0.30x1.60x0.00
+...
+;00:19:26.129: pe=-0.0939 eb=0.0000 ve=0.0000 vn=0.0000 vl=0.000 db=0.00
+; 8. This is the restore before the cooldown draw line. There is no sign any extrusion for this.
+G1 E239.2061 F1800                      ; restore de=1.1136@30.0 r=0.13
+;00:19:26.166: pe=1.0155 eb=0.0042 ve=30.0000 vn=0.2230 vl=0.000 db=0.21
+; 9. This is the cooldown draw line. There is no sign of any extrusion for this.
+;00:19:26.166: spiral RC0=(55.7,-0.330) dRC=(-0.1,0.042) dl=14.6@1 de=0.908@0.1 l=0.30x0.50x1.00
+...
+G1 X-13.32 Y-53.96 E240.1139            ; draw dl=4.8@1(1<1>0) de=0.302@0.06(0.06<0.06>0.0) l=0.30x0.50x1.00 r=0.74
+;00:19:40.725: pe=1.2921 eb=0.0142 ve=0.0000 vn=0.0464 vl=0.000 db=0.38
+; 10. This is the retract at the end of the whole test line. Again, nothing extruded.
+G1 E237.3332 F2400                      ; retract de=-2.7807@-40.0 r=0.76
+;00:19:40.794: pe=-1.4886 eb=0.0142 ve=-40.0000 vn=0.0000 vl=0.000 db=0.38
+; ----------------------------------------------
+; This is the start of the next test line.
+;00:19:40.823: Test Line startstop ve=1.0 h=0.3 dynret=0 Re=4.7 Be=-0.2 w=1.6
+; 11. This is the restore before the warmup draw. There is a bit of drool mess here.
+G1 E239.8332 F1800                      ; restore de=2.5000@30.0 r=0.41
+;00:19:41.811: pe=1.0073 eb=0.0041 ve=30.0000 vn=0.2212 vl=0.000 db=0.20
+; 12. This is the warmup draw. There is a faint drool line after the restore mess.
+;00:19:41.811: spiral RC0=(54.0,0.500) dRC=(-0.0,0.014) dl=4.7@1 de=0.294@0.1 l=0.30x0.50x1.00
+G1 X-53.77 Y-4.70 E240.1269 F60         ; draw dl=4.7@1(0<1>1) de=0.294@0.06(0.0<0.06>0.06) l=0.30x0.50x1.00 r=0.64
+;00:19:46.521: pe=1.1120 eb=0.0105 ve=0.0624 vn=0.0412 vl=1.000 db=0.33
+; 13. This is the warmup drain line. A faint drool line to the start of the line.
+;00:19:46.521: spiral RC0=(54.0,-0.486) dRC=(-0.1,0.042) dl=14.1@1 de=0.000@0.0 l=0.30x0.50x0.00
+;00:20:00.637: pe=0.6672 eb=0.0038 ve=0.0000 vn=0.0230 vl=0.000 db=0.20
+; 14. This is the restore before the test line. It looks a little bit under-restored.
+G1 E244.8269 F1800                      ; restore de=4.7000@30.0 r=2.21
+;00:20:00.794: pe=5.2514 eb=0.1196 ve=30.0000 vn=1.6821 vl=0.000 db=1.11
+```
+
+The E239.2061 after the restore for the cooldown draw at 8. is -3.1865 behind
+E242.3926 a the end of the test line at 5. However, earlier testing suggests
+the line's steady state pressure was pe=4.75mm, so assuming that was the
+pressure at 5. means the pressure at 9. should have been
+pe=4.75-3.1865=1.5635mm, which should have been enough to start even just a
+drool line at 1mm/s. By the end of the cooldown draw at 9. we are at E240.1139
+where the pressure should have advanced to pe=4.75-2.2787=2.4713mm and still
+no line. Only at the restore before the next test line do we see that there
+was some drool mess, suggesting there had been some extrusion during the
+cooldown draw, but not enough to touch the bed at even 1mm/sec.
+
+Note the PA settings of `Kf=1.6,Kb=3.2` were expected to estimate the steady
+state pressure lower at `pe=4.16mm`, and we see at the end of the test line it
+reports `pe=4.2269` which is pretty close but higher because it sees the bead
+diameter as `db=1.72` larger than the target `w=1.6mm`, and also sees
+`vn=1.0418` which is larger than the target `vn=1.0mm`. The bead being larger
+makes sense as the no-PA artifact, but `vn` should be lower.
+
+Looking closer this is because the restore includes the whole initial bead but
+because it doesn't include extruder acceleration/deceleration phases it
+underestimates the time so the extruded bead is modeled as reaching only
+`db=1.05` which means the line starts over-pressure. Although the pressure
+does decay towards the steady-state pressure, it's still over-pressure at the
+end of the line, hence `vn` is still over the target `vn=1` flow rate. The
+retraction model has an additional de=0.021 of extrusion into the bead, but
+that is also underestimated because the retraction time is underestimated.
+
+This all suggests the pressure after retracting at the end of the test line
+draw is over estimated by 1mm to 2mm, which means our retraction should be
+lower than the previous tests suggest. But what changed since the last test?
+The only things that changed were slightly higher Re values and lower Be
+values to try and center the tests better, the different Kf and Kb values, and
+the reduced cooldown draw restore from pe=3.0 to pe=1.0. I think maybe the
+higher cooldown restore was boosting the pressure between tests so maybe they
+all just ran at higher pressures than estimated?
+
+I think we need to repeat the previous test to find what the retract/restore
+distances are with these settings.
+
+## SpStartStopTest7
+
+This was a re-run of previous tests to validate them with some tiny changes.
+For the test sequence the only change is I increased the restore for the
+cooldown draw from pe=1.0 to pe=2.0 because it failed to render before and in
+retrospect pe=2.0 is what would be required for a l=0.3x0.5x1.0 line even at
+1mm/sec.
+
+The tests were run with the same cmdline;
+
+```bash
+$ ./gcodetest.py -Te=210 -Tp=50 -Fe=1.0 -Fc=1.0 -Kf=1.6 -Kb=3.2 -Re=1.7 -R >test.g
+```
+
+For the test arguments I chose these;
+
+* common: ve=1.0, h=0.3, dynret=False
+* test1: Re=(4.0,5.0), Be=-0.1, w=0.8
+* test2: Re=(4.1,5.1), Be=-0.2, w=1.0
+* test3: Re=(4.2,5.2), Be=-0.3, w=1.2
+* test4: Re=(4.5,5.5), Be=-0.5, w=1.6
+
+The results were;
+
+![SpStartStopTest7a Result](data/SpStartStopTest7a.jpg "SpStartStopTest7a Result")
+
+Because I was concerned that maybe the bowden tube setup from my drybox to the
+printer was causing too much friction I removed most of it and re-ran the test
+with this result;
+
+![SpStartStopTest7b Result](data/SpStartStopTest7b.jpg "SpStartStopTest7b Result")
+
+The commented version of gcode output for this is in
+[SpStartStopTest7_Te210Tp50Fe10Fc10Kf16Kb32Re17Rv.g](data/SpStartStopTest7_Te210Tp50Fe10Fc10Kf16Kb32Re17Rv.g).
+
+### Observations
+
+I dunno what's happening with retractions, but it seems like every test I run
+I need less and less.
+
+The second run with the reduced drybox bowden path is very similar but shows
+no retraction drool after the test line for any test, even when only
+retracting 4.0mm after a w=1.6 line.
+
+The cooldown lines look OK, but the warmup lines are nearly missing. I note
+the Adventurer3's side blowing fan seems to be blowing the thin drool to one
+side so it's not sticking to the bed. This gives different drool results
+depending on the line angle, and possibly also the previous extrusion rates
+since the fan speed varies with how hot the hotend heatbreak is.
+
+I keep re-discovering the fact that 1mm/sec lines are too slow for a
+meaningful draw, and are probably only useful for checking/draining vestigial
+pressure.
+
+The other thing is the lines all look really similar, with the only clear
+things being a restore less than de=4.4 is too little for w=0.8, and more than
+de=5.1 is too much for w=1.6. With the model assumption that the bead
+backpressure flatlines after w is 2x the nozzle diameter, this kinda makes
+sense since the required restore differences are reduced to the initial bead
+size and any over/under pressure is spread over the line for the next Kf*pi
+seconds which is somewhere between 1.5 to 6 seconds. With fixed ve that means
+the distance gets longer as the target w gets smaller, so it looks about the
+same for the different target widths. At vl=5mm/s,h=0.3, 0.5mm of
+over-restore spread over 4secs of line makes it only 12% wider.
+
+I think this is enough bead backpressure testing. Time to see how things vary
+with flowrate ve to get a better estimate for Kf.
+
+
+## SpStartStopTest8
+
+Actually, one more backpressure test. I realized I hadn't yet validated the
+theory with these tests that the backpressure is independent of the layer
+height. This test ran with the optimal restore/retract distances from earlier
+tests for layer widths 0.3mm -> 0.8mm at layer heights 0.18mm -> 3.8mm.
+
+The tests were run with the cmdline;
+
+```bash
+$ ./gcodetest.py -Te=210 -Tp=50 -Fe=1.0 -Fc=1.0 -Kf=1.6 -Kb=3.2 -Re=1.7 -R >test.g
+```
+
+For the test arguments I chose these;
+
+* common: ve=1.0, h=(0.18,0.38), dynret=False
+* test1: Re=2.9, Be=1.3, w=0.3
+* test2: Re=3.2, Be=1.1, w=0.4
+* test3: Re=4.0, Be=0.4, w=0.6
+* test4: Re=4.5, Be=0.0, w=0.8
+
+The results were;
+
+![SpStartStopTest8 Result](data/SpStartStopTest8.jpg "SpStartStopTest8 Result")
+
+The commented version of gcode output for this is in
+[SpStartStopTest8_Te210Tp50Fe10Fc10Kf16Kb32Re17Rv.g](data/SpStartStopTest8_Te210Tp50Fe10Fc10Kf16Kb32Re17Rv.g).
+
+I then decided that I should have used a hopup/hopdown action for changing
+heights to correct for backlash and re-did the test. I also tweaked the test
+line lengths and pressures to;
+
+* Extend the warmup drool stage from dC=3/72 to dC=4/72. This gives it more
+  time/distance to drain the vestigial pressure before starting the test line,
+  ensuring the test lines all start closer to zero pressure.
+
+* Reduce the cooldown line from dC=3/72 to dl=5mm. We don't really need a long
+  line at the end of the test to see if there was over-retraction before it,
+  we only need to see the line start point to know if the restore starting it
+  was right.
+
+* Reduced the test's final retraction-drool check from dl=20mm to dl=10mm. We
+  don't need a long drool-check to see if there was under-retraction, there is
+  either drool or no drool and we don't care for how long.
+
+* Fixed the initial pressure setting retraction at the beginning of each test
+  to use a fixed Re value so it doesn't get adjusted by dynret to whatever the
+  cmdline arguments were.
+
+* Adjusted the various restore pressures to try and give better results.
+
+The last pressure adjustments appear to have been a mistake, since the results
+were a bit messed up compared to the first results.
+
+![SpStartStopTest8b Result](data/SpStartStopTest8b.jpg "SpStartStopTest8b Result")
+
+The commented version of gcode output for this is in
+[SpStartStopTest8b_Te210Tp50Fe10Fc10Kf16Kb32Re17Rv.g](data/SpStartStopTest8b_Te210Tp50Fe10Fc10Kf16Kb32Re17Rv.g).
+
+### Observations
+
+This does seem to show that layer height doesn't matter, right up until you
+reach the last line with h=0.38mm w=0.8, which is clearly too wide, which
+means the pressure required is lower. This suggests that the inflection point
+where backpressure starts to "flatline" no matter how wide the bead is drops
+as layer height increases. However, this is beyond the normal operating layer
+heights and line widths, so I'm not sure it's worth characterizing in detail.
+
+The only other thing is all the retractions are clean, which tells us the
+retraction distances are sufficient, but this test doesn't tell us if they are
+excessive. However, with the restores all looking so clean with the previously
+identified optimal distances, I think it's unlikely the required retraction
+distances would have changed.
+
+At least thats what the first run of this test showed. The second run that was
+supposed to include only minor tweakss shows something a bit different, at
+least as far as ideal retraction distances go.
+
+The second run mostly confirms the conclusions about backpressure being
+independent of height until you get to h=0.38mm w=0.8, with all the test line
+restores apart from that one looking perfect. The restores for the test warmup
+lines look much more consistent between test-lines, but they also are a bit
+thicker than the first run, and although the warmup drool line is longer, the
+drool line is at least as thick when the test line starts as in the first run.
+After the test lines we see insufficient retraction for w=0.4 h=0.18-0.34 and
+w=0.6-0.8 h=0.18-0.24, combined with insufficient restore for the cooldown
+draw for w=0.6-0.8 h=0.24-0.38. I think this is largely because the pressure
+adjustments were just wrong, but also that over restore errors are pretty
+forgiving and under retractions are not when getting the pressure wrong. I
+think in this case the test lines have not yet decayed to the natural
+pressures by the end of the line and are higher than what they were in earlier
+test runs, resulting in the previously good retraction distance being
+insufficient.
+
+The different sensitivity for restore/retract is because incorrect pressure
+estimates are over/under by an absolute error margin, but the flow error
+artifacts scale with the relative error, which is small after a restore when
+the pressure is high and very large after a retraction when the pressure is
+low. However, getting the restore pressure right is critical because restore
+pressure errors take so long to decay away that they still significantly
+impact the future retraction.
+
+However, looking closer at the commented gcode the model suggests the start
+and retraction pressures for the test lines should have been **lower** in the
+second run, not higher. This contradicts that theory. For the w=0.8 test the
+line-start post-restore pressures are 0.7->0.4 lower and the post-retract
+pressures are 0.05->0.03 lower. This suggests that retractions are highly
+sensitive to something else, like maybe me fiddling with the spool in its
+drybox/bowden (which I have done on occassion during these prints to check if
+there's resistance and try to reduce it), or just a bit random. Sigh.

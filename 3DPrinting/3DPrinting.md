@@ -15,6 +15,58 @@ printed line. For layer 0.1x0.4mm lines lines it is 60mm, and for 0.3x0.4mm
 it's 20mm. So line print velocity `vl` is between 20x to 60x, or typically
 30x, extruder velocity `ve`.
 
+## Line width and spacing.
+
+OrcaSlicer uses a line-model that assumes "bulges" on the edge of the lines,
+as described at;
+
+https://manual.slic3r.org/advanced/flow-math 
+
+But this ends up almost exactly the same as simpler "rectangular" lines
+because they always use overlap_factor=1. See;
+
+https://github.com/SoftFever/OrcaSlicer/issues/8313#issuecomment-3082244171
+
+This means Orca effectively uses thinner lines than other slicers by
+layer_height * (1 - PI/4), or roughly layer_height/5. So add that much to your
+line_width setting. Note that the adjustment depends on layer_height, so if
+you have a different first_layer_height, have enabled Precise_Z_height (which
+can adjust layer heights to give a more accurate model height), or enabled
+infill combination (which can merge infill layers into one thick layer), then
+the adjustment will be off for those layers. Note that this also means Orca
+effectively uses narrower lines for thicker layers with the same line-width
+settings, which is IMHO the opposite of what you would want. For
+nozzle-width=0.4mm and layer_heights=0.1, 0.2, 0.3 I set Orca line-widths as a
+% of the nozzle width and add 5%, 11% and 16% respectively.
+
+Orca effectively shifts the outer-wall inwards by layer_height * (1-PI/4)/2,
+or roughly layer_height/10. This can be compensated for by adding it to
+"Quality; Precision; X-Y contour compensation" and subtracting it from
+"Quality; Precision; X-Y hole compensation". Note in Orca the "X-Y contour
+compensation" and "X-Y hole compensation" distance settings are offsets
+(radius). I believe FlashPrint's equivalent "External Compensation" and
+"Internal Compensation" settings are edge-to-edge (diameters) so you would
+need to halve those settings to map them to Orca.
+
+My thoughts on how line-width and extrusion-ratio settings should work is at;
+
+https://github.com/SoftFever/OrcaSlicer/pull/11105#issuecomment-3443404410
+
+## Seam Gap.
+
+OrcaSlicer has a "Quality; Seam; Seam Gap" setting that leaves a space between the seam join
+ends.
+
+If we assume the start and end of the lines include the circular "bead" bulge
+beyond the start and stop points, we can calculate the gap needed for the
+bulge overlap to exactly match the volume of no seam.
+
+gap = line_spacing * pi/4 ~= 0.7854 * line_spacing
+
+The setting can be set as a % of nozzle diameter or length, with the default
+being 10%. For a 0.4mm nozzle this is 0.04mm, which is much less than our
+calculated 0.3142mm for a 0.4mm width line.
+
 ## Linear Advance
 
 Linear Advance or Pressure Advance is mm of extrusion advance per mm/s of
@@ -40,6 +92,10 @@ nozzle, so nozzle flow is linear with filament compression distance, or the
 extruder advance distance. See this for some thoughts on these assumptions;
 
 https://klipper.discourse.group/t/modification-of-pressure-advance-for-high-speed-bowden-printers/13053/18?u=dbaarda
+
+Also more thoughts posted in OrcaSlicer discussions;
+
+https://github.com/SoftFever/OrcaSlicer/discussions/10832#discussioncomment-14603955
 
 Note the linear advance factor `Kf` for compensating for this is the mm of
 advance `pe` needed per mm/sec of extruder velocity for the nozzle output flow

@@ -4,7 +4,15 @@
 import argparse
 import gcodegen
 from pprint import *
+from math import *
 
+def solvequad(a,b,c):
+  """ Solve a quadratic equation, returning the two roots."""
+  d = sqrt(b**2 - 4*a*c)
+  return (-b - d)/(2*a), (-b + d)/(2*a)
+
+def roundup(v,m=1):
+  return m*ceil(v/m)
 
 class ExtrudeTest(gcodegen.GCodeGen):
   """ Generate GCode Extrusion Tests.
@@ -29,9 +37,15 @@ class ExtrudeTest(gcodegen.GCodeGen):
   sdy = 30 # test text settings box width.
   tdx = rdx + sdy  # test box total width.
   tdy = rdy + tn*ty + 5 # test box total height.
+  # Constants for spiral tests.
+  R0 = 70
+  R1 = 42
+  C0 = 0.0
+  dRdC = -2
+  LN = 5
 
   # These are printer configuration test arguments.
-  _CONF_ARGS = ('Kf','Kb','Re', 'fKf')
+  _CONF_ARGS = ('Kf','Kb','Re', 'fKf', 'dynret', 'dynext')
 
   def resetfile(self,*args,**kwargs):
     """Initialize confstack whenever we resetfile()."""
@@ -106,8 +120,7 @@ class ExtrudeTest(gcodegen.GCodeGen):
     self.preExt(x0-2*n,y0,x1,y1+2*n,m=5,lw=0)
 
   def title(self,x0,y0, **kwargs):
-    self.cmt("structure:brim")
-    self.text(self._fset(sep=' ', **kwargs), x0+2, y0+5, fsize=5)
+    self.settings(x0+2,y0+5,sep=' ', **kwargs)
 
   def brim(self, x0, y0, x1, y1):
     w = self.w
@@ -136,10 +149,9 @@ class ExtrudeTest(gcodegen.GCodeGen):
       self.draw(dy=-l)
       self.hopup()
 
-  def settings(self, x0, y0, **kwargs):
+  def settings(self, x0, y0, sep='\n', title='', **kwargs):
     """ Draw the test arguments at (x0,y0)."""
-    self.cmt("structure:brim")
-    self.text(self._fset(sep='\n', **kwargs), x0, y0, fsize=5)
+    self.text(self._fset(sep=sep, **kwargs), x0, y0, fsize=5)
 
   def doTests(self, name, linefn, tests, n=None, **kwargs):
     """Run up to 4 tests.
@@ -194,24 +206,162 @@ class ExtrudeTest(gcodegen.GCodeGen):
     # Restore the config arguments after the test.
     self.popconf()
 
+  def dial(self, R=R0, x0=0.0, y0=0.0, tl=3):
+    self.hopdnrc(R, 0, x0=x0, y0=y0)
+    self.spiral(R, 1, x0=x0, y0=y0)
+    self.hopup()
+    for i in range(0,72):
+      C = i/(72)
+      self.hopdnrc(R,C,x0=x0,y0=y0)
+      l = tl/2 if i % 6 else tl
+      self.drawrc(dR=l,x0=x0,y0=y0)
+      self.hopup()
+
+  def dialStart(self,C, R0=R0, R1=R1):
+    self.cmt('structure:shell-outer')
+    self.hopdnrc(R0,C)
+    self.drawrc(R1)
+    self.hopup()
+
+  def dialRuler(self, R0=R0, R1=R1):
+    self.cmt('structure:shell-outer')
+    self.dial(R0,tl=3)
+    self.dial(R1,tl=-3)
+
+  def doSpiralTests(self, name, lines, tests, ln=LN, **kwargs):
+    """ Do tests in a spiral pattern instead of a grid for longer path lengths.
+
+    tests is a list of test kwargs for lines, and  'lines' is a
+    list of spiral kwargs. The spiral kwargs can have string name values
+    referring to values in the test kwargs.
+    """
+    # Note for Kf=1.0,Kb=0.0 the decay to steady state takes about 3sec, which
+    # for v=100mm/s is 300mm of line! A circle of D=100mm have about 300mm of
+    # circumference, so a whole circuit of the spiral is needed. However for
+    # v=25mm only 1/4 of a circle is needed. So we should either adjust the
+    # diameter for the test print speed, or adjust the fraction of the circle
+    # for each phase based on speed.
+    # PreExtrude
+    R0,R1,C0,dRdC = self.R0, self.R1, self.C0, self.dRdC
+    self.hopdnrc(R=R0+5, C=1/16, h=0.2)
+    self.spiral(R=R0+5,C=3/16,vl=10, w=0.4, r=4)
+    self.hopup()
+    # Prepare tests
+    self.startLayer(Vp=10)
+    self.settings(-R0,R0,**kwargs)
+    self.dialRuler(R0,R1)
+    R0+=self.dRdC; R1-=self.dRdC
+    # Do tests
+    Rl,Cl = R0,C0
+    for tn,t in enumerate(tests):
+      self.settings([0,-30,-30,0][tn],[25,25,0,0][tn], **t)
+      # Draw the dial start if this is the outer radius test.
+      if Rl == R0:
+        self.dialStart(Cl)
+      self.doSpiralTest(tn, name, Rl, Cl, lines, ln, **(kwargs|t))
+      # Get the R,C position of the end of the last test and updated it for the next test.
+      Rf,Cf = self.xy2rc()
+      if Rl - Rf < Rf - R1:
+        # Start next test on the next inside track.
+        Rl = roundup(Rf, self.dRdC)
+      else:
+        # Start next test on the next quarter.
+        Rl,Cl = R0, roundup(Cf,1/4)
+        if Cl >= 1: break
+    self.endLayer()
+
+  def doSpiralTest(self, tn, name, R, C, lines=None, ln=5, **kwargs):
+    """ Do a single spiral test.
+
+    This does a sequence of spiral test lines with varying arguments. Each
+    test line starts at the same C angle and changes R by self.dRdC for each track.
+
+    Args:
+      tn: the number of this test.
+      name: the name of this test.
+      R,C: the R,C coordinates where this test starts.
+      dRdC: the change in R per rotation.
+      lines: a list of spiral kwargs where some values can be string names refering to (possibly range-valued) kwargs arguments.
+      ln: the number of test lines in this test.
+      **kwargs: the (possibly range-valued) arguments for this test.
+    """
+    R1 = self.R1 - self.dRdC
+    warmup = [
+      dict(dC=1/72, vl=5, h=self.layer.h, w=self.layer.w, r=1.0),
+      dict(dC=4/72, vl=1, h=self.layer.h, w=self.layer.w, r=0.0)]
+    cooldn = [
+      dict(dl=0, h=self.layer.h, pe=1.5),
+      dict(dl=5, vl=5, h=self.layer.h, w=self.layer.w, r=1.0)]
+    lines = warmup + lines + cooldn
+    testargs = {k:self._getstep(ln, v) for k,v in kwargs.items()}
+    assert any(dv for _,_,dv in testargs.values()), 'At least one arg in {kwargs} must be a range.'
+    self.log(f'Test{tn} {name} {self._fset(**kwargs)}')
+    # Push the config arguments without applying changes before the test.
+    self.pushconf()
+    # Adjust the retraction from the last hopup to what it would be for a
+    # de=-5.0 retraction from the last pre-test draw. This is the retraction
+    # performed after each line cooldown, which we try to match for the start
+    # of the first line. Each cooldown line is started with pe=1.5 so a
+    # de=-5.0 retract should have pe=-3.5. We need to do this by setting
+    # Re=3.5 so dynret adjusts it to that.
+    self.setconf(Re=3.5)
+    self.retract()
+    self.cmt(f'structure:shell-inner')
+    e=0.00001
+    while all(v <= v1+e for (v,v1,dv) in testargs.values()) and R>R1:
+      lineargs={k:v for k,(v,_,_) in testargs.items()}
+      confargs={k:v for k,v in lineargs.items() if k in self._CONF_ARGS}
+      self.log(f'Test Line {name} {self._fset(**lineargs)}')
+      self.setconf(**confargs)
+      self.hopdnrc(R, C, de=5.0)
+      for l in lines:
+        # Replace any name values in l with the corresponding value in lineargs.
+        sargs={k:(eval(v,locals=lineargs) if isinstance(v,str) else v) for k,v in l.items()}
+        self.spiral(dRdC=self.dRdC,**sargs)
+        R, _ = self.xy2rc()
+        if R <= R1: break
+      self.hopup(de=-5.0)
+      # Get the R,C position of the start of the next 1/4 spiral
+      R = roundup(R,self.dRdC)
+      # Update the testargs for the next lines.
+      for k,(v,v1,dv) in testargs.items():
+        testargs[k] = (v+dv,v1,dv)
+    # Restore the config arguments after the test.
+    self.popconf()
+
   def _getVxVehwr(self, vx=None, ve=None, h=None, w=None, r=1.0):
     """ Get vx, ve, h, w, and r from each other. """
     assert ve is not None or vx is not None, 'must specify at least ve or vx'
     if vx is None:
-      if h is None: h = self.h
-      if w is None: w = self.w
-      # figure out vx from ve, w, and h.
+      if h is None: h = self.layer.h
+      if w is None: w = self.layer.w
+      # figure out vx from ve, w, h, and r.
       vx = ve*self.Fa/(h*w*r)
     if ve is None:
-      if h is None: h = self.h
-      if w is None: w = self.w
-      # figure out ve from vx, w, and h.
+      if h is None: h = self.layer.h
+      if w is None: w = self.layer.w
+      # figure out ve from vx, w, h, and r.
       ve = h*w*r*vx/self.Fa
     # Set h and w
     if h is None: h = self.layer.h if w is None else ve*self.Fa/(w*r*vx)
     if w is None: w = ve*self.Fa/(h*r*vx)
     assert abs(ve*self.Fa - h*w*r*vx) < 0.0001
     return vx,ve,h,w,r
+
+  def begLine(self, x0, y0, h):
+    """ This is a standard warmup for a test line. """
+    # Go to the start of the line and restore for the warmup.
+    self.hopdn(x0, y0, h=h)
+    # This slow draw then move is to ensure the nozzle is primed and wiped, and
+    # any advance pressure, actual and estimated, has decayed away.
+    self.draw(dx=self.t0x, v=self.vx0, w=self.layer.w, r=0.5)
+    self.move(dx=10,v=1)
+
+  def endLine(self, de=None):
+    """ This is a standard cooldown for a test line."""
+    self.restore(de=None)
+    self.draw(dx=self.t0x, v=self.vx0, w=self.layer.w, r=1.0)
+    self.hopup()
 
   def testRetract(self, x0, y0, vx=None, ve=None, h=None, w=None, r=1.0, vr=10, re=4):
     """ Test retract and restore for different settings.
@@ -220,7 +370,7 @@ class ExtrudeTest(gcodegen.GCodeGen):
     extruding after moving or figure out how retract/restore speed matters.
     The pre/post phases are;
 
-      * 5mm: warmup draw at 1mm/s to prime the nozzle.
+      * 5mm: warmup draw at v=5mm/s,r=0.5 to prime the nozzle.
       * 10mm: move at 1mm/s to drain actual and estimated pressure.
       * 0mm: restore default Re to prepare for draw.
       * 30mm: draw at vx mm/s to build pressure at that speed.
@@ -245,11 +395,7 @@ class ExtrudeTest(gcodegen.GCodeGen):
     # A printer with a=500mm/s^2 can go from 0 to 100mm/s in 0.2s over 10mm.
     # Retracting de=10mm at vr=100mm/s over 40mm means retracting at ve=25mm/s
     # which is probably fine.
-    self.hopdn(x0, y0, h=h)
-    # This slow draw then move is to ensure the nozzle is primed and wiped, and
-    # any advance pressure, actual and estimated, has decayed away.
-    self.draw(dx=5,v=1,w=w)
-    self.move(dx=10,v=1)
+    self.begLine(x0, y0, h)
     # This restore pre-loads advance pressure for drawing the line. If the
     # start of the line is too thin, there was not enough pressure, and Kf
     # probably needs to be increased. If the start is too thick, pressure was
@@ -257,12 +403,10 @@ class ExtrudeTest(gcodegen.GCodeGen):
     # consistently the same width as all the other lines.
     self.restore()
     self.draw(dx=30,v=vx,w=w,r=r)      # draw at v=vx.
-    self.move(dx=40,v=vr,de=-re)          # retract while moving at v=vr.
-    self.restore(de=re)                   # restore to recover from retract.
-    self.draw(dx=self.t0x,v=self.vx0)     # cooldown draw.
-    self.hopup()
+    self.move(dx=40,v=vr,de=-re)       # retract while moving at v=vr.
+    self.endLine(de=re)
 
-  def testStartStop(self, x0, y0, vx):
+  def testStartStop(self, x0, y0, vx=None, ve=None, h=None, w=None, r=1.0):
     """ Test starting and stopping extrusion for different settings.
 
     This test is to check dynamic retracting for different Kf/Kb/Re
@@ -271,40 +415,41 @@ class ExtrudeTest(gcodegen.GCodeGen):
     Test phases are;
 
       * 0mm: default drop and restore.
-      * 5mm: warmup draw at 5mm/s to prime nozzle with fillament.
+      * 5mm: warmup draw at v=5mm/s,r=0.5 to prime nozzle with fillament.
       * 10mm: move at 1mm/s to drain actual and estimated pressure.
       * 0mm: default restore to pre-apply pressure before draw.
       * 50mm: draw at <vx>mm/s to check pre-applied pressure and build pressure.
       * 0mm: default retract to relieve pressure.
-      * 10mm: move at 1mm/s to check and drain any vestigial pressure.
+      * 20mm: move at 10mm/s to check and drain any vestigial pressure.
       * 0mm: default restore.
-      * 15mm: draw at 5mm/s to check slow draw after retract/restore.
+      * 5mm: draw at v=5mm/s,r=1.0 to check slow draw after retract/restore.
       * 0mm: default retract and raise.
 
     Args:
-      vx: movement speed to check against.
+      vx: draw speed to test.
+      ve: optional extrude speed while drawing.
+      h: optional line height.
+      w: optional line width.
+      r: optional extrusion ratio.
     """
+    vx,ve,h,w,r = self._getVxVehwr(vx,ve,h,w,r)
     # Set different line-phase lengths.
-    dx = (5, 10, 50, 10, 15)
-    self.hopdn(x0, y0)
-    # This slow draw then move is to ensure the nozzle is primed and wiped, and
-    # any advance pressure, actual and estimated, has decayed away.
-    self.draw(dx=dx[0],v=5)
-    self.move(dx=dx[1],v=1)
+    dx = (5, 10, 50, 20, 5)
+    self.begLine(x0,y0,h)
     # This restore pre-loads advance pressure for drawing the line. If the
     # start of the line is too thin, there was not enough pressure, and Kf
     # probably needs to be increased. If the start is too thick, pressure was
     # too high and Kf should probably be dropped. The line should be
     # consistently the same width as all the other lines.
     self.restore()
-    self.draw(dx=dx[2],v=vx)
+    self.draw(dx=dx[2],v=vx,w=w,r=r)
     # This retract and slow move is to relieve the advance pressure, and see
     # if any remaining pressure drools off. If there is any trailing drool,
     # the amount of pressure was underestimated and Kf or Kb probably needs
     # to be increased. If there is still stringing when otherwise Kf/Kb seems
     # right, adding some additional retraction with Re could help.
     self.retract()
-    self.move(dx=dx[3],v=1)
+    self.move(dx=dx[3],v=10)
     # This restore applies advance pressure for a final slow line after
     # the earlier retraction. It should be the same width as all the other
     # lines. If it starts too thin, it suggests the earlier retraction
@@ -312,9 +457,7 @@ class ExtrudeTest(gcodegen.GCodeGen):
     # If it starts too thick it suggests the earlier retraction under
     # estimated the pressure and extra retraction was actually relieving
     # pressure, so Kf should be increased and Re could possibly be reduced.
-    self.restore()
-    self.draw(dx=dx[4],v=5)
-    self.hopup()
+    self.endLine()
 
   def testBacklash(self, x0, y0, vx=None, ve=None, h=None, w=None, r=1.0, r0=0.0, re=5.0):
     """ Test retract and restore distances.
@@ -355,9 +498,7 @@ class ExtrudeTest(gcodegen.GCodeGen):
     # le = 0.008 -> 0.25 mm/mm (l=0.2x0.1x1.0 -> 0.3x2.0x1.0) or 0.05 for l=0.2x0.6x1.0.
     # For v=10mm/s, we need at least ve=0.2*0.1*10/Fa=0.08mm/s for a w=0.1mm line, or Pe=0.44mm for Kf=0.5,Kb=4.0.
     vx,ve,h,w,r = self._getVxVehwr(vx,ve,h,w,r)
-    self.hopdn(x0, y0, h=0.2)
-    self.draw(dx=5,v=self.vx0,w=self.layer.w,r=self.layer.r)
-    self.move(dx=10,v=1)
+    self.begLine(x0, y0, h=0.2)
     self.hopdn(h=h)
     self.draw(dx=30,v=vx,w=w,r=r)
     self.move(h=0.2)
@@ -367,8 +508,7 @@ class ExtrudeTest(gcodegen.GCodeGen):
     self.move(dx=20,de=+re, v=10, w=self.layer.w)
     self.hopup()
     self.hopdn(h=0.2)
-    self.draw(dx=5,v=self.vx0, w=self.layer.w, r=self.layer.r)
-    self.hopup()
+    self.endLine()
 
   def testKf(self, x0, y0, vx0, vx1):
     """ Test linear advance changing speed different speeds.
@@ -468,8 +608,34 @@ if __name__ == '__main__':
       dict(fKf=1.0, vx0=(10,50), vx1=(20,100)),
       dict(fKf=2.0, vx0=(10,50), vx1=(20,100))))
 
+  # Use the StartStopTest to try and characterise backpressure.
+  backpressure1args=dict(name="Backpressure1", linefn=gen.testStartStop,
+    Kf=args.Kf, Kb=args.Kb, Re=args.Re,
+    tests=(
+      dict(Kb=(0.0,4.0), Re=0.5, ve=1.0, h=0.2, w=0.3),
+      dict(Kb=(0.0,4.0), Re=0.5, ve=1.0, h=0.2, w=0.4),
+      dict(Kb=(0.0,4.0), Re=0.5, ve=1.0, h=0.2, w=0.8),
+      dict(Kb=(0.0,4.0), Re=0.5, ve=1.0, h=0.2, w=1.6)))
+
+  # We want to figure out the ideal restore and retract distances for
+  # different fixed ve values and various w values.
+  # ve=1.0 w=0.3, h=0.2 vl=1
+  startstopspirl = [
+      dict(dl=0, h='h', de='Re'),
+      dict(dt=4, ve='ve', h='h', w='w', r=1),
+      dict(dl=0, de='-(Re+Be)'),
+      dict(dl=10, vl=5, h='h', w='w', r=0)]
+  spiralStartStopargs = dict(name="startstop", lines=startstopspirl,
+    ve=1.0, h=(0.18,0.38), dynret=False,
+    tests=(
+      dict(Re=2.9, Be=1.3, w=0.3),
+      dict(Re=3.2, Be=1.1, w=0.4),
+      dict(Re=4.0, Be=0.4, w=0.6),
+      dict(Re=4.5, Be=0.0, w=0.8)))
+
   gen.startFile()
-  gen.doTests(n=args.n, **backlashargs)
+  #gen.doTests(n=args.n, **backpressure1args)
+  gen.doSpiralTests(**spiralStartStopargs)
   gen.endFile()
   data=gen.getCode()
   sys.stdout.buffer.write(data)

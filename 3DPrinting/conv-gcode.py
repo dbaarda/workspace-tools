@@ -220,9 +220,9 @@ before and after.
 """
 
 import re
+from math import pi
 import gcodegen
-from math import log
-
+from gcodegen import getnear, isneareq, isnearle
 
 def RelativeToAbsoluteE(data):
   lines=[]
@@ -240,11 +240,6 @@ def FixFlashPrintLayerStartHop(data):
   """ At the start of each layer move the z-hop or layer-step immediately after the retract."""
   data=re.sub(r'(\n;layer:.*\n(?:M.*\n)*G1 E.*\n)((?:.*\n)*?)(G1 Z.*\n)'.encode(),r'\1\3\2'.encode(),data)
   return data
-
-
-def fbool(b):
-  """ Format a boolean as 'Y', 'N', or '?' for True, False, None (unknown). """
-  return '?' if b is None else 'Y' if b else 'N'
 
 
 def hc(v):
@@ -298,12 +293,16 @@ class Printer(gcodegen.GCodeGen):
     self.fd = 0.0  # current fanspeed drive.
     self.fe = 0.0  # filtered nozzle flow rate over past Tf.
     self.ft = 0.0  # time since last fan pwm cycle.
+    self._newlayer = False # starting next layer?
+    self.wt = None # The current target width.
+    self.ht = None # The current target height.
+    self.zt = None # The current target layer-top height.
 
-  def iterstate(self, dt, de, dl, dv, dh):
+  def iterstate(self, dt, dl, de, dh, dvl, dve):
     """ Increment the state for a small dt interval. """
     # We need the change in en filters.
     dn = self.en
-    super().iterstate(dt, de, dl, dv, dh)
+    super().iterstate(dt, dl, de, dh, dvl, dve)
     dn = self.en - dn
     # Get filtered extrusion rate fe.
     self.fe = (dn + self.Tf*self.fe)/(self.Tf + dt)
@@ -364,9 +363,10 @@ class Printer(gcodegen.GCodeGen):
       fd = fs
     if fs != self.fs:
       self.fs = fs
-    if not gcodegen.isneareq(fd, self.fd, 2):
+    if not isneareq(fd, self.fd, 2):
       self.setefan(fd)
-    self.fanstats()
+    if self.Hs:
+      self.fanstats()
 
   def setefan(self, s):
     """ Set the extruder fan speed between 0.0 to 1.0. """
@@ -377,6 +377,12 @@ class Printer(gcodegen.GCodeGen):
       self.cmd('M106')
     else:
       self.cmd('M106', S=round(s*255))
+
+  def setcfan(self, s):
+    if s == 0.0:
+      self.cmd('M652')
+    else:
+      self.cmd('M651', S=round(s*255))
 
   def layerstats(self):
     super().layerstats()
@@ -394,70 +400,98 @@ class Printer(gcodegen.GCodeGen):
   def addCode(self, code):
     self.resetfile()
     code = FixFlashPrintLayerStartHop(code)
-    for line in code.splitlines():
+    for n,line in enumerate(code.splitlines()):
       try:
         self.padd(line.decode())
       except UnicodeDecodeError:
         # If it's not text it's *.gx file binary data; just append it.
         self.add(line)
+      except Exception as e:
+        ctx = '\n'.join(f'{n+l:6}:{self.prevcmds[l]}' for l in range(-3,0))
+        ctx += f'\n{n:6}:{line}'
+        raise Exception(f'Error addling line {n}: {line!r} after\n{ctx}') from e
 
   def padd(self, line):
     """ Parse and add a line of gcode. """
-    #print(line)
-    if line.startswith(';start gcode'):
-      self.cmt('heat_ext: {Hs}')
-      self.cmt('layer_pause: {Lp}')
-      self.add(line)
-    elif line.startswith(';preExtrude:'):
-      self.Layer(line)
-    elif line.startswith(';layer:'):
-      self.Layer(line)
-    elif line.startswith(';end gcode'):
-      self.layerstats()
-      self.filestats()
-      self.add(line)
-    elif line.startswith('M106'):
-      self.M106(line)
-    elif line.startswith('M107'):
-      self.M107(line)
-    elif line.startswith('G4 '):
-      self.G4(line)
-    elif line.startswith('G1 '):
-      self.G1(line)
+    if line and line[0] in 'GM':
+      self.pcmd(line)
+    elif line and line[0] == ';':
+      if re.match(r'^; ?(preExtrude:|layer:|LAYER_CHANGE|HEIGHT:|WIDTH:|Z:)', line):
+        self.player(line)
+      elif line.startswith(';start gcode') or line.startswith('; HEADER_BLOCK_END'):
+        self.cmt(' postprocess_cmd: {_getCmdline()}')
+        self.add(line)
+      elif line.startswith(';end gcode') or line.startswith('; EXECUTABLE_BLOCK_END'):
+        self.layerstats()
+        self.filestats()
+        self.add(line)
+      else:
+        # Encode other input comment lines so they are not reformated.
+        self.add(line.encode())
     else:
       self.add(line)
 
-  def Layer(self, line):
-    """ Start a new layer. """
-    t, h= re.match(';(preExtrude|layer):(\d+.\d+)', line).groups()
-    h = float(h)
-    if t == 'preExtrude':
-      self.startLayer(n=0, z=0.0, h=h)
-    else:
-      self.nextLayer(h=h)
+  def player(self, line):
+    """ Parse and handle layer related comments. """
+    m = re.match(r';([^:]*)(?::(\d+(?:.\d+)?))?$', line)
+    t,v = m.groups()
+    v = getnear(float(v),3) if v else None
+    # Note layer.z is the bottom and zt is the top of the layer.
+    if t == "LAYER_CHANGE":
+      # For OrcaSlicer new layers, but need next ht and zt.
+      self._newlayer, self.ht, self.zt = True, None, None
+    elif t == 'WIDTH':
+      # For OrcaSlicer WIDTH comments set self.wt for the next moves.
+      self.wt = getnear(v - self.layer.h * (1 - pi/4))
+    elif t =='HEIGHT':
+      # For OrcaSlicer HEIGHT comments set self.ht for the next moves.
+      self.ht = v
+    elif t =='Z':
+      # For OrcaSlicer Z comments, set self.zt for the new layer.
+      self.zt = v
+    # TODO: add support for Flashprint's `extrude_ratio:` comments.
+    elif t == 'preExtrude':
+      # For Flashprint pre-extrude, set the target height.
+      self.ht = v
+    elif t == 'layer':
+      # For Flashprint layers, set ht, zt, and new layer.
+      self._newlayer = True
+      self.ht = v
+      self.zt = getnear(self.layer.z + (self.layer.n and self.layer.h) + v, 3)
+    # Start next layer when we have ht and zt.
+    if self._newlayer and self.ht and self.zt:
+      self.nextLayer(h=self.ht)
+      self._newlayer = False
+      assert isneareq(self.zt, self.layer.z + self.layer.h), f'{self.zt=} {self.layer.z+self.layer.h=} {self.layer}'
 
-  def M106(self, line):
-    """ Fan on."""
-    m = re.match(r'M106(?: S([-+0-9.]+))?', line)
-    fs = 1.0 if m[1] is None else int(m[1])/255
-    self.setefan(fs)
-
-  def M107(self, line):
-    """ Fan off. """
-    self.setefan(0.0)
-
-  def G1(self, line):
-    m = re.match(r'G1(?: X([-+0-9.]+))?(?: Y([-+0-9.]+))?(?: Z([-+0-9.]+))?(?: E([-+0-9.]+))?(?: F([-+0-9]+))?', line)
-    x,y,z,e,f = (a if a is None else float(a) for a in m.groups())
-    # Always use the previous f value when parsing gcode files.
-    if f is None: f = self.f
-    self.move(x=x, y=y, z=z, e=e, v=f/60)
-
-  def G4(self, line):
-    """ wait. """
-    m = re.match(r'G4 P([0-9]+)', line)
-    dt = float(m[1])/1000.0
-    self.wait(dt)
+  def pcmd(self, line):
+    argre=r'(?:\s+(?P<name>[A-Z])(?P<value>\S*))'
+    cmdre=fr'([GM]\d+)({argre}*)(?:\s*;.*)?'
+    m = re.fullmatch(cmdre, line)
+    if not m:
+      raise RuntimeError(f'not a cmd: {line!r}')
+    cmd,args=m[1],m[2]
+    args = {m['name']:(eval(m['value']) if m['value'] else '') for m in re.finditer(f'{argre}',args)}
+    if cmd in ('G0','G1'):
+      # Add a w=<width> argument that will be passed through to the move().
+      args.update(w=self.wt or self.wl)
+      # Explicitly set dz=0 for non-Z moves so that h applies only to the line.
+      if 'Z' not in args:
+        args.update(dz=0.0)
+        # For h=0 retracts after a new layer and before hopup, force h to hl.
+        # TODO: Add support for setting h=0 for wipes.
+        if 'X' not in args and isneareq(self.h, 0.0, 3):
+          args.update(h=self.hl)
+    elif cmd == 'M107':
+      return self.setefan(0.0)
+    elif cmd == 'M106':
+      P,S = args.get('P', 0), args.get('S', 255)/255
+      if P == 0:
+        self.setefan(S)
+      elif P == 2:
+        self.setcfan(S)
+      return
+    self.cmd(cmd,**args)
 
 
 def GCodeGenArgs(cmdline):
@@ -480,7 +514,7 @@ def GCodeGetArgs(args):
 if __name__ == '__main__':
   import argparse, sys
 
-  cmdline = argparse.ArgumentParser(description='Postprocess FlashPrint gcode.',
+  cmdline = argparse.ArgumentParser(description='Postprocess gcode.',
       formatter_class=argparse.ArgumentDefaultsHelpFormatter)
   GCodeGenArgs(cmdline)
   cmdline.add_argument('infile', nargs='?', type=argparse.FileType('rb'), default=sys.stdin.buffer,
@@ -491,4 +525,10 @@ if __name__ == '__main__':
   p=Printer(**GCodeGetArgs(args))
   p.addCode(data)
   data=p.getCode()
-  sys.stdout.buffer.write(data)
+
+  if args.infile == sys.stdin.buffer:
+    outfile = sys.stdout.buffer
+  else:
+    args.infile.close()
+    outfile = open(args.infile.name, 'wb')
+  outfile.write(data)

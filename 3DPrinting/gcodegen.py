@@ -108,13 +108,17 @@ dPe/dt = ve - vn
        = de/dt - vn
    dPe = de - dt * vn
        = de - dt * Pe * v/(Kf*v + Kb*Af/h)
+       = de - Pe * dl/(Kf*v + Kb*Af/h)
+       = de - Pe * dl*dt/(Kf*dl + Kb*Af/h*dt)
        = de - Pe * dt/(Kf + Kb*Af/(v*h))
 
-This is an exponentially decaying process with time-constant `T = Kf +
-Kb*Af/(v*h)`. This means with no additional extrusion `ve=0`, extruder
-pressure `Pe` will decay towards 0 over a time roughly of `Kf + Kb*Af/(h*v)`.
-Note that for `v=0` that time is infinity, which means it will not decay at
-all.
+This is an exponentially decaying process over time and line-distance. Looking
+at it over time it has a decay time-constant `T = Kf + Kb*Af/(v*h)`. Looking
+at it over distance it has a decay distance-constant of `L = Kf*v + Kb*Af/h`.
+This means with no additional extrusion `ve=0`, extruder pressure `Pe` will
+decay towards 0 over a time roughly of `Kf + Kb*Af/(h*v)`. Similarly it will
+decay towards zero over a distance of `Kf*v + Kb*Af/h`. Note that for `v=0`
+the time to decay is infinity, which means it will not decay at all.
 
 However, that assumes there is already a bead with backflow pressure Pb to
 match Pe. When you first start extruding after a restore, there is no bead and
@@ -127,7 +131,7 @@ Some Adv3 numbers from earlier testing with h=0.3 w=0.6 (db=0.6,eb=0.035mm);
 
 de=+2mm seems to be the minimum for a normal starting dot.
 de=+1mm barely seems to register a dot at all.
-de=+0.5mm doesn't seem to show any difference from minimum drool.
+de=+0.5mm doesn't seem to show any difference from minimum ooze.
 
 This suggests roughly Re>0.8 to account for backlash, and Kb=2.0.
 
@@ -138,11 +142,11 @@ de=+5mm seems about right advance for vl=100mm/s ve=7.5mm/s
 
 Suggests roughly Kf=0.4 with Cf=Pb=Kb*0.6+Re=2.0.
 
-Testing suggests you need extra retraction on top of this to avoid drool and
-stringing. I suspect this drool is "heat creep expansion", where heat travels
+Testing suggests you need extra retraction on top of this to avoid ooze and
+stringing. I suspect this ooze is "heat creep expansion", where heat travels
 up the filament feed causing expansion. For 0.5x0.2x1.0 at about 60mm/s print
 speeds giving `ve=2.5mm/s`, retraction needs to be at least 5mm to avoid this
-drool. This suggests settings should be about;
+ooze. This suggests settings should be about;
 
 Kf=0.4
 Kb=2.0
@@ -161,21 +165,40 @@ Kb=4.0
 Re=3.0
 """
 import argparse
-import re
 import sys
-from math import e, pi, inf, sqrt
-import vtext
+from math import e, pi, inf, sqrt, copysign, sin, cos, atan2, dist
 from typing import NamedTuple
 from functools import cached_property
 from pprint import *
 from collections import deque
+import vtext
+import stats1
 
 nl = '\n'  # for use inside fstrings.
 
+# These are short formatting functions for use in fstrings.
+from stats1 import P
 
-def attrs(o):
-  """ Get all attributes off an object as a dict."""
-  return {n:getattr(o,n) for n in dir(o) if not n.startswith('__')}
+
+# Short fstring functions for formatting numbers and numpy.array values.
+def f0(v, o=''):
+  return f'{P(v):{o}.0f}'
+
+def f1(v, o=''):
+  return f'{P(v):{o}.1p}'
+
+def f2(v, o=''):
+  return f'{P(v):{o}.2p}'
+
+def f3(v, o=''):
+  return f'{P(v):{o}.3p}'
+
+def f6(v, o=''):
+  return f'{P(v):{o}.6p}'
+
+def fzp(v, p):
+  """ Format a float with max p decimal places and strip the leading zero."""
+  return f'{P(v):#.{p}p}'
 
 
 def ftime(t):
@@ -192,7 +215,7 @@ def fbool(b):
 
 def fstr(s, globals=None, locals=None):
   """ Format a string as an f-string. """
-  return eval(f'rf"""{s}"""',globals,locals)
+  return eval(f'rf"""{s}"""', globals, locals)
 
 
 def fesc(s):
@@ -200,7 +223,7 @@ def fesc(s):
   return str(s).replace('{', '{{').replace('}','}}')
 
 
-def isneareq(a, b, n=6):
+def isneareq(a, b, n=5):
   """ Is a nearly equal to b?"""
   return abs(a-b) < 10**-n
 
@@ -216,17 +239,42 @@ def getnear(a, n=6):
   return None if a is None else round(a,n) or 0.0
 
 
+def clamp(v, vmin, vmax):
+  """Clamp a value between vmin and vmax limits."""
+  return vmin if v < vmin else vmax if v > vmax else v
+
+
 def acircle(d):
   """ Get the area of a circle from it's diameter. """
-  return pi*(d/2)**2
+  return pi/4*(d)**2
+
+
+def dcircle(a):
+  """ Get the diameter of a circle from it's area. """
+  return sqrt(a*4/pi)
 
 
 def solveqe(a,b,c):
   """ Return the two roots of a quadratic eqn. """
-  d = 0.5/a
-  v1 = -b*d
-  v2 = sqrt(b**2 - 4*a*c)*d
+  # (-b +- sqrt(b^2 - 4*a*c))/(2*a)
+  d = 0.5/a   # 1/(2*a)
+  v1 = -b*d   # -b/(2*a)
+  v2 = sqrt(b**2 - 4*a*c)*d  # sqrt(b^2 - 4*a*c)/(2*a)
   return v1 - v2, v1 + v2
+
+def absmin(a,b):
+  """ Return the value with the smallest absolute value. """
+  return a if abs(a) <= abs(b) else b
+
+
+class AttrDictMixin(object):
+  """A mixin to add dict-like access to attributes for fstr()."""
+
+  def __getitem__(self, key):
+    try:
+      return getattr(self, key)
+    except AttributeError:
+      raise KeyError(key)
 
 
 class MoveBase(NamedTuple):
@@ -247,83 +295,119 @@ class MoveBase(NamedTuple):
 class Move(MoveBase):
   """Move instructions.
 
-  These represent gcode moves enhanced to include the start v0, end v1, and
-  middle vm velocities. They can partition a basic gcode "intent" move command
-  into "physical" acceleration, constant velocity, deceleration components
-  based on the printers acceleration, velocity, and cornering specs. They
-  assume the printer interprets gcode into movements as described at;
+  These represent gcode moves enhanced to include the target extrusion ratio
+  `r` and the start/middle/end velocities `v0`/`vm`/`v1`. The default `r` is
+  calculated from `de` but can be explicitly set to indicate the intent when
+  `de` includes pressure adjustments. The velocities partition a basic gcode
+  "intent" move command into "physical" acceleration, constant velocity,
+  deceleration components based on the printers acceleration, velocity, and
+  cornering specs. They assume the printer interprets gcode into movements as
+  described at;
 
   https://mmone.github.io/klipper/Kinematics.html
 
   Note for printers with different specs this can be subclassed with the `Ap`,
-  `Vp`, and `Gp` overridden by setting them as arguments when subclassing.
+  `Vp`, `Ae`, `Ve`, `Gp`, and `Je` overridden by setting them as arguments
+  when subclassing. The values used here are taken from the OrcaSlicer
+  defaults for the Flashforge Adventurer 3 with changes `Vp = 150-> 100 mm/s`,
+  `Ve = 30 -> 40 mm/s` to match published and/or apparent specs.
+
+  Restore's are assumed to draw a circular dot with a target diameter w*r and
+  Retractions, Hops and Moves don't draw anything. Draws draw a line of target
+  width w*r and length dl with a half-dot "byte" out of the start from the
+  previous restore or draw, and corresponding "bulge" on the end. The default
+  r for draws and moves is calculated from the ratio of extrusion to
+  line-volume, otherwise it is the retract/restore distance.
+
+  The `de` extrusion for any of these can be adjusted to negative or positive
+  values for pressure adjustments and will not necessarily correspond with the
+  target `r` extrusion ratios.
   """
-  Fd = 1.75  # Fillament diameter.
-  Nd = 0.4   # Nozzle diameter.
+  Fd = 1.75 # Fillament diameter.
+  Nd = 0.4  # Nozzle diameter.
   Ap = 500  # printer acceleration in mm/s^2.
   Vp = 100  # printer max velocity in mm/s.
+  Vz = 20   # printer max z velocity in mm/s.
+  Az = 100  # printer max z acceleration in mm/s^2.
+  Ae = 500  # extruder acceleration in mm/s^2.
+  Ve = 40   # extruder max velocity in mm/s.
   Gp = 0.1  # printer cornering deviation distance in mm.
+  Jz = 0.4  # vertical "jerk" speed deviation in mm/s.
+  Je = 2.5  # extruder "jerk" speed deviation in mm/s.
   Fa = acircle(Fd)  # Fillament area in mm^2.
   Na = acircle(Nd)  # Nozzle area in mm^2.
+  La = 0.5*Vp**2/Ap # Acceleration to Vp distance in mm.
+  # These are constant middle phase acceleration and velocity change attributes.
+  am = aem = dvm = dvem = 0.0
 
   # The cached properties that depend on velocity attributes.
-  __vprops = frozenset('vm dt dt0 dt1 dtm dl0 dl1 dlm'.split())
+  __vprops = frozenset('vm dt dt0 dt1 dtm dl0 dl1 dlm ve0 vem ve1 de0 dem de1'.split())
 
-  def __init_subclass__(cls, Fd=Fd, Nd=Nd, Ap=Ap, Vp=Vp, Gp=Gp):
+  def __init_subclass__(cls, Fd=Fd, Nd=Nd, Ap=Ap, Vp=Vp, Gp=Gp, Az=Az, Vz=Vz, Jz=Jz, Ae=Ae, Ve=Ve, Je=Je):
     super().__init_subclass__()
-    cls.Fd, cls.Nd, cls.Ap, cls.Vp, cls.Gp = Fd, Nd, Ap, Vp, Gp
+    cls.Fd, cls.Nd = Fd, Nd
+    cls.Ap, cls.Vp, cls.Gp = Ap, Vp, Gp
+    cls.Az, cls.Vz, cls.Jz = Az, Vz, Jz
+    cls.Ae, cls.Ve, cls.Je = Ae, Ve, Je
     cls.Fa = acircle(Fd)
     cls.Na = acircle(Nd)
-    cls.a0, cls.a1, cls.am = Ap, -Ap, 0.0
+    cls.La = 0.5*cls.Vp**2/cls.Ap
 
-  def __new__(cls, *args, v0=None, v1=None, **kwargs):
+  def __new__(cls, *args, r=None, v0=None, v1=None, **kwargs):
     """ Create a new Move. """
     # Round arguments to clean out fp errors.
     args = tuple(getnear(a) for a in args)
     kwargs = {k:getnear(v) for k,v in kwargs.items()}
     self = super().__new__(cls, *args, **kwargs)
-    assert 0.0 <= self.v <= cls.Vp
-    self.v0 = self.v1 = 0.0
+    # Set these to args so the attributes exist for assert error outputs.
+    self.r, self.v0, self.v1 = r, v0 or 0.0, v1 or 0.0
+    if r is None: r = copysign(1, self.de) if self.isadjust else 0.0 if self.isstop else self.de/self.el
+    self.r = getnear(r)
     self.setv(v0, v1)
+    assert -8.0 <= self.r < 8.0, f'{self.r=} for {self!r}'
+    assert 0.0 <= self.v <= cls.Vp, f'{self.v=} {cls.Vp=} for {self!r}'
     return self
 
-  def _replace(self, *args, v0=None, v1=None, **kwargs):
+  def _replace(self, *args, r=None, v0=None, v1=None, **kwargs):
     """ Create a new modified Move. """
     # Round arguments to clean out fp errors.
     args = tuple(getnear(a) for a in args)
     kwargs = {k:getnear(v) for k,v in kwargs.items()}
     m = super()._replace(*args,**kwargs)
+    m.r = self.r if r is None else getnear(r)
     m.v0, m.v1 = self.v0, self.v1
     m.setv(v0, v1)
     return m
 
   def __repr__(self):
-    return super().__repr__()[:-1] + f', v0={self.v0}, vm={self.vm}, v1={self.v1})'
+    return super().__repr__()[:-1] + f', r={self.r}, v0={self.v0}, v1={self.v1})'
 
   def __str__(self):
-    dz, dl, de, h, w, r = self.dz, self.dl, self.de, self.h, self.w, self.r
-    v, v0, v1, vm = round(self.v), round(self.v0), round(self.v1), round(self.vm)
-    ve, ve0, ve1, vem = round(self.ve, 2), round(self.ve0, 2), round(self.ve1, 2), round(self.vem, 2)
-    gostr=f'{dl=:.1f}@{v}({v0}<{vm}>{v1}) {de=:.3f}@{ve}({ve0}<{vem}>{ve1}) l={h:.2f}x{w:.2f}x{r:.2f}'
+    lstr = f'({f2(self.h)}x{f2(self.w)}x{f2(self.r)})'
+    pstr = f' dl={self.dl:.1f}@{f0(self.v)}({f0(self.v0)}<{f0(self.vm)}>{f0(self.v1)})' if self.dl else ''
+    hstr = f' dz={self.dz:.2f}@{f0(self.v)}' if self.dz else ''
+    estr = f' de={self.de:.4f}@{f2(self.ve)}({f2(self.ve0)}<{f2(self.vem)}>{f2(self.ve1)})' if self.de else ''
+    # TODO: add support for agumenting/reporting actual nozzle output.
+    rstr = f' re={f2(self.re)}'
     if self.isdraw:
-      return f'draw {gostr}'
+      mstr = f'draw'
     elif self.ishopup:
-      return f'hopup {dz=:.2f}@{v} {h=}'
+      mstr = f'hopup'
     elif self.ishopdn:
-      return f'hopdn {dz=:.2f}@{v} {h=}'
+      mstr = f'hopdn'
     elif self.isretract:
-      return f'retract {de=:.4f}@{ve}'
+      mstr = f'retract'
     elif self.isrestore:
-      return f'restore {de=:.4f}@{ve}'
+      mstr = f'restore'
     else:
-      return f'move {gostr}'
-    #return f'{self.__class__.__name__}({dx=:.2f}, {dy=:.2f}, {dz=:.2f}, {de=:.4f}, {v=:.2f}, {v0=:.2f}, {v1=:.2f}, {h=:.2f}, {w=:.2f})'
+      mstr = f'move'
+    return ''.join((mstr,lstr,pstr,hstr,estr,rstr))
 
   def setv(self, v0=None, v1=None):
     """ Set the v0, v1 start and end velocities. """
     v0 = self.v0 if v0 is None else getnear(v0)
     v1 = self.v1 if v1 is None else getnear(v1)
-    assert self.isgo or v0 == v1 == 0.0
+    assert self.dl or v0 == v1 == 0.0
     assert 0.0 <= v0 <= self.v, f'0.0 <= {v0} <= {self.v} for {self!r}'
     assert 0.0 <= v1 <= self.v, f'0.0 <= {v1} <= {self.v} for {self!r}'
     if (v0, v1) != (self.v0, self.v1):
@@ -341,9 +425,23 @@ class Move(MoveBase):
     return self._replace(*args,**kwargs)
 
   @classmethod
-  def _eb(cls, h, w, r=1.0):
+  def _db(cls, eb, h):
+    """ Get the bead diameter from the bead volume."""
+    # h<=0 can happen for initializing moves or moves at the start of a new
+    # layer before a hop, and h>Nd*2 can happen at the start of a print when
+    # moving to the first layer, so always clamp h. For h>Nd*2 it spagetti's
+    # instead of beading, so that's the effective upper limit on bead height.
+    return dcircle(eb*cls.Fa/clamp(h, 0.01, cls.Nd*2))
+
+  @classmethod
+  def _eb(cls, h, db):
     """ Volume in filament length of bead."""
-    return h * acircle(w*r) / cls.Fa
+    return clamp(h, 0.01, cls.Nd*2) * acircle(db) / cls.Fa
+
+  @classmethod
+  def _el(cls, l, h, db):
+    """ Volume in filament length of line."""
+    return l * clamp(h, 0.01, cls.Nd*2) * db / cls.Fa
 
   @property
   def f(self):
@@ -351,27 +449,75 @@ class Move(MoveBase):
     return round(self.v * 60)
 
   @cached_property
+  def re(self):
+    """Extruder ratio (not target ratio)."""
+    return self.de/self.el
+
+  @cached_property
+  def dt0(self):
+    """Duration of acceleration phase."""
+    dt0 = self.dv0 / self.a0 if self.dl else self.dve0 / self.ae0 if self.de else 0.0
+    assert dt0 >= 0.0, f'{self.dv0=} {self.a0=} {self.dl=} {self.dve0=} {self.ae0=} {self.de=} {self!r}'
+    return dt0
+
+  @cached_property
+  def dt1(self):
+    """Duration of deceleration phase."""
+    dt1 = self.dv1 / self.a1 if self.dl else self.dve1 / self.ae1 if self.de else 0.0
+    assert dt1 >= 0.0, f'{self.dv1=} {self.a1=} {self.dl=} {self.dve1=} {self.ae1=} {self.de=} {self!r}'
+    return dt1
+
+  @cached_property
+  def dtm(self):
+    """Duration of middle phase."""
+    dtm = self.dlm/self.vm if self.dl else self.dem/self.vem if self.de else abs(self.dz/self.v)
+    assert dtm >= 0.0, f'{self.dlm=} {self.vm=} {self.dem=} {self.vem=} {self!r}'
+    return dtm
+
+  @cached_property
+  def dt(self):
+    """ Get the execution time for a move. """
+    return self.dt0 + self.dtm + self.dt1
+
+  @property
+  def a0(self):
+    """ The acceleration phase change in velocity. """
+    # Line acceleration should never be limited by extruder acceleration, even with PA compensating moves.
+    return self.Ap if self.dl else 0.0
+
+  @property
+  def a1(self):
+    """ The acceleration phase change in velocity. """
+    return -self.a0
+
+  @property
+  def vl(self):
+    """ The target line speed of a move. """
+    return self.v if self.dl else 0.0
+
+  @cached_property
   def vm(self):
     """ The speed of the middle phase of a move. """
-    if not self.isgo:
-      return 0.0
-    v, v0, v1 = self.v, self.v0, self.v1
+    vl, v0, v1 = self.vl, self.v0, self.v1
     # This is the limit velocity assuming constant acceleration at a/2.
     # This implements smoothed look-ahead to reduce spikey velocity.
     vm = sqrt((self.dl*self.Ap + v0**2 + v1**2)/2)
     # If vm is less than v0 or v1, we don't need acceleration at both ends,
     # don't set vm higher than the move's speed, and round it.
-    vm = getnear(min(v, max(v0, v1, vm)))
-    assert v0 <= vm <= v
-    assert v1 <= vm <= v
+    vm = getnear(min(vl, max(v0, v1, vm)))
+    assert v0 <= vm <= vl
+    assert v1 <= vm <= vl
     return vm
 
-  @cached_property
-  def r(self):
-    """ The extrusion ratio of a move. """
-    if self.isdraw:
-      return getnear(self.de/self.el)
-    return 0.0
+  @property
+  def dv0(self):
+    """ The acceleration phase change in velocity. """
+    return self.vm - self.v0
+
+  @property
+  def dv1(self):
+    """ The decceleration phase change in velocity. """
+    return self.v1 - self.vm
 
   @cached_property
   def dl(self):
@@ -399,158 +545,276 @@ class Move(MoveBase):
     assert 0.0 <= dlm <= self.dl, f'0.0 <= {dlm=} <= {self.dl=}, {self.dl0=} {self.dl1=} {self!r}'
     return dlm
 
-  @cached_property
-  def dt0(self):
-    """Duration of acceleration phase."""
-    return self.dv0 / self.a0
-
-  @cached_property
-  def dt1(self):
-    """Duration of deceleration phase."""
-    return self.dv1 / self.a1
-
-  @cached_property
-  def dtm(self):
-    """Duration of middle phase."""
-    return self.dlm/self.vm if self.vm else abs(self.dz if self.dz else self.de)/self.v
-
-  @cached_property
-  def dt(self):
-    """ Get the execution time for a move. """
-    return self.dt0 + self.dtm + self.dt1
+  @property
+  def vz(self):
+    """ The target vertical velocity of a move."""
+    return self.dz/self.dl * self.v if self.dl else copysign(self.v, self.dz) if self.dz else 0.0
 
   @property
-  def dv0(self):
-    """ The acceleration phase change in velocity. """
-    return self.vm - self.v0
-
-  @property
-  def dv1(self):
-    """ The decceleration phase change in velocity. """
-    return self.v1 - self.vm
-
-  @property
-  def dvm(self):
-    """ The mid phase change in velocity. """
-    return 0.0
-
-  @property
-  def de0(self):
-    """ The acceleration phase change in e. """
-    return self.de * self.dl0/self.dl if self.dl else 0.0
-
-  @property
-  def de1(self):
-    """ The decceleration phase change in e. """
-    return self.de * self.dl1/self.dl if self.dl else 0.0
-
-  @property
-  def dem(self):
-    """ The mid phase change in e. """
-    return self.de * self.dlm/self.dl if self.dl else self.de
-
-  @property
-  def ve(self):
-    """ The average extrusion rate of a move. """
-    dt = self.dt
-    return self.de/dt if dt else 0.0
-
-  @property
-  def ve0(self):
-    """ The extrusion rate at the start of a move. """
-    dl = self.dl
-    return self.de/dl * self.v0 if dl else self.ve
-
-  @property
-  def vem(self):
-    """ The extrusion rate at the middle of a move. """
-    dl = self.dl
-    return self.de/dl * self.vm if dl else self.ve
-
-  @property
-  def ve1(self):
-    """ The extrusion rate at the end of a move. """
-    dl = self.dl
-    return self.de/dl * self.v1 if dl else self.ve
-
-  @property
-  def dh0(self):
-    """ Change in height of acceleration phase."""
+  def dz0(self):
+    """ Change in z of acceleration phase."""
     return self.dz * self.dl0/self.dl if self.dl else 0.0
 
   @property
-  def dh1(self):
-    """ Change in height of decceleration phase."""
+  def dz1(self):
+    """ Change in z of decceleration phase."""
     return self.dz * self.dl1/self.dl if self.dl else 0.0
 
   @property
-  def dhm(self):
-    """ Change in height of mid phase."""
+  def dzm(self):
+    """ Change in z of mid phase."""
     return self.dz * self.dlm/self.dl if self.dl else self.dz
 
   @property
-  def vl(self):
-    """ The average line speed of a move. """
-    dt = self.dt
-    return self.dl/dt if dt else 0.0
+  def ae0(self):
+    """ The extrusion acceleration rate at the start of a move. """
+    dl, de = self.dl, self.de
+    return de/dl * self.a0 if dl else copysign(self.Ae, de) if de else 0.0
+
+  @property
+  def ae1(self):
+    """ The extrusion acceleration rate at the end of a move. """
+    dl, de = self.dl, self.de
+    return de/dl * self.a1 if dl else -copysign(self.Ae, de) if de else 0.0
+
+  @property
+  def ve(self):
+    """ The target extrusion rate of a move. """
+    return self.de/self.dl * self.v if self.dl else copysign(self.v, self.de) if self.de else 0.0
+
+  @cached_property
+  def ve0(self):
+    """ The extrusion rate at the start of a move. """
+    dl = self.dl
+    # We assume pure retract/restore moves have to start with ve=0
+    return self.de/dl * self.v0 if dl else 0.0
+
+  @cached_property
+  def ve1(self):
+    """ The extrusion rate at the end of a move. """
+    dl = self.dl
+    # We assume pure retract/restore moves have to end with ve=0
+    return self.de/dl * self.v1 if dl else 0.0
+
+  @cached_property
+  def vem(self):
+    """ The extrusion rate at the middle of a move. """
+    dl, de = self.dl, self.de
+    # We assume there are no vertical extruding moves.
+    if dl:
+      return de/dl * self.vm
+    ve, ve0, ve1 = self.ve, self.ve0, self.ve1
+    # This is the limit velocity assuming constant acceleration at a/2.
+    # This implements smoothed look-ahead to reduce spikey velocity.
+    vem = copysign(sqrt((self.de*self.ae0 + ve0**2 + ve1**2)/2), self.de)
+    # If vm is less than v0 or v1, we don't need acceleration at both ends,
+    # don't set vm higher than the move's speed, and round it.
+    if ve >= 0:
+      vem = getnear(min(ve, max(ve0, ve1, vem)))
+      assert 0 <= ve0 <= vem <= ve
+      assert 0 <= ve1 <= vem <= ve
+    else:
+      vem = getnear(max(ve, min(ve0, ve1, vem)))
+      assert ve <= vem <= ve0 <= 0
+      assert ve <= vem <= ve1 <= 0
+    return vem
+
+  @property
+  def dve0(self):
+    return self.vem - self.ve0
+
+  @property
+  def dve1(self):
+    return self.ve1 - self.vem
+
+  @cached_property
+  def de0(self):
+    """ The acceleration phase change in e. """
+    de0 = self.de * self.dl0/self.dl if self.dl else 0.5*(self.ve0+self.vem)*self.dt0
+    assert 0 <= de0 <= self.de or self.de <= de0 <= 0, f'0.0 <= {de0=} <= {self.de=}, {self.dt0=} {self!r}'
+    return de0
+
+  @cached_property
+  def de1(self):
+    """ The decceleration phase change in e. """
+    de1 = self.de * self.dl1/self.dl if self.dl else 0.5*(self.vem + self.ve1)*self.dt1
+    assert 0 <= de1 <= self.de or self.de <= de1 <= 0, f'0 <= {de1=} <= {self.de=}, {self.dt1=} {self!r}'
+    return de1
+
+  @cached_property
+  def dem(self):
+    """ The mid phase change in e. """
+    dem = self.de - self.de0 - self.de1
+    assert 0 <= dem <= self.de or self.de <= dem <= 0, f'0 <= {dem=} <= {self.de=}, {self.de0=} {self.de1=} {self!r}'
+    return dem
+
+  @property
+  def dd(self):
+    """ The total distance of a move.
+
+    This is a combined total travel distance that moves can be averaged over.
+    It is the combined horizontal line distance and vertical distance. Adjusts
+    are considered to have a line distance matching the volume of their bead.
+    Hops can have dl and de for slope/spiral and adjusting hops.
+    """
+    return pi/4*self.w if self.isadjust else sqrt(self.dl*self.dl + self.dz*self.dz)
+
+  @property
+  def vd(self):
+    """ The target total distance velocity."""
+    dt = m.dl/m.v if m.dl else m.dz/m.v if m.dz else m.de/m.v
+    return self.dd/dt
 
   @property
   def db(self):
-    """ The extrusion bead diameter. """
-    return self.w*self.r
+    """ The target extrusion bead diameter. """
+    return self.w * self.r
 
   @cached_property
   def eb(self):
-    """ The extrusion bead volume. """
-    return self._eb(self.h, self.w, self.r)
+    """ The extrusion bead volume not including r under/over extrusion. """
+    eb = self._eb(self.h, self.w)
+    assert eb >=0, f'{eb=} {self!r}'
+    return eb
 
   @cached_property
   def el(self):
     """ The line volume not including r under/over extrusion. """
-    return self.h*self.w*self.dl/self.Fa
+    # Note this is the bead volume for adjusts and the extra dz bead for non moving hops.
+    el = self.eb if self.isadjust else self._el(self.dd, self.h, self.w)
+    assert self.isstop or el > 0, f'{el=} {self!r}'
+    return el
+
+  @property
+  def el0(self):
+    """ The start line volume not including r under/over extrusion. """
+    el0 = self.el*(self.dl0/self.dl if self.dl else self.dz0/self.dz if self.dz else self.de0/self.de)
+    assert el0 >=0, f'{el0=} {self!r}'
+    return el0
+
+  @property
+  def el1(self):
+    """ The end line volume not including r under/over extrusion. """
+    el1 = self.el*(self.dl1/self.dl if self.dl else self.dz1/self.dz if self.dz else self.de1/self.de)
+    assert el1 >=0, f'{el1=} {self!r}'
+    return el1
+
+  @property
+  def elm(self):
+    """ The mid line volume not including r under/over extrusion. """
+    elm = self.el*(self.dlm/self.dl if self.dl else self.dzm/self.dz if self.dz else self.dem/self.de)
+    assert elm >=0, f'{elm=} {self!r}'
+    return elm
+
+  @property
+  def vt(self):
+    """Target nozzle extrusion velocity."""
+    return self.et/self.dl * self.v if self.dl else self.et/self.de * self.v if self.de else 0.0
 
   @cached_property
-  def isgo(self):
-    """ Is this a horizontal move? """
-    return self.dx or self.dy
+  def et(self):
+    """Target nozzle extrusion."""
+    et = max(0.0, self.el * self.r)
+    assert et >=0, f'{et=} {self!r}'
+    return et
+
+  @property
+  def et0(self):
+    """Target nozzle extrusion during acceleration phase."""
+    et0 = self.el0 * self.r
+    assert et0 >=0, f'{et0=} {self!r}'
+    return et0
+
+  @property
+  def et1(self):
+    """Target nozzle extrusion during deceleration phase."""
+    et1 = self.el1 * self.r
+    assert et1 >=0, f'{et1=} {self!r}'
+    return et1
+
+  @property
+  def etm(self):
+    """Target nozzle extrusion during middle phase."""
+    etm = self.elm * self.r
+    assert etm >=0, f'{etm=} {self!r}'
+    return etm
+
+
+  # These identify the type of move. Note that this can be a bit ambiguous, as
+  # it's possible for moves to change any combination of x,y,z,e. Note that
+  # pressure adjustements can also mean +-e changes for any type of move, so
+  # we use r as the indication of extrusion intent to decide if its a draw or
+  # not. Every move is either a shift, hop, or adjustment, which depends
+  # on if the speed is limited by dl, dz, or de changes.
 
   @cached_property
-  def isdraw(self):
-    # Note we treat moving retractions as pressure adjusted draws.
-    return self.isgo and self.de != 0.0
+  def isstop(self):
+    """Is this not moving? """
+    return not (self.dx or self.dy or self.dz)
 
-  @property
-  def ismove(self):
-    return self.isgo and self.de == 0.0
+  @cached_property
+  def ishoriz(self):
+    """ Is this predominantly a horizontal move? """
+    return (self.dx or self.dy) and not self.isvert
 
-  @property
-  def isadjust(self):
-    return self.de and not self.isgo
-
-  @property
-  def isretract(self):
-    return self.de < 0 and not self.isgo
-
-  @property
-  def isrestore(self):
-    return self.de > 0 and not self.isgo
-
-  @property
-  def ishop(self):
-    return self.dz and not self.isgo
-
-  @property
-  def ishopup(self):
-    return self.dz > 0 and not self.isgo
-
-  @property
-  def ishopdn(self):
-    return self.dz < 0 and not self.isgo
+  @cached_property
+  def isvert(self):
+    """ Is this predominantly a vertical move? """
+    # It's considered vertical if speed is limited by dz movement.
+    return self.dz and abs(self.dz)/self.Vz > self.dl/self.Vp
 
   @property
   def isspeed(self):
     """ Is this just a speed change? """
-    return not (self.isgo or self.dz or self.de)
+    return self.isstop and not self.de
+
+  @cached_property
+  def isshift(self):
+    """ Is this a non-adjusting horizontal move? """
+    return self.ishoriz and not self.isadjust
+
+  @property
+  def isdraw(self):
+    """Is this a horizontal line draw?"""
+    # There can be sloped draws, but if it is too vertical it's a hop.
+    return self.isshift and self.r > 0.0
+
+  @property
+  def ismove(self):
+    """ Is this a horizontal move?"""
+    # There can be sloped moves, but if it is too vertical it's a hop.
+    return self.isshift and self.r <= 0.0
+
+  @cached_property
+  def isadjust(self):
+    """ Is this a non-moving retract or restore?"""
+    # It's considered an adjustment if speed is limited by de movement.
+    return self.de and abs(self.de)/self.Ve > max(self.dl/self.Vp, abs(self.dz)/self.Vz)
+
+  @property
+  def isretract(self):
+    """ Is this a non-horizontal retract?"""
+    return self.isadjust and self.r < 0
+
+  @property
+  def isrestore(self):
+    """ Is this a non-horizontal-moving restore?"""
+    return self.isadjust and self.r > 0
+
+  @cached_property
+  def ishop(self):
+    """ Is this a vertical move?"""
+    # Note there can be slope or spiral and adjusting hops, but if it's too
+    # much it's either a move or adjust.
+    return self.isvert and not self.isadjust
+
+  @property
+  def ishopup(self):
+    return self.ishop and self.dz > 0
+
+  @property
+  def ishopdn(self):
+    return self.ishop and self.dz < 0
 
   @property
   def isaccel(self):
@@ -628,6 +892,19 @@ class Move(MoveBase):
     vmax = sqrt(self.Ap*R)
     return min(vmax, self.v, m.v)
 
+  def extruderv(self, m):
+    """ Calculate the max velocity for extruder 'jerk' between two moves.
+
+    This calculates the max velocity between two moves so extrusion velocity
+    ve changes instantly by at most `Je`. We ignore dz as insignificant and
+    use horizontal velocities only. This matches the marlin 'jerk' mechanism
+    for handling sudden extruder velocity changes.
+    """
+    # vmax = Je/abs(self.de/self.dl - m.de/m.dl)
+    dedl = abs(self.de*m.dl - m.de*self.dl)
+    vmax = self.Je*self.dl*m.dl/dedl if dedl else inf
+    return min(vmax, self.v, m.v)
+
   def join(self, m):
     """ Add two moves together. """
     return self.change(dx=self.dx+m.dx, dy=self.dy+m.dy, dz=self.dz+m.dz,
@@ -669,7 +946,7 @@ class Move(MoveBase):
         # Join draws together if ...
         (self.isdraw and m.isdraw and
         # ... they have the same line settings, and ...
-        (self.h,self.w,self.r) == (self.h,self.w,self.r) and
+        (self.h,self.w,self.r) == (m.h,m.w,m.r) and
         # The path deviation from joining them is small.
         self.joind(m) < self.Gp) or
         # Always join hopup/hopdn together.
@@ -686,12 +963,12 @@ class Move(MoveBase):
     provided velocities or moves if necessary to fit within the Ap
     acceleration and deceleration limits.
 
-    if m0 is set the v0 start velocity is set to the corner velocity.
-    If m1 is set the v1 end velocity is set to the corner velocity.
+    if m0 is set the v0 start velocity is set to the max corner/extruder velocity.
+    If m1 is set the v1 end velocity is set to the max corner/extruder velocity.
     If v0, or v1 are still not set they default to 0.0.
     """
-    if m0 is not None: v0 = m0.cornerv(self)
-    if m1 is not None: v1 = self.cornerv(m1)
+    if m0 is not None: v0 = min(m0.cornerv(self), m0.extruderv(self))
+    if m1 is not None: v1 = min(self.cornerv(m1), self.extruderv(m1))
     dl = self.dl
     if not dl:
       # A stop move, v0, v1, and vm are zero.
@@ -712,7 +989,6 @@ def ldt(l):
 
 class Layer(NamedTuple):
   """ Layer definition object. """
-  # Note we always start layers from a high "hop" position.
   n : int   # layer number (0 for pre-extrude).
   z : float # height of bottom of layer.
   Vp: int   # default layer print speed.
@@ -725,8 +1001,144 @@ class Layer(NamedTuple):
   r : float # default line extrusion ratio.
 
 
-class GCodeGen(object):
-  """ GCodeGen gcode generator.
+class CmdStats(object):
+  """ Stats for a sample of moves."""
+  def __init__(self, name):
+    self.name = name
+    # Note we initialize the arrays with zero count adds.
+    self.c = stats1.Sample() # cmd stats (dt,dd,dl,dz,de,el,et,en,v,v0,vm,v1 per cmd).
+    self.c.add([0]*12,0)
+    self.l = stats1.Sample() # cmd line stats (vl,vz,ve,vn,h,w,r per dd).
+    self.l.add([0]*7,0)
+    self.o = stats1.Sample() # out line stats (vl,vz,ve,vn,re,rt,rn,er per dd).
+    self.o.add([0]*8,0)
+    self.r = stats1.Sample() # extruder stats (re,rt,rn,er per el).
+    self.r.add([0]*4,0)
+
+  def _atdev(self, s, d):
+    """Get a Sample's values at d stddevs clipped between min and max."""
+    return stats1.clip(s.atdev(d), s.min, s.max)
+
+  def __str__(self):
+    num = self.c.num
+    dt, dd, dl, dz, de, el, et, en, *_  = self.c.sum
+    er = (en-et)/el if el else 0.0
+    assert isneareq(self.l.num, dd), f'{self.l.num=} {dd=}'
+    assert isneareq(self.o.num, dd), f'{self.o.num=} {dd=}'
+    assert isneareq(self.r.num, el), f'{self.r.num=} {el=}'
+    cmdsums = f'totals {num=} dt={ftime(dt)} {dd=:.1f} {dl=:.1f} {dz=:.2f} {de=:.3f} {el=:.3f} {et=:.3f} {en=:.3f} {er=:+.3f}'
+    *_, v, v0, vm, v1 = self.c.avg
+    vl, vz, ve, vn, h, w, r = self.l.avg
+    vl0, vz0, ve0, vn0, h0, w0, r0 = self._atdev(self.l,-2)
+    vl1, vz1, ve1, vn1, h1, w1, r1 = self._atdev(self.l,0)
+    vl2, vz2, ve2, vn2, h2, w2, r2 = self._atdev(self.l,2)
+    cmdlines = f'move args: {v=:.0f}({v0:.0f}<{vm:.0f}>{v1:.0f}) {h=:.2f}({h0:.2f}<{h1:.2f}<{h2:.2f}) {w=:.2f}({w0:.2f}<{w1:.2f}<{w2:.2f}) {r=:.2f}({r0:.2f}<{r1:.2f}<{r2:.2f})'
+    vlstr=f' {vl=:.0f}({vl0:.0f}<{vl1:.0f}<{vl2:.0f})' if vl else ''
+    vzstr=f' {vz=:.1f}({vz0:.1f}<{vz1:.1f}<{vz2:.1f})' if vz else ''
+    vestr=f' {ve=:.3f}({ve0:.3f}<{ve1:.3f}<{ve2:.3f})' if ve else ''
+    vnstr=f' {vn=:.3f}({vn0:.3f}<{vn1:.3f}<{vn2:.3f})' if vn else ''
+    cmdvels = f'target speeds per dd:{vlstr}{vzstr}{vestr}{vnstr}'
+    vl, vz, ve, vn, re, rt, rn, er = self.o.avg
+    vl0, vz0, ve0, vn0, re0, rt0, rn0, er0 = self._atdev(self.o,-2)
+    vl1, vz1, ve1, vn1, re1, rt1, rn1, er1 = self._atdev(self.o,0)
+    vl2, vz2, ve2, vn2, re2, rt2, rn2, er2 = self._atdev(self.o,2)
+    vlstr=f' {vl=:.0f}({vl0:.0f}<{vl1:.0f}<{vl2:.0f})' if vl else ''
+    vzstr=f' {vz=:.1f}({vz0:.1f}<{vz1:.1f}<{vz2:.1f})' if vz else ''
+    vestr=f' {ve=:.3f}({ve0:.3f}<{ve1:.3f}<{ve2:.3f})' if ve else ''
+    vnstr=f' {vn=:.3f}({vn0:.3f}<{vn1:.3f}<{vn2:.3f})' if vn else ''
+    actvels = f'actual speeds per dd:{vlstr}{vzstr}{vestr}{vnstr}'
+    restr=f' {re=:.2f}({re0:.2f}<{re1:.2f}<{re2:.2f})' if re else ''
+    rtstr=f' {rt=:.2f}({rt0:.2f}<{rt1:.2f}<{rt2:.2f})' if rt else ''
+    rnstr=f' {rn=:.2f}({rn0:.2f}<{rn1:.2f}<{rn2:.2f})' if rn else ''
+    erstr=f' {er=:+.2f}({er0:+.2f}<{er1:+.2f}<{er2:+.2f})'
+    lratios = f'volume ratios per dd:{restr}{rtstr}{rnstr}{erstr}'
+    re, rt, rn, er = self.r.avg
+    re0, rt0, rn0, er0 = self._atdev(self.r,-2)
+    re1, rt1, rn1, er1 = self._atdev(self.r,0)
+    re2, rt2, rn2, er2 = self._atdev(self.r,2)
+    restr=f' {re=:.2f}({re0:.2f}<{re1:.2f}<{re2:.2f})' if re else ''
+    rtstr=f' {rt=:.2f}({rt0:.2f}<{rt1:.2f}<{rt2:.2f})' if rt else ''
+    rnstr=f' {rn=:.2f}({rn0:.2f}<{rn1:.2f}<{rn2:.2f})' if rn else ''
+    erstr=f' {er=:+.2f}({er0:+.2f}<{er1:+.2f}<{er2:+.2f})'
+    eratios = f'volume ratios per el:{restr}{rtstr}{rnstr}{erstr}'
+    return f"""{self.name} stats:
+  {cmdsums}
+  {cmdlines}
+  {cmdvels}
+  {actvels}
+  {lratios}
+  {eratios}"""
+
+  def addinc(self, m, dt, dl, dz, de, en):
+    """ Update the stats for part of a move."""
+    # get the fraction of a move from the distance ratios.
+    # Note we use dl,de,dz in that order because of relative magnitude for accuracy.
+    s = (dl/m.dl if m.dl else de/m.de if m.de else dz/m.dz)
+    # scale dist and volumes by the fraction of the move completed.
+    dd = s * m.dd; el = s * m.el; et = s * m.et
+    assert 0<dt<=1 and 0<dd<500 and 0<=el<500 and 0<=et<500 and 0<=en<500, f'{dd=} {el=} {et=} {en=} for {m!r}'
+    vl, vz, ve, vn = dl/dt, dz/dt, de/dt, en/dt
+    re, rt, rn = de/el, et/el, en/el
+    er = rn - rt
+    self.o.add((vl, vz, ve, vn, re, rt, rn, er), dd)
+    self.r.add((re, rt, rn, er), el)
+    #print(f'addinc({m=}, {dt=}, {dl=},  {dz=}, {de=}, {en=}, {dd=}')
+
+  def addcmd(self, m, en):
+    """ Update the stats for a whole move."""
+    self.c.add((m.dt,m.dd,m.dl,m.dz,m.de,m.el,m.et,en,m.v,m.v0,m.vm,m.v1))
+    self.l.add((m.vl,m.vz,m.ve,m.vt,m.h,m.w,m.r), m.dd)
+    dt, dd, dl, dz, de, el, et, en, *_  = self.c.sum
+    assert isneareq(self.l.num, dd), f'{self.l.num=} {dd=} after {m=} {m.dd=}'
+    assert isneareq(self.o.num, dd), f'{self.o.num=} {dd=} after {m=} {m.dd=}'
+    assert isneareq(self.r.num, el), f'{self.r.num=} {el=} after {m=} {m.dd=}'
+
+
+class PrintStats(object):
+  """ Print stats collection and rendering."""
+
+  def __init__(self):
+    # Stats on speeds.
+    self.total = CmdStats('total')
+    self.draw = CmdStats('draw')
+    self.move = CmdStats('move')
+    self.hopup = CmdStats('hopup')
+    self.hopdn = CmdStats('hopdn')
+    self.retract = CmdStats('retract')
+    self.restore = CmdStats('restore')
+
+  def __str__(self):
+    return f"""{self.total}
+{self.draw}
+{self.move}
+{self.hopup}
+{self.hopdn}
+{self.retract}
+{self.restore}"""
+
+  def addinc(self, m, dt, dl, dz, de, en):
+    """ Update the line stats for part of a move."""
+    self.total.addinc(m, dt, dl, dz, de, en)
+    if m.isdraw: self.draw.addinc(m, dt, dl, dz, de, en)
+    elif m.ismove: self.move.addinc(m, dt, dl, dz, de, en)
+    elif m.ishopup: self.hopup.addinc(m, dt, dl, dz, de, en)
+    elif m.ishopdn: self.hopdn.addinc(m, dt, dl, dz, de, en)
+    elif m.isretract: self.retract.addinc(m, dt, dl, dz, de, en)
+    elif m.isrestore: self.restore.addinc(m, dt, dl, dz, de, en)
+
+  def addcmd(self, m, en):
+    """ Update the stats for a whole move."""
+    self.total.addcmd(m, en)
+    if m.isdraw: self.draw.addcmd(m, en)
+    elif m.ismove: self.move.addcmd(m, en)
+    elif m.ishopup: self.hopup.addcmd(m, en)
+    elif m.ishopdn: self.hopdn.addcmd(m, en)
+    elif m.isretract: self.retract.addcmd(m, en)
+    elif m.isrestore: self.restore.addcmd(m, en)
+
+
+class GCodeGenBase(AttrDictMixin):
+  """ A base class for generating gcode output.
 
   The general operation of this is;
 
@@ -748,20 +1160,6 @@ class GCodeGen(object):
   final transformation to gcode in a namespace containing all the execution
   state at that point. This means they can include complex expressions
   evaluated from the current execution state for the gcode they generate.
-
-  There are many helper methods that generate and add() commands to do various
-  different things. These include;
-
-  * startFile()/endFile(): add gcode initialization/finalization cmds.
-  * startLayer()/endLayer(): add layer initialization/finalization cmds.
-  * nextLayer(): shorthand for ending the previous layer and starting a new one.
-  * cmd(): add an arbitrary gcode command.
-  * cmt(): add a gcode comment line.
-  * log(): add a gcode comment log line, depending on self.verb setting.
-  * draw(), move(), retract(), restore(), hopup(), hopdn(): add move cmds
-    for basic actions.
-  * preExt(), fbox(), dbox(), dot(), line(), text(): add multiple move
-    commands for complex output.
 
   The add(cmd) method is the underlying method to execute and record a cmd in
   self.prevcmds. It filters out empty cmds that evaluate to False. It always
@@ -817,45 +1215,26 @@ class GCodeGen(object):
     Tp: Platform temp (degC).
     Fe: Extruder fan speed (0.0->1.0).
     Fc: Case fan speed (0.0->1.0).
-    fKf: Firmware Linear Advance factor (0.0->4.0 mm/mm/s).
-    Kf: Linear Advance factor (0.0->4.0 mm/mm/s).
-    Kb: Bead backpressure factor (??? mm/mm).
-    Re: Retraction distance (0.0->10.0 mm).
     Vp: Speed when printing (mm/s).
     Vt: Speed when traveling (mm/s).
     Vz: Speed when raising/lowering (mm/s).
     Ve: Speed when retracting (mm/s).
     Vb: Speed when restoring (mm/s).
+    Re: Retraction distance (0.0->10.0 mm).
     Lr: Default extrusion ratio (0.1 -> 10.0).
     Lh: Default line height (0.1->0.4mm).
     Lw: Default line width (0.2->0.8mm).
-    relext: relative extrusion enabled.
-    dynret: linear advance dynamic retraction enabled.
-    dynext: linear advance dynamic extrusion enabled.
-    optmov: path optimizing enabled.
     f_t: current file execution time.
     f_l: current file printed line length.
     f_e: current file extruded filament length.
     l_t: current layer execution time.
     l_l: current layer printed line length.
     l_e: current layer extruded filament length.
-    pe: current extruder pressure or retraction.
-    eb: current extruded bead volume.
-    db: current extruded bead diameter (property).
-    vn: nozzle flow velocity (property).
-    ve: current extruder velocity.
-    vl: current line velocity.
-    dt: the execution time of the last command.
-    dl: the line length of the last command.
-    de: the extruder change of the last command.
-    en: the extruded volume of the last command.
-    c: the last command.
+    c: the last non-comment command.
     m: the last move command.
-    d: the last move command that was a draw.
+    d: the last move command that was a draw or restore.
     x,y,z,e,f: Current x,y,z,e,f position values.
     h: current height above the layer base.
-    w: current default line width (property).
-    r: current default extrusion ratio (property).
   """
 
   Fd = 1.75  # Fillament diameter.
@@ -865,22 +1244,6 @@ class GCodeGen(object):
   Zh = Nd/2  # z-hop height.
 
   startcode = """\
-;gcode_flavor: flashforge
-;machine_type: Adventurer 3 Series
-;filament_diameter0: {Fd}
-;right_extruder_temperature: {Te}
-;platform_temperature: {Tp}
-;extruder_fan: {round(Fe*100)}%
-;case_fan: {round(Fc*100)}%
-;base_print_speed: {round(Vp)}
-;travel_speed: {round(Vt)}
-;vertical_speed: {round(Vz)}
-;retract_speed: {round(Ve)}
-;restore_speed: {round(Vb)}
-;layer_height: {Lh:.2f}
-;line_width: {Lw:.2f}
-;extrusion_ratio: {Lr:.2f}
-;command_line: {_getCmdline()}
 ;start gcode
 M118 X{75.0:.2f} Y{75.0:.2f} Z{150.0:.2f} T0
 M140 S{round(Tp)} T0
@@ -900,6 +1263,7 @@ M108 T0
 {_setFe(Fe)+nl if Fe else ""}\
 {"M83"+nl if relext else ""}\
 """
+
   endcode = """\
 ;end gcode
 M107
@@ -913,68 +1277,56 @@ G91
 M18
 """
 
-  def _getCmdline(self):
-    return ' '.join(sys.argv)
-
   def _setFc(self, fc):
-    return f'M652 S{round(fc*255)}' if fc else 'M651'
+    return f'M651 S{round(fc*255)}' if fc else 'M652'
 
   def _setFe(self, fe):
     return f'M106' if fe == 1.0 else f'M106 S{round(fe*255)}' if fe else 'M107'
 
   def __init__(self,
-      Te=210, Tp=50, Fe=1.0, Fc=1.0, fKf=0.0,
-      Kf=0.0, Kb=0.0, Re=5,
-      Vp=60, Vt=100, Vz=7, Ve=40, Vb=30,
-      Lh=0.2, Lw=Nd, Lr=1.0,
-      relext=False, optmov=False, segvel=False, fixvel=0,
-      diff=False, verb=False,
-      dynret=False, dynext=False):
+      Te=210, Tp=50, Fe=1.0, Fc=1.0,
+      Vp=60, Vt=100, Vz=7, Ve=40, Vb=30, Re=5,
+      Lh=0.2, Lw=Nd, Lr=1.0, **kwargs):
     # Temp and Fan settings.
-    self.Te, self.Tp, self.Fe, self.Fc, self.fKf = Te, Tp, Fe, Fc, fKf
-    # Linear advance and retraction settings.
-    self.Kf, self.Kb, self.Re = Kf, Kb, Re
-    # Default velocities.
-    self.Vp, self.Vt, self.Vz, self.Ve, self.Vb = Vp, Vt, Vz, Ve, Vb
+    self.Te, self.Tp, self.Fe, self.Fc = Te, Tp, Fe, Fc
+    # Default velocities and retraction.
+    self.Vp, self.Vt, self.Vz, self.Ve, self.Vb, self.Re = Vp, Vt, Vz, Ve, Vb, Re
     # Default line height, width, and extrusion ratio.
     self.Lh, self.Lw, self.Lr = Lh, Lw, Lr
-    # Processing mode options.
-    self.relext, self.optmov, self.segvel, self.fixvel = relext, optmov, segvel, fixvel
-    # Logging mode options.
-    self.diff, self.verb = diff, verb
-    # Pressure advance mode options.
-    self.dynret, self.dynext = dynret, dynext
     class GMove(Move, Fd=self.Fd, Nd=self.Nd): pass
     self.GMove = GMove
     self.resetfile()
 
-  @property
-  def db(self):
-    """ Get the current bead diameter from the bead volume."""
-    eb, h = self.eb, self.h
-    # h<=0 can happen for initializing moves or moves at the start of a new
-    # layer before a hop.
-    return 2*sqrt(eb*self.Fa/(h*pi)) if h > 0.0 else 0.0
+  def resetfile(self, nextcmds=None, finalize=False):
+    """ Reset all file state variables.
 
-  @property
-  def vn(self):
-    """Get nozzle flow velocity from the nozzle pressure and back pressure."""
-    pe, db = self.pe, self.db
-    pb = max(0.0, self.Kb*db)            # bead backpressure.
-    pn = max(0.0, pe - pb)               # nozzle pressure.
-    return pn/self.Kf if self.Kf else self.ve if pe>=pb else 0.0
+    This gets ready to process or finalize a queue of nextcmds or new commands.
+    """
+    # Zero all positions so the first move's deltas are actually absolute.
+    self.x, self.y, self.z, self.e, self.f, self.h = 0.0, 0.0, 0.0, 0.0, 0, 0.0
+    self.f_t = self.f_l = self.f_e  = 0.0
+    # We assume prints start retracted.
+    self.pe = -self.Re
+    self.prevcmds, self.nextcmds, self.finalize = deque(), nextcmds, finalize
+    self.c = self.m = self.d = None
+    self.resetlayer()
 
-  @property
-  def w(self):
-    """ Get the current default width."""
-    # This is the width of the previous draw or the layer default.
-    return self.d.w if self.d else self.layer.w
+  def resetlayer(self):
+    """ Reset all layer state variables. """
+    # Set layer to a default base layer for any layer-less moves.
+    self.layer = Layer(
+        0, 0.0, self.Vp, self.Vt, self.Vz, self.Ve, self.Vb, self.Lh, self.Lw, self.Lr)
+    self.l_t = self.l_l = self.l_e = 0.0
 
-  @property
-  def r(self):
-    """ Get the current default extrusion ratio."""
-    # This is the ratio of the previous draw or the layer default.
-    return self.d.r if self.d else self.layer.r
+  def startFile(self):
+    self.add(self.startcode)
+    # Note Flashprint always generates and assumes pre-extrude has h=0.2mm.
+    self.startLayer(0, h=0.2)
+
+  def endFile(self):
+    self.endLayer()
+    self.filestats()
+    self.add(self.endcode)
 
   def islayer(self, cmd):
     return isinstance(cmd, Layer)
@@ -991,83 +1343,1168 @@ M18
   def isbin(self, cmd):
     return isinstance(cmd, bytes)
 
+  def iswait(self, cmd):
+    return self.iscmd(cmd) and cmd[0] == 'G4'
+
+
+class GCodeCmtMixin(GCodeGenBase):
+  """ A GCodeGen mixin to add slicer specific comments. """
+
+  # Slicer Types for formating gcode.
+  SlicerTypes = ('FlashPrint', 'OrcaSlicer')
+  FlashPrint, OrcaSlicer = SlicerTypes
+
+  Header = dict(
+    FlashPrint="""\
+;gcode_flavor: flashforge
+;machine_type: Adventurer 3 Series
+;filament_diameter0: {Fd}
+;right_extruder_temperature: {Te}
+;platform_temperature: {Tp}
+;extruder_fan: {round(Fe*100)}%
+;case_fan: {round(Fc*100)}%
+;base_print_speed: {round(Vp)}
+;travel_speed: {round(Vt)}
+;vertical_speed: {round(Vz)}
+;retract_speed: {round(Ve)}
+;restore_speed: {round(Vb)}
+;layer_height: {Lh:.2f}
+;line_width: {Lw:.2f}
+;extrusion_ratio: {Lr:.2f}
+;command_line: {_getCmdline()}
+""",
+               OrcaSlicer="""\
+; HEADER_BLOCK_START
+; generated by OrcaSlicer
+; HEADER_BLOCK_END
+
+; EXECUTABLE_BLOCK_START
+""")
+
+  Footer = dict(
+                FlashPrint="",
+                OrcaSlicer="""\
+; EXECUTABLE_BLOCK_END
+
+; CONFIG_BLOCK_START
+; accel_to_decel_enable = 0
+; accel_to_decel_factor = 50%
+; activate_air_filtration = 1
+; activate_chamber_temp_control = 0
+; adaptive_bed_mesh_margin = 0
+; adaptive_pressure_advance = 0
+; adaptive_pressure_advance_bridges = 0
+; adaptive_pressure_advance_model = "0,0,0"
+; adaptive_pressure_advance_overhangs = 0
+; additional_cooling_fan_speed = 100
+; align_infill_direction_to_model = 0
+; alternate_extra_wall = 0
+; auxiliary_fan = 0
+; bbl_calib_mark_logo = 1
+; bbl_use_printhost = 0
+; bed_custom_model =
+; bed_custom_texture =
+; bed_exclude_area = 0x0
+; bed_mesh_max = 99999,99999
+; bed_mesh_min = -99999,-99999
+; bed_mesh_probe_distance = 50,50
+; before_layer_change_gcode =
+; best_object_pos = 0.5,0.5
+; bottom_shell_layers = 4
+; bottom_shell_thickness = 0.8
+; bottom_solid_infill_flow_ratio = 1
+; bottom_surface_density = 100%
+; bottom_surface_pattern = monotonic
+; bridge_acceleration = 50%
+; bridge_angle = 0
+; bridge_density = 100%
+; bridge_flow = 1
+; bridge_no_support = 0
+; bridge_speed = 20
+; brim_ears_detection_length = 1
+; brim_ears_max_angle = 125
+; brim_object_gap = 0.3
+; brim_type = auto_brim
+; brim_width = 5
+; calib_flowrate_topinfill_special_order = 0
+; chamber_temperature = 0
+; change_extrusion_role_gcode =
+; change_filament_gcode = M600
+; close_fan_the_first_x_layers = 0
+; complete_print_exhaust_fan_speed = 0
+; cool_plate_temp = 60
+; cool_plate_temp_initial_layer = 55
+; cooling_tube_length = 0
+; cooling_tube_retraction = 0
+; counterbore_hole_bridging = sacrificiallayer
+; curr_bed_type = High Temp Plate
+; default_acceleration = 0
+; default_bed_type =
+; default_filament_colour = ""
+; default_filament_profile = "Flashforge PLA"
+; default_jerk = 0
+; default_junction_deviation = 0
+; default_print_profile = 0.20mm Standard @Flashforge AD3 0.4 Nozzle
+; deretraction_speed = 30
+; detect_narrow_internal_solid_infill = 1
+; detect_overhang_wall = 1
+; detect_thin_wall = 1
+; different_settings_to_system = bottom_shell_layers;bottom_shell_thickness;bridge_speed;brim_object_gap;brim_type;counterbore_hole_bridging;default_acceleration;detect_thin_wall;gap_fill_target;infill_combination;infill_combination_max_layer_height;initial_layer_line_width;initial_layer_travel_speed;inner_wall_line_width;inner_wall_speed;internal_bridge_speed;internal_solid_infill_line_width;internal_solid_infill_speed;line_width;max_volumetric_extrusion_rate_slope;min_width_top_surface;outer_wall_line_width;overhang_1_4_speed;overhang_2_4_speed;overhang_3_4_speed;overhang_4_4_speed;overhang_reverse;overhang_reverse_threshold;post_process;precise_outer_wall;print_sequence;resolution;role_based_wipe_speed;seam_gap;seam_slope_conditional;seam_slope_type;slice_closing_radius;small_perimeter_speed;sparse_infill_line_width;sparse_infill_pattern;staggered_inner_seams;support_line_width;support_object_first_layer_gap;support_object_xy_distance;top_shell_layers;top_shell_thickness;top_surface_line_width;travel_speed;wall_loops;wipe_speed;xy_contour_compensation;xy_hole_compensation;activate_air_filtration;close_fan_the_first_x_layers;complete_print_exhaust_fan_speed;during_print_exhaust_fan_speed;filament_cost;filament_flow_ratio;filament_vendor;nozzle_temperature_range_high;nozzle_temperature_range_low;slow_down_for_layer_cooling;auxiliary_fan;before_layer_change_gcode;deretraction_speed;emit_machine_limits_to_gcode;host_type;layer_change_gcode;machine_end_gcode;machine_max_speed_e;machine_max_speed_x;machine_max_speed_y;machine_start_gcode;max_layer_height;min_layer_height;nozzle_diameter;print_host;print_host_webui;retract_before_wipe;retraction_speed;z_hop;z_hop_types
+; disable_m73 = 0
+; dont_filter_internal_bridges = disabled
+; dont_slow_down_outer_wall = 0
+; draft_shield = disabled
+; during_print_exhaust_fan_speed = 100
+; elefant_foot_compensation = 0.15
+; elefant_foot_compensation_layers = 1
+; emit_machine_limits_to_gcode = 0
+; enable_arc_fitting = 0
+; enable_extra_bridge_layer = disabled
+; enable_filament_ramming = 0
+; enable_long_retraction_when_cut = 0
+; enable_overhang_bridge_fan = 1
+; enable_overhang_speed = 1
+; enable_pressure_advance = 0
+; enable_prime_tower = 0
+; enable_support = 0
+; enforce_support_layers = 0
+; eng_plate_temp = 60
+; eng_plate_temp_initial_layer = 55
+; ensure_vertical_shell_thickness = ensure_all
+; exclude_object = 0
+; extra_loading_move = 0
+; extra_perimeters_on_overhangs = 0
+; extra_solid_infills =
+; extruder_clearance_height_to_lid = 150
+; extruder_clearance_height_to_rod = 24.93
+; extruder_clearance_radius = 42.3
+; extruder_colour = #26A69A
+; extruder_offset = 0x0
+; extrusion_rate_smoothing_external_perimeter_only = 0
+; fan_cooling_layer_time = 100
+; fan_kickstart = 0
+; fan_max_speed = 100
+; fan_min_speed = 100
+; fan_speedup_overhangs = 1
+; fan_speedup_time = 0
+; filament_colour = #26A69A
+; filament_cooling_final_speed = 3.4
+; filament_cooling_initial_speed = 2.2
+; filament_cooling_moves = 4
+; filament_cost = 24.9
+; filament_density = 1.24
+; filament_diameter = 1.75
+; filament_end_gcode = ""
+; filament_flow_ratio = 1
+; filament_ids = FFF01
+; filament_is_support = 0
+; filament_loading_speed = 28
+; filament_loading_speed_start = 3
+; filament_max_volumetric_speed = 12
+; filament_minimal_purge_on_wipe_tower = 15
+; filament_multitool_ramming = 0
+; filament_multitool_ramming_flow = 10
+; filament_multitool_ramming_volume = 10
+; filament_notes = ""
+; filament_ramming_parameters = "120 100 6.6 6.8 7.2 7.6 7.9 8.2 8.7 9.4 9.9 10.0| 0.05 6.6 0.45 6.8 0.95 7.8 1.45 8.3 1.95 9.7 2.45 10 2.95 7.6 3.45 7.6 3.95 7.6 4.45 7.6 4.95 7.6"
+; filament_settings_id = "Tecor PLA+"
+; filament_shrink = 100%
+; filament_shrinkage_compensation_z = 100%
+; filament_soluble = 0
+; filament_stamping_distance = 0
+; filament_stamping_loading_speed = 0
+; filament_start_gcode = ""
+; filament_toolchange_delay = 0
+; filament_type = PLA
+; filament_unloading_speed = 90
+; filament_unloading_speed_start = 100
+; filament_vendor = Tecor
+; filename_format = {{input_filename_base}}.gcode
+; fill_multiline = 1
+; filter_out_gap_fill = 0.5
+; first_layer_print_sequence = 0
+; flush_into_infill = 0
+; flush_into_objects = 0
+; flush_into_support = 1
+; flush_multiplier = 0.3
+; flush_volumes_matrix = 0
+; flush_volumes_vector = 140,140
+; full_fan_speed_layer = 0
+; fuzzy_skin = none
+; fuzzy_skin_first_layer = 0
+; fuzzy_skin_mode = displacement
+; fuzzy_skin_noise_type = classic
+; fuzzy_skin_octaves = 4
+; fuzzy_skin_persistence = 0.5
+; fuzzy_skin_point_distance = 0.3
+; fuzzy_skin_scale = 1
+; fuzzy_skin_thickness = 0.2
+; gap_fill_target = topbottom
+; gap_infill_speed = 30
+; gcode_add_line_number = 0
+; gcode_comments = 0
+; gcode_flavor = marlin
+; gcode_label_objects = 0
+; has_scarf_joint_seam = 1
+; head_wrap_detect_zone =
+; high_current_on_filament_swap = 0
+; hole_to_polyhole = 0
+; hole_to_polyhole_threshold = 0.01
+; hole_to_polyhole_twisted = 1
+; host_type = flashforge
+; hot_plate_temp = 50
+; hot_plate_temp_initial_layer = 50
+; idle_temperature = 0
+; independent_support_layer_height = 1
+; infill_anchor = 400%
+; infill_anchor_max = 20
+; infill_combination = 1
+; infill_combination_max_layer_height = 80%
+; infill_direction = 45
+; infill_jerk = 9
+; infill_lock_depth = 1
+; infill_overhang_angle = 60
+; infill_shift_step = 0.4
+; infill_wall_overlap = 15%
+; inherits_group = "0.20mm Standard @Flashforge AD3 0.4 Nozzle";"Flashforge PLA";"Flashforge Adventurer 3 Series 0.4 Nozzle"
+; initial_layer_acceleration = 50
+; initial_layer_infill_speed = 10
+; initial_layer_jerk = 9
+; initial_layer_line_width = 0
+; initial_layer_min_bead_width = 100%
+; initial_layer_print_height = 0.2
+; initial_layer_speed = 10
+; initial_layer_travel_speed = 100%
+; inner_wall_acceleration = 100
+; inner_wall_jerk = 9
+; inner_wall_line_width = 0
+; inner_wall_speed = 45
+; interface_shells = 0
+; interlocking_beam = 0
+; interlocking_beam_layer_count = 2
+; interlocking_beam_width = 0.8
+; interlocking_boundary_avoidance = 2
+; interlocking_depth = 2
+; interlocking_orientation = 22.5
+; internal_bridge_angle = 0
+; internal_bridge_density = 100%
+; internal_bridge_fan_speed = -1
+; internal_bridge_flow = 1
+; internal_bridge_speed = 150%
+; internal_solid_infill_acceleration = 100
+; internal_solid_infill_line_width = 0.64292
+; internal_solid_infill_pattern = monotonic
+; internal_solid_infill_speed = 45
+; ironing_angle = -1
+; ironing_fan_speed = -1
+; ironing_flow = 15%
+; ironing_inset = 0
+; ironing_pattern = rectilinear
+; ironing_spacing = 0.1
+; ironing_speed = 15
+; ironing_type = no ironing
+; is_infill_first = 0
+; lateral_lattice_angle_1 = -45
+; lateral_lattice_angle_2 = 45
+; layer_change_gcode =
+; layer_height = 0.2
+; line_width = 0.54292
+; long_retractions_when_cut = 0
+; machine_end_gcode =
+; machine_load_filament_time = 0
+; machine_max_acceleration_e = 500
+; machine_max_acceleration_extruding = 500
+; machine_max_acceleration_retracting = 500
+; machine_max_acceleration_travel = 500
+; machine_max_acceleration_x = 500
+; machine_max_acceleration_y = 500
+; machine_max_acceleration_z = 100
+; machine_max_jerk_e = 2.5
+; machine_max_jerk_x = 8
+; machine_max_jerk_y = 8
+; machine_max_jerk_z = 0.4
+; machine_max_junction_deviation = 0,0
+; machine_max_speed_e = 40
+; machine_max_speed_x = 100
+; machine_max_speed_y = 100
+; machine_max_speed_z = 20
+; machine_min_extruding_rate = 0,0
+; machine_min_travel_rate = 0,0
+; machine_pause_gcode = M25
+; machine_start_gcode =
+; machine_tool_change_time = 0
+; machine_unload_filament_time = 0
+; make_overhang_printable = 0
+; make_overhang_printable_angle = 55
+; make_overhang_printable_hole_size = 0
+; manual_filament_change = 1
+; max_bridge_length = 10
+; max_layer_height = 0.4
+; max_resonance_avoidance_speed = 120
+; max_travel_detour_distance = 50
+; max_volumetric_extrusion_rate_slope = 5
+; max_volumetric_extrusion_rate_slope_segment_length = 3
+; min_bead_width = 100%
+; min_feature_size = 25%
+; min_layer_height = 0.01
+; min_length_factor = 0.5
+; min_resonance_avoidance_speed = 70
+; min_skirt_length = 0
+; min_width_top_surface = 50%
+; minimum_sparse_infill_area = 15
+; mmu_segmented_region_interlocking_depth = 0
+; mmu_segmented_region_max_width = 0
+; notes =
+; nozzle_diameter = 0.4
+; nozzle_height = 2.5
+; nozzle_hrc = 0
+; nozzle_temperature = 210
+; nozzle_temperature_initial_layer = 210
+; nozzle_temperature_range_high = 215
+; nozzle_temperature_range_low = 205
+; nozzle_type = stainless_steel
+; nozzle_volume = 0
+; only_one_wall_first_layer = 0
+; only_one_wall_top = 1
+; ooze_prevention = 0
+; other_layers_print_sequence = 0
+; other_layers_print_sequence_nums = 0
+; outer_wall_acceleration = 100
+; outer_wall_jerk = 9
+; outer_wall_line_width = 0
+; outer_wall_speed = 30
+; overhang_1_4_speed = 80%
+; overhang_2_4_speed = 67%
+; overhang_3_4_speed = 57%
+; overhang_4_4_speed = 50%
+; overhang_fan_speed = 100
+; overhang_fan_threshold = 50%
+; overhang_reverse = 1
+; overhang_reverse_internal_only = 0
+; overhang_reverse_threshold = 0
+; parking_pos_retraction = 0
+; pellet_flow_coefficient = 0.4157
+; pellet_modded_printer = 0
+; post_process = ~/src/workspace-tools/3DPrinting/toadv3.sh
+; precise_outer_wall = 0
+; precise_z_height = 0
+; preferred_orientation = 0
+; preheat_steps = 1
+; preheat_time = 30
+; pressure_advance = 0
+; prime_tower_brim_width = 3
+; prime_tower_width = 60
+; prime_volume = 45
+; print_compatible_printers = "Flashforge Adventurer 3 Series 0.4 Nozzle"
+; print_flow_ratio = 1
+; print_order = default
+; print_sequence = by object
+; print_settings_id = 0.20x0.50 Standard @Flashforge AD3 0.4 Nozzle
+; printable_area = -75x-75,75x-75,75x75,-75x75
+; printable_height = 150
+; printer_model = Flashforge Adventurer 3 Series
+; printer_notes =
+; printer_settings_id = Flashforge Adventurer 3 Series 0.4 Nozzle - Custom
+; printer_structure = undefine
+; printer_technology = FFF
+; printer_variant = 0.4
+; printhost_authorization_type = key
+; printhost_ssl_ignore_revoke = 0
+; printing_by_object_gcode =
+; purge_in_prime_tower = 0
+; raft_contact_distance = 0.1
+; raft_expansion = 1.5
+; raft_first_layer_density = 90%
+; raft_first_layer_expansion = 2
+; raft_layers = 0
+; reduce_crossing_wall = 1
+; reduce_fan_stop_start_freq = 1
+; reduce_infill_retraction = 1
+; required_nozzle_HRC = 0
+; resolution = 0.01
+; resonance_avoidance = 0
+; retract_before_wipe = 75%
+; retract_length_toolchange = 2
+; retract_lift_above = 0
+; retract_lift_below = 0
+; retract_lift_enforce = All Surfaces
+; retract_restart_extra = 0
+; retract_restart_extra_toolchange = 0
+; retract_when_changing_layer = 1
+; retraction_distances_when_cut = 18
+; retraction_length = 5
+; retraction_minimum_travel = 1
+; retraction_speed = 40
+; role_based_wipe_speed = 0
+; scan_first_layer = 0
+; scarf_angle_threshold = 155
+; scarf_joint_flow_ratio = 1
+; scarf_joint_speed = 100%
+; scarf_overhang_threshold = 40%
+; seam_gap = 0.3927
+; seam_position = aligned
+; seam_slope_conditional = 1
+; seam_slope_entire_loop = 0
+; seam_slope_inner_walls = 0
+; seam_slope_min_length = 20
+; seam_slope_start_height = 0
+; seam_slope_steps = 10
+; seam_slope_type = all
+; silent_mode = 0
+; single_extruder_multi_material = 1
+; single_extruder_multi_material_priming = 0
+; single_loop_draft_shield = 0
+; skeleton_infill_density = 25%
+; skeleton_infill_line_width = 100%
+; skin_infill_density = 25%
+; skin_infill_depth = 2
+; skin_infill_line_width = 100%
+; skirt_distance = 5
+; skirt_height = 1
+; skirt_loops = 2
+; skirt_speed = 20
+; skirt_start_angle = -135
+; skirt_type = combined
+; slice_closing_radius = 0.05
+; slicing_mode = regular
+; slow_down_for_layer_cooling = 0
+; slow_down_layer_time = 6
+; slow_down_layers = 1
+; slow_down_min_speed = 20
+; slowdown_for_curled_perimeters = 1
+; small_area_infill_flow_compensation = 0
+; small_area_infill_flow_compensation_model =
+; small_perimeter_speed = 100%
+; small_perimeter_threshold = 0
+; solid_infill_direction = 45
+; solid_infill_filament = 1
+; solid_infill_rotate_template =
+; sparse_infill_acceleration = 100%
+; sparse_infill_density = 15%
+; sparse_infill_filament = 1
+; sparse_infill_line_width = 0.64292
+; sparse_infill_pattern = gyroid
+; sparse_infill_rotate_template =
+; sparse_infill_speed = 60
+; spiral_finishing_flow_ratio = 0
+; spiral_mode = 0
+; spiral_mode_max_xy_smoothing = 200%
+; spiral_mode_smooth = 0
+; spiral_starting_flow_ratio = 0
+; staggered_inner_seams = 1
+; standby_temperature_delta = -5
+; start_end_points = 30x-3,54x245
+; supertack_plate_temp = 35
+; supertack_plate_temp_initial_layer = 35
+; support_air_filtration = 1
+; support_angle = 0
+; support_base_pattern = rectilinear
+; support_base_pattern_spacing = 2.5
+; support_bottom_interface_spacing = 0.5
+; support_bottom_z_distance = 0.18
+; support_chamber_temp_control = 1
+; support_critical_regions_only = 0
+; support_expansion = 0
+; support_filament = 0
+; support_interface_bottom_layers = 2
+; support_interface_filament = 0
+; support_interface_loop_pattern = 0
+; support_interface_not_for_body = 1
+; support_interface_pattern = auto
+; support_interface_spacing = 0.5
+; support_interface_speed = 80
+; support_interface_top_layers = 2
+; support_ironing = 0
+; support_ironing_flow = 10%
+; support_ironing_pattern = rectilinear
+; support_ironing_spacing = 0.1
+; support_line_width = 0
+; support_material_interface_fan_speed = 100
+; support_multi_bed_types = 0
+; support_object_first_layer_gap = 0.4
+; support_object_xy_distance = 0.4
+; support_on_build_plate_only = 0
+; support_remove_small_overhang = 1
+; support_speed = 100
+; support_style = default
+; support_threshold_angle = 30
+; support_threshold_overlap = 50%
+; support_top_z_distance = 0.18
+; support_type = normal(auto)
+; symmetric_infill_y_axis = 0
+; temperature_vitrification = 60
+; template_custom_gcode =
+; textured_cool_plate_temp = 40
+; textured_cool_plate_temp_initial_layer = 40
+; textured_plate_temp = 60
+; textured_plate_temp_initial_layer = 55
+; thick_bridges = 0
+; thick_internal_bridges = 1
+; thumbnails = 80x60/PNG
+; thumbnails_format = PNG
+; time_cost = 0
+; time_lapse_gcode =
+; timelapse_type = 0
+; top_bottom_infill_wall_overlap = 25%
+; top_shell_layers = 4
+; top_shell_thickness = 0.8
+; top_solid_infill_flow_ratio = 1
+; top_surface_acceleration = 50
+; top_surface_density = 100%
+; top_surface_jerk = 9
+; top_surface_line_width = 0
+; top_surface_pattern = monotonicline
+; top_surface_speed = 30
+; travel_acceleration = 150
+; travel_jerk = 12
+; travel_slope = 3
+; travel_speed = 100
+; travel_speed_z = 0
+; tree_support_adaptive_layer_height = 1
+; tree_support_angle_slow = 25
+; tree_support_auto_brim = 1
+; tree_support_branch_angle = 45
+; tree_support_branch_angle_organic = 40
+; tree_support_branch_diameter = 5
+; tree_support_branch_diameter_angle = 5
+; tree_support_branch_diameter_organic = 2
+; tree_support_branch_distance = 5
+; tree_support_branch_distance_organic = 1
+; tree_support_brim_width = 3
+; tree_support_tip_diameter = 0.8
+; tree_support_top_rate = 30%
+; tree_support_wall_count = 0
+; upward_compatible_machine =
+; use_firmware_retraction = 0
+; use_relative_e_distances = 0
+; wall_direction = auto
+; wall_distribution_count = 1
+; wall_filament = 1
+; wall_generator = classic
+; wall_loops = 3
+; wall_sequence = inner-outer-inner wall
+; wall_transition_angle = 10
+; wall_transition_filter_deviation = 25%
+; wall_transition_length = 100%
+; wipe = 1
+; wipe_before_external_loop = 0
+; wipe_distance = 2
+; wipe_on_loops = 0
+; wipe_speed = 80%
+; wipe_tower_bridging = 10
+; wipe_tower_cone_angle = 30
+; wipe_tower_extra_flow = 100%
+; wipe_tower_extra_rib_length = 0
+; wipe_tower_extra_spacing = 100%
+; wipe_tower_filament = 0
+; wipe_tower_fillet_wall = 1
+; wipe_tower_max_purge_speed = 90
+; wipe_tower_no_sparse_layers = 0
+; wipe_tower_rib_width = 8
+; wipe_tower_rotation_angle = 0
+; wipe_tower_wall_type = rectangle
+; wipe_tower_x = 165.000
+; wipe_tower_x = 165
+; wipe_tower_y = 250.000
+; wipe_tower_y = 250
+; wiping_volumes_extruders = 70,70,70,70,70,70,70,70,70,70
+; xy_contour_compensation = 0.02146
+; xy_hole_compensation = -0.02146
+; z_hop = 0.2
+; z_hop_types = Slope Lift
+; z_offset = 0
+; first_layer_bed_temperature = 50
+; bed_shape = -75x-75,75x-75,75x75,-75x75
+; first_layer_temperature = 210
+; first_layer_height = 0.200
+; CONFIG_BLOCK_END
+""")
+
+  def _getCmdline(self):
+    return ' '.join(sys.argv)
+
+  def __init__(self,
+      Slicer=OrcaSlicer,
+      **kwargs):
+    assert Slicer in self.SlicerTypes
+    # Slicer gcode flavour to use.
+    self.Slicer = Slicer
+    super().__init__(**kwargs)
+
+  def startFile(self):
+    self.add(self.Header[self.Slicer])
+    super().startFile()
+
+  def endFile(self):
+    super().endFile()
+    self.add(self.Footer[self.Slicer])
+
+
+class GCodeDrawMixin(GCodeGenBase):
+  """ A GCodeGen mixin to add advanced drawing primatives. """
+
+  def preExt(self,x0,y0,x1,y1,le=120.0, lw=60.0, m=10.0, ve=20.0, vw=20, h=0.2, r=4):
+    """Preextrude around a box with margin m.
+
+    This extrudes for `le` mm at speed `ve` mm/s, then wipes for another `lw`
+    mm at speed `vw` mm/s without extruding, and finally if we did a wipe
+    another 10mm at 1mm/s to stick the last bit of wipe ooze to the plate.
+    This should leave the nozzle primed with no residual advance pressure, and
+    prevent the wipe from becoming a big piece of stringing that messes with
+    the print.
+
+    Set `lw=0` to turn off the wipe and stick phases. Note this includes a
+    hopdn before and hopup at the end.
+    """
+    self.cmt('structure:pre-extrude')
+    x0,x1 = sorted([x0,x1])
+    y0,y1 = sorted([y0,y1])
+    x0-=m
+    x1+=m
+    y0-=m
+    y1+=m
+    x, y = x0, y0
+    l, v = le, ve
+    self.hopdn(x=x,y=y,h=h)
+    while l:
+      if self.x == x0 and self.y<y1:
+        dy = min(y1 - self.y, l)
+        self.draw(dy=dy,v=v,r=r)
+        l-=dy
+      elif self.y == y1 and self.x < x1:
+        dx = min(x1 - self.x, l)
+        self.draw(dx=dx,v=v,r=r)
+        l-=dx
+      elif self.x == x1 and self.y > y0:
+        dy = min(self.y - y0, l)
+        self.draw(dy=-dy, v=v, r=r)
+        l-=dy
+      else:
+        dx = min(self.x - x0, l)
+        self.draw(dx=-dx, v=v, r=r)
+        l-=dx
+      if (self.x, self.y) == (x1,y1):
+        # Reached top-right, widen y0,y1
+        y0-=2
+        y1+=2
+      elif (self.x, self.y) == (x1,y0):
+        # reached bottom-right, widen x0,x1
+        x0-=2
+        x1+=2
+      if l == 0 and r > 0:
+        # We have finished extruding, go another lw distance without extruding
+        # to relieve pressure and wipe ooze.
+        l, v, r = lw, vw, 0
+      elif l == 0 and r == 0 and v>1 and lw:
+        # We have finished the wipe, go another 10mm at 1mm/s to stick the
+        # final ooze to the plate.
+        l, v, r = 10,1,0
+    self.hopup()
+
+  def fbox(self,x0,y0,x1,y1,shells=None,**kwargs):
+    """ Fill a box with frame lines. """
+    if shells is None: shells = inf
+    w = kwargs.get('w', self.layer.w)
+    # make sure x0<x1 and y0<y1
+    x0,x1 = sorted((x0,x1))
+    y0,y1 = sorted((y0,y1))
+    x0+=w/2
+    x1-=w/2
+    y0+=w/2
+    y1-=w/2
+    s=0
+    self.hopdn(x0,y0,**kwargs)
+    while x1-x0>2*w and y1-y0>2*w and s<shells:
+      if shells==0:
+        self.cmt('structure:shell-outer')
+      elif s==1:
+        self.cmt('structure:shell-inner')
+      self.draw(x0,y1,**kwargs)
+      self.draw(x1,y1,**kwargs)
+      self.draw(x1,y0,**kwargs)
+      self.draw(x0+w,y0,**kwargs)
+      x0+=w
+      x1-=w
+      y0+=w
+      y1-=w
+      s+=1
+    if y1-y0 > 2*w and s<shells:
+      fw=x1-x0
+      self.move(x=(x0+x1)/2,y=y0+(fw-w)/2)
+      self.draw(y=y1-(fw-w)/2, w=fw)
+    elif s<shells:
+      fw=y1-y0
+      self.move(x=x0+(fw-w)/2,y=(y1+y0)/2)
+      self.draw(x=x1-(fw-w)/2, w=fw)
+    self.hopup()
+
+  def dbox(self,x0,y0,x1,y1,shells=3,**kwargs):
+    """ fill a box with diagonal lines. """
+    w = kwargs.get('w', self.layer.w)
+    x0,x1 = sorted((x0,x1))
+    y0,y1 = sorted((y0,y1))
+    if shells:
+      self.fbox(x0,y0,x1,y1,shells,**kwargs)
+    b=(shells+0.5)*w
+    x0,y0,x1,y1 = getnear(x0+b), getnear(y0+b), getnear(x1-b), getnear(y1-b)
+    self.cmt('structure:infill-solid')
+    dx=w*2**0.5
+    # Diagonal direction depends on odd vs even layers.
+    if self.layer.n % 2:
+      # initialize left and right diagonal ends at top left corner.
+      lx,ly=rx,ry=x0,y1
+      dy = -dx
+    else:
+      # initialize left and right diagonal ends at bottom left corner.
+      lx,ly=rx,ry=x0,y0
+      dy = dx
+    self.hopdn(rx,ry,**kwargs)
+    while lx<x1:
+      if rx<x1:
+        # right diagonal end is following top or bottom edge right.
+        rx+=dx
+        if rx>x1:
+          # hit the right corner, start going along right side.
+          if ry == y0:
+            ry+=(rx-x1)
+          else:
+            ry-=(rx-x1)
+          rx=x1
+      else:
+        # right diagonal end is following right side.
+        ry+=dy
+        ry=clamp(ry, y0, y1)
+      if lx==x0:
+        # left diagonal end is following left side.
+        ly+=dy
+        if ly<y0:
+          # hit the bottom corner, start following bottom.
+          lx+=y0-ly
+          ly=y0
+        elif y1<ly:
+          # hit the top corner, start following top.
+          lx+=ly-y1
+          ly=y1
+      else:
+        # left diagonal end is following the top.
+        lx+=dx
+        if lx>x1: lx=x1
+      #self.log(f'pos={{(x,y)}} l={(lx,ly)} r={(rx,ry)}')
+      if self.y == ry or self.x == rx or (rx - self.x) < (self.x - lx):
+        # starting diagonal from right point.
+        self.draw(x=rx,y=ry,**kwargs)
+        self.draw(x=lx,y=ly,**kwargs)
+      else:
+        # starting diagonal from left point.
+        self.draw(x=lx,y=ly,**kwargs)
+        self.draw(x=rx,y=ry,**kwargs)
+    self.hopup()
+
+  def dot(self, x, y, r=1.0, **kwargs):
+    # Note this doesn't seem to render anything in FlashPrint.
+    self.hopdn(x, y, r=r, **kwargs)
+    # Draw a tiny line so FlashPrint renders something.
+    self.draw(dy=-0.2, r=r, **kwargs)
+    self.hopup()
+
+  def line(self, l, r=1.0, **kwargs):
+    """Draw a line from a sequence of points.
+
+    l is a sequence of tuples or dicts that are the *args or **kwargs passed
+    to dot() (if there is only one point) or hopdn() and each draw().
+    """
+    kwargs |= dict(r=r)
+    p0 = l[0]
+    pargs, pkwargs = (p0,kwargs) if isinstance(p0,tuple) else ((), kwargs|p0)
+    # If there is only one point, draw a dot instead.
+    if len(l) == 1 or (len(l) == 2 and l[0] == l[1]):
+      return self.dot(*pargs,**pkwargs)
+    else:
+      self.hopdn(*pargs,**pkwargs)
+    for pn in l[1:]:
+      pargs, pkwargs = (pn,kwargs) if isinstance(pn,tuple) else ((), kwargs|pn)
+      self.draw(*pargs,**pkwargs)
+    self.hopup()
+
+  def text(self, t, x0, y0, x1=None, y1=None, fsize=5, angle=0, **kwargs):
+    self.cmt('TYPE:Outer wall')
+    self.log(f'text {[(x0,y0),(x1,y1)]} {fsize=} {angle=} {t!r}')
+    w = kwargs.get('w', self.layer.w)
+    v = vtext.ptext(t,x0,y0,x1,y1,fsize,angle,w)
+    for l in v:
+      self.line(l,**kwargs)
+
+  def lfw2r(self, lfw=1.0, h=None, w=None):
+    """ Calculate r for a given lfw overlap factor."""
+    if h is None: h = self.hl
+    if w is None: w = self.wl
+    l = w - h*(1-lfw)*(1-pi/4)
+    return l / w
+
+  def r2lfw(self, r=1.0, h=None, w=None):
+    """ Calculate r for a given lfw overlap factor."""
+    if h is None: h = self.hl
+    if w is None: w = self.wl
+    return 1 - w*(1-r)/(h*(1-pi/4))
+
+  def getVlVehwr(self, vl=None, ve=None, h=None, w=None, r=1.0):
+    """ Get vl, ve, h, w, and r from each other. """
+    if vl and ve is not None:
+      if h is None: h = self.hl if None in (w,r) else ve*self.Fa/(vl*w*r)
+      if w is None: w = self.wl if None in (h,r) else ve*self.Fa/(vl*h*r)
+      if r is None: r = ve*self.Fa/(vl*h*w)
+    # Set h,w to defaults because we don't have enough to derive them.
+    else:
+      assert r is not None, 'require r if without ve and vl'
+      if h is None: h = self.hl
+      if w is None: w = self.wl
+    # Derive vl from ve.
+    if vl is None:
+      assert ve is not None, 'should have ve if without vl'
+      assert r, 'require r!=0 to derive vl from ve'
+      vl = ve*self.Fa/(h*w*r)
+    # Derive ve from vl.
+    if ve is None:
+      assert vl is not None, 'should have vl if without ve'
+      ve = vl*h*w*r/self.Fa
+    assert isneareq(ve*self.Fa, vl*h*w*r), 'specified contradictory vl,ve,h,w,r'
+    return vl,ve,h,w,r
+
+  def getLineArgs(self, dl=None, de=None, dt=None, vl=None, ve=None, h=None, w=None, r=1.0):
+    """ Get dl, de, dt, vl, ve, h, w, and r from each other. """
+    # Use default layer vl if there is not enough to derive it.
+    if (vl,ve) == (None,None) and None in (dl,dt) and None in (de,dt):
+      vl = self.layer.Vp if r else self.layer.Vt
+    # Derive vl,dl, and dt from each other.
+    if None not in (dl,dt):
+      assert vl is None, "cannot specify vl with dl and dt"
+      vl = dl/dt if dl else 0.0
+    elif None not in (vl,dt):
+      assert dl is None, "cannot specify dl with vl and dt"
+      dl = vl*dt
+    elif None not in (vl,dl):
+      assert dt is None, " cannot specify dt with vl and dl"
+      dt = dl/vl if dl else 0.0
+    # Derive ve, de, and dt from each other.
+    if None not in (de,dt):
+      assert ve is None, "cannot specify ve with de and dt"
+      ve = de/dt if de else 0.0
+    elif None not in (ve,dt):
+      assert de is None, "cannot specify de with ve and dt"
+      de = ve*dt
+    elif None not in (ve,de):
+      assert dt is None, "cannot specify dt with ve and de"
+      dt = de/ve if de else 0.0
+      # Also set derived vl and dl from dt.
+      if vl is None and dl is not None:
+        vl = dl/dt
+      elif dl is None and vl is not None:
+        dl = vl*dt
+    # Derive vl,ve,h,w,r from each other.
+    vl, ve, h, w, r = self.getVlVehwr(vl, ve, h, w, r)
+    # Set dt from dl/vl or de/ve if we still don't have it.
+    if dt is None:
+      if vl and dl is not None:
+        dt=dl/vl
+      elif ve and de is not None:
+        dt=de/ve
+    # Set dl and de from dt if we still don't have them.
+    if dt is not None:
+      if dl is None:
+        dl = vl*dt
+      if de is None:
+        de = ve*dt
+    assert (dl,de,dt) == (None, None, None) or abs(de*self.Fa - dl*h*w*r) < 0.0001
+    return dl,de,dt,vl,ve,h,w,r
+
+  def rc2xy(self, R=None, C=None, dR=None, dC=None, x0=0.0, y0=0.0):
+    """Get x,y from R,C or dR,dC.
+
+    Note R and C default to the current R,C position with optional dR,dC offsets.
+    """
+    if dR is None: dR = 0.0
+    if dC is None: dC = 0.0
+    if R is None: R = dist((x0, y0), (self.x, self.y)) + dR
+    if C is None: C = atan2(self.y-y0, self.x-x0)/(2*pi) + dC
+    a = C*2*pi
+    return x0 + R*cos(a), y0 + R*sin(a)
+
+  def xy2rc(self, x=None, y=None, dx=None, dy=None, x0=0.0, y0=0.0):
+    """Get R,C from x,y or dx, dy.
+
+    Note x and y default to the current x,y position with optional dx,dy offsets.
+    """
+    if dx is None: dx = 0.0
+    if dy is None: dy = 0.0
+    if x is None: x = self.x + dx
+    if y is None: y = self.y + dy
+    return dist((x0, y0), (x, y)), atan2(y-y0, x-x0)/(2*pi)
+
+  def drawrc(self, R=None, C=None, dR=None, dC=None, x0=0.0, y0=0.0, **kwargs):
+    """ Draw a straight line to an RC point. """
+    x,y=self.rc2xy(R,C,dR,dC,x0,y0)
+    self.draw(x=x,y=y,**kwargs)
+
+  def hopdnrc(self, R=None, C=None, dR=None, dC=None, x0=0.0, y0=0.0, **kwargs):
+    x, y = self.rc2xy(R, C, dR, dC, x0, y0)
+    self.hopdn(x=x,y=y,**kwargs)
+
+  def spiral(self, R=None, C=None, dR=None, dC=None, dRdC=None, x0=0.0, y0=0.0,
+      dl=None, de=None, dt=None, vl=None, ve=None, h=None, w=None, r=1.0):
+    """ Draw a spiral around x0,y0.
+
+    This draws a spiral from the current R0,C0 position to a position R,C. The
+    position R,C can be specified using any sufficient combination of
+    R,C,dR,dC,dRdC,dl.
+    """
+    R0,C0 = self.xy2rc(x0=x0,y0=y0)
+    R1,C1 = R,C
+    if R1 is not None: dR = R1 - R0
+    if C1 is not None: dC = C1 - C0
+    if dR is None and None not in (dC, dRdC): dR = dC*dRdC
+    if dC is None and dR is not None and dRdC: dC = dR/dRdC
+    if dR is not None and dC is not None: dRdC = dR/dC
+    # Get dl from dR and dC if provided.
+    if None not in (dR,dC):
+      assert dl is None, 'cannot specify dl with dR,dC'
+      dl = dC*pi*(2*R0 + dR)
+    dl, de, dt, vl, ve, h, w, r = self.getLineArgs(dl,de,dt,vl,ve,h,w,r)
+    # Get dC from dl.
+    if dC is None:
+      assert dl is not None, 'need to specify enough for dl without dC'
+      assert dRdC is not None, 'need to specify dRdC with dl'
+      # Solve dRdC*dC^2 + 2*R0*dC - dl/pi = 0 and take the absolute-smallest result.
+      dC = absmin(*solvequad(a=dRdC, b=2*R0, c=-dl/pi))
+    if dR is None: dR = dC*dRdC
+    self.log(f'spiral RC0=({R0:.1f},{C0:.3f}) dRC=({dR:.1f},{dC:.3f}) {dl=:.1f}@{vl:.0f} {de=:.3f}@{ve:.1f} l={h:.2f}x{w:.2f}x{r:.2f}')
+    R, C, C1, dC = R0, C0, C0+dC, copysign(1/72, dC)
+    while (C < C1 if dC > 0 else C > C1):
+      dC = absmin(dC, C1 - C)
+      C += dC
+      R += dC*dRdC
+      self.drawrc(R, C, x0=x0, y0=y0, v=vl, w=w, r=r)
+
+
+class GCodeGen(GCodeDrawMixin, GCodeCmtMixin, GCodeGenBase):
+  """ GCodeGen gcode generator.
+
+  There are many helper methods that generate and add() commands to do various
+  different things. These include;
+
+  * startFile()/endFile(): add gcode initialization/finalization cmds.
+  * startLayer()/endLayer(): add layer initialization/finalization cmds.
+  * nextLayer(): shorthand for ending the previous layer and starting a new one.
+  * cmd(): add an arbitrary gcode command.
+  * cmt(): add a gcode comment line.
+  * log(): add a gcode comment log line, depending on self.verb setting.
+  * draw(), move(), retract(), restore(), hopup(), hopdn(): add move cmds
+    for basic actions.
+  * preExt(), fbox(), dbox(), dot(), line(), text(): add multiple move
+    commands for complex output.
+
+  Attributes:
+    <See GCodeGenBase for inherited attributes>
+    fKf: Firmware Linear Advance factor (0.0->4.0 mm/mm/s).
+    Kf: Linear Advance factor (0.0->4.0 mm/mm/s).
+    Kb: Bead backpressure factor (??? mm/mm).
+    relext: relative extrusion enabled.
+    dynret: linear advance dynamic retraction enabled.
+    dynext: linear advance dynamic extrusion enabled.
+    optmov: path optimizing enabled.
+    pe: current extruder pressure or retraction.
+    pn: current nozzle pressure (property).
+    pb: current bead backpressure (property).
+    eb: current extruded bead volume.
+    db: current extruded bead diameter (property).
+    vn: current nozzle flow velocity (property).
+    ve: current extruder velocity.
+    vl: current line velocity.
+    dt: the execution time of the last command.
+    dl: the line length of the last command.
+    de: the extruder change of the last command.
+    en: the extruded volume of the last command.
+    db0: the bead diameter at the start of the last move.
+    eb0: the bead volume at the start of the last move.
+    r0,rm,r1: the extrusion ratios of the last move (property)
+    w: current default line width (property).
+    r: current default extrusion ratio (property).
+  """
+
+  def __init__(self,
+      fKf=0.0, Kf=0.0, Kb=0.0,
+      relext=False, optmov=False, segvel=False, fixvel=0,
+      diff=False, verb=False,
+      dynret=False, dynext=False, **kwargs):
+    # Linear advance and retraction settings.
+    self.fKf, self.Kf, self.Kb = fKf, Kf, Kb
+    # Processing mode options.
+    self.relext, self.optmov, self.segvel, self.fixvel = relext, optmov, segvel, fixvel
+    # Logging mode options.
+    self.diff, self.verb = diff, verb
+    # Pressure advance mode options.
+    self.dynret, self.dynext = dynret, dynext
+    super().__init__(**kwargs)
+
+  def Pb(self, db):
+    """Get the bead backpressure from db."""
+    return max(0.0, self.Kb*min(db,2*self.Nd))
+
+  def Pn(self, vn):
+    """Get the nozzle pressure from nozzle extrude velocity."""
+    return max(0.0, self.Kf*vn)
+
+  def Pe(self, vn, db):
+    """ Get pressure advance pe for target vn and db. """
+    return self.Pn(vn) + self.Pb(db)
+
+  @property
+  def pn(self):
+    """ The current nozzle pressure."""
+    # Get nozzle pressure from pe minus pb.
+    return max(0.0, self.pe - self.pb)
+
+  @property
+  def pb(self):
+    """ The current bead backpressure."""
+    return self.Pb(self.db)
+
+  @property
+  def db(self):
+    """ Get the current bead diameter from the bead volume."""
+    return self.GMove._db(self.eb, self.hl)
+
+  @property
+  def vn(self):
+    """Get nozzle flow velocity from the nozzle pressure and back pressure."""
+    return self.pn/self.Kf if self.Kf else self.ve if self.pe>=self.pb else 0.0
+
+  @property
+  def rn(self):
+    """ The nozzle extrusion ratio for the last move."""
+    assert isneareq(self.en, self.en0+self.enm+self.en1), f'{self.en=} {self.en0=} {self.enm=} {self.en1=}'
+    assert isneareq(self.m.el, self.m.el0+self.m.elm+self.m.el1), f'{self.m.el=} {self.m.el0=} {self.m.elm=} {self.m.el1=}'
+    return self.en/self.m.el if self.m else 0.0
+
+  @property
+  def rn0(self):
+    """ The nozzle extrusion ratio for the accel phase of the last move."""
+    return self.en0/self.m.el0 if self.m and self.m.el0 else self.rnm
+
+  @property
+  def rnm(self):
+    """ The nozzle extrusion ratio for the mid phase of the last move."""
+    return self.enm/self.m.elm if self.m and self.m.elm else 0.0
+
+  @property
+  def rn1(self):
+    """ The nozzle extrusion ratio for the decel phase of the last move."""
+    return self.en1/self.m.el1 if self.m and self.m.el1 else self.rnm
+
+  @property
+  def hl(self):
+    """ Get the current line height."""
+    return self.m.h if self.m else self.layer.h
+
+  @property
+  def wl(self):
+    """ Get the current line width."""
+    return self.m.w if self.m else self.layer.w
+
+  @property
+  def rl(self):
+    """ Get the current line extrusion ratio."""
+    return self.m.r if self.m else self.layer.r
+
+  @property
+  def hd(self):
+    """ Get the last draw line height."""
+    return self.d.h if self.d else self.layer.h
+
+  @property
+  def wd(self):
+    """ Get the last draw line width."""
+    return self.d.w if self.d else self.layer.w
+
+  @property
+  def rd(self):
+    """ Get the last draw line extrusion ratio."""
+    return self.d.r if self.d else self.layer.r
+
   def resetfile(self, nextcmds=None, finalize=False):
     """ Reset all file state variables.
 
     This gets ready to process or finalize a queue of nextcmds or new commands.
     """
-    # Zero all positions so the first move's deltas are actually absolute.
-    self.x, self.y, self.z, self.e, self.f = 0.0, 0.0, 0.0, 0.0, 0
-    self.f_t = self.f_l = self.f_e  = 0.0
-    self.pe = self.eb = self.vl = self.ve = self.h = 0.0
-    self.prevcmds, self.nextcmds, self.finalize = deque(), nextcmds, finalize
-    self.resetlayer()
+    super().resetfile(nextcmds, finalize)
+    self.eb = self.vl = self.ve = 0.0
+    self.resetstats()
+
+  def resetstats(self):
+    self.stats = PrintStats()
 
   def resetlayer(self):
     """ Reset all layer state variables. """
-    # Set layer to a default base layer for any layer-less moves.
-    self.layer = Layer(
-        -1, 0.0, self.Vp, self.Vt, self.Vz, self.Ve, self.Vb, self.Lh, self.Lw, self.Lr)
-    self.l_t = self.l_l = self.l_e = 0.0
-    self.c = self.m = self.d = None
+    super().resetlayer()
     self.resetstate()
 
   def resetstate(self):
     """ Reset all move state variables. """
-    self.dt = self.de = self.dl = self.en = 0.0
+    self.dt = self.dl = self.de = self.en = 0.0
 
-  def iterstate(self, dt, de, dl, dv, dh):
+  def iterstate(self, dt, dl, de, dh, dvl, dve):
     """ Increment the state for a small dt interval. """
     # Note filament doesn't get sucked back into the nozzle if the pressure
     # advance is negative, and the bead cannot give negative backpressure.
     # Get filament extruded into the nozzle and height.
-    pe, eb, db, h = self.pe, self.eb, self.db, self.h
-    pe += de
-    pb = max(0, self.Kb * db)                 # bead backpressure.
-    pn = max(0, pe - pb)                      # nozzle pressure.
-    en = pn * dt/(self.Kf + dt)               # filament extruded out the nozzle.
-    el = min(db * h * dl / self.Fa, eb + en)  # fillament removed from bead to line,
-    self.pe = pe - en
-    self.eb = max(0.0, eb + en - el)
+    self.pe += de
+    en = self.pn * dt/(self.Kf + dt)          # filament extruded out the nozzle.
+    el = min(self.GMove._el(dl, self.hl, self.db), self.eb + en)  # fillament removed from bead to line,
+    self.pe -= en
+    self.eb = max(0.0, self.eb + en - el)  # Need to make sure float errors don't make this negative.
     self.dt += dt
+    self.dl += dl
     self.de += de
     self.en += en
-    self.dl += dl
-    self.vl += dv
+    self.vl += dvl
+    self.ve += dve
     self.h += dh
+    self.stats.addinc(self.m, dt, dl, dh, de, en)
 
-  def incstate(self, dt, de=0.0, dl=0.0, dv=0.0, dh=0.0):
-    """ Increment the state for a large dt interval. """
+  def incstate(self, dt, dl=0.0, de=0.0, dh=0.0, dvl=0.0, dve=0.0):
+    """ Increment the state for a large dt interval and return en. """
     # Keep the expected final state to check against and use later.
-    dt1, de1, dl1, vl1, h1 = self.dt+dt, self.de+de, self.dl+dl, self.vl+dv, self.h+dh
-    t, idt = dt, 0.001
-    if dl:
-      # integrate a horizontal move.
-      al, de_dl, dh_dl = dv/dt, de/dl, dh/dl
+    dt1, dl1, de1, h1, vl1, ve1 = self.dt+dt, self.dl+dl, self.de+de, self.h+dh, self.vl+dvl, self.ve+dve
+    # Only do a fine-grained simulation when finalizing.
+    en0, t, idt = self.en, dt, 0.001
+    if dl or de:
+      # integrate a horizontal or extruding move.
+      al, ae, dh_dle = dvl/dt, dve/dt, dh/dl if dl else dh/de
       while t > 0.0:
         idt = min(idt, t)
-        idv = al * idt
-        idl = (self.vl + idv/2) * idt  # Do trapezoidal integration for dl.
-        ide = idl * de_dl
-        idh = idl * dh_dl
-        self.iterstate(idt, ide, idl, idv, idh)
+        idvl = al * idt
+        idve = ae * idt
+        idl = (self.vl + idvl/2) * idt  # Do trapezoidal integration for dl.
+        ide = (self.ve + idve/2) * idt  # Do trapezoidal integration for de.
+        idh = idl * dh_dle if dl else ide * dh_dle
+        self.iterstate(idt, idl, ide, idh, idvl, idve)
         t -= idt
     else:
-      # integrate a non-horizontal change.
-      ve, vz = de/dt, dh/dt
+      # integrate a vertical move.
+      vz = dh/dt
       while t > 0.0:
         idt = min(idt, t)
-        ide = ve * idt
         idh = vz * idt
-        self.iterstate(idt, ide, 0.0, 0.0, idh)
+        self.iterstate(idt, 0.0, 0.0, idh, 0.0, 0.0)
         t -= idt
-    assert isneareq(self.dt, dt1)
-    assert isneareq(self.de, de1)
-    assert isneareq(self.dl, dl1)
-    assert isneareq(self.vl, vl1)
-    assert isneareq(self.h, h1)
+    assert isneareq(self.dt, dt1), f'{self.dt=} {dt1=}'
+    assert isneareq(self.dl, dl1), f'{self.dl=} {dl1=}'
+    assert isneareq(self.de, de1), f'{self.de=} {de1=}'
+    assert isneareq(self.h, h1), f'{self.h=} {h1=}'
+    assert isneareq(self.vl, vl1), f'{self.vl=} {vl1=}'
+    assert isneareq(self.ve, ve1), f'{self.ve=} {ve1=}'
     # Use the expected final states to remove small integration errors.
-    self.dt, self.de, self.dl, self.vl, self.h = dt1, de1, dl1, vl1, h1
+    self.dt, self.dl, self.de, self.h, self.vl, self.ve = dt1, dl1, de1, h1, vl1, ve1
+    return self.en - en0
 
   def inc(self, code):
     if self.islayer(code):
@@ -1076,7 +2513,8 @@ M18
       self.incmove(code)
     elif self.iscmd(code):
       self.inccmd(code)
-    self.c = code
+    if not (self.isstr(code) or self.isbin(code)):
+      self.c = code
 
   def inct(self, dt):
     """ Increment time. """
@@ -1086,42 +2524,55 @@ M18
 
   def inclayer(self, l):
     """ Increment state for starting a Layer. """
+    # reset stats before layer 1 to exlude pre-extrudes.
+    if self.layer.n < 1:
+      self.resetstats()
     self.resetlayer()
     self.layer = l
     self.h = getnear(self.z - l.z)
+    assert self.h >= 0.0, f'{self.h=} {self.z=} {l=}'
 
   def incmove(self, m):
     """ Increment state for executing a Move. """
+    # Check that the start states are as expected.
     assert isneareq(self.h, self.z - self.layer.z), f'{self.h=} != {self.z - self.layer.z}'
     assert isneareq(self.vl, m.v0), f'{self.vl=} != {m.v0=} for {m} at {ftime(self.f_t)}'
+    assert isnearle(abs(self.ve - m.ve0), self.GMove.Je), f'{self.ve=} {m.ve0=} {self.m!s} -> {m!s}'
     self.resetstate()
-    # Save the expected final h to assert against later.
-    h1 = self.h + m.dz
-    # Update the state for the three move phases.
-    if m.dt0: self.incstate(m.dt0, m.de0, m.dl0, m.dv0, m.dh0)
-    if m.dtm: self.incstate(m.dtm, m.dem, m.dlm, m.dvm, m.dhm)
-    if m.dt1: self.incstate(m.dt1, m.de1, m.dl1, m.dv1, m.dh1)
-    # Check that the end states are as expected.
-    assert isneareq(self.dt, m.dt)
-    assert isneareq(self.de, m.de)
-    assert isneareq(self.dl, m.dl)
-    assert isneareq(self.vl, m.v1)
-    assert isneareq(self.h, h1)
+    # Update starting state vars and the current move.
+    self.db0, self.eb0, self.m = self.db, self.eb, m
+    # Only run the detailed simulation when finalizing the output.
+    if self.finalize:
+      # Save the expected final h to assert against later.
+      h1 = self.h + m.dz
+      # "jerk" ve from the previous ve1 to ve0.
+      self.ve = m.ve0
+      # Update the state for the three move phases.
+      self.en0 = self.incstate(m.dt0, m.dl0, m.de0, m.dz0, m.dv0, m.dve0) if m.dt0 else 0.0
+      self.enm = self.incstate(m.dtm, m.dlm, m.dem, m.dzm, m.dvm, m.dvem) if m.dtm else 0.0
+      self.en1 = self.incstate(m.dt1, m.dl1, m.de1, m.dz1, m.dv1, m.dve1) if m.dt1 else 0.0
+      self.stats.addcmd(m, self.en)
+      # Check that the end states are as expected.
+      assert isneareq(self.dt, m.dt)
+      assert isneareq(self.dl, m.dl)
+      assert isneareq(self.de, m.de)
+      assert isneareq(self.vl, m.v1)
+      assert isneareq(self.ve, m.ve1)
+      assert isneareq(self.h, h1)
     # Update and round positions to remove floating point errors.
     self.x = getnear(self.x+m.dx)
     self.y = getnear(self.y+m.dy)
     self.z = getnear(self.z+m.dz)
     self.e = getnear(self.e+m.de)
     self.f = m.f
-    self.f_l += m.dl if self.en else 0.0
+    self.f_l += m.dl
     self.f_e += self.en
-    self.l_l += m.dl if self.en else 0.0
+    self.l_l += m.dl
     self.l_e += self.en
     self.vl = m.v1
     self.ve = m.ve1
     self.h = getnear(self.z - self.layer.z)
-    self.m = m
-    if m.isdraw: self.d = m
+    if m.r > 0 : self.d = m
     self.inct(m.dt)
 
   def inccmd(self, cmd):
@@ -1157,8 +2608,14 @@ M18
 
   def flayer(self, l):
     """ Format a layer as a comment string. """
-    # layer 0 is the preExtrude
-    return self.fcmt('{"layer" if layer.n else "preExtrude"}:{layer.h:.2f}')
+    if self.Slicer == self.FlashPrint:
+      # layer 0 is the preExtrude
+      return self.fcmt('{"layer" if layer.n else "preExtrude"}:{layer.h:.2f}')
+    else:
+      return '\n'.join([
+      self.fcmt('LAYER_CHANGE'),
+      self.fcmt('Z:{f3(layer.z+layer.h)}'),
+      self.fcmt('HEIGHT:{f3(layer.h)}')])
 
   def fmove(self, m):
     """ Format a Move as a gcode command. """
@@ -1174,19 +2631,44 @@ M18
     cmd = self.fcmd('G1', X=x, Y=y, Z=z, E=e, F=f)
     if self.verb:
       # Add additional command comment suffix.
-      cmd = f'{cmd:40s}; {{m}} r={{en/m.el if m.el else db/m.w:.2f}}'
+      cmd = f'{cmd:40s}; {{dt=:.3f}} {{m}} {{rn=:.2f}}({{rn0:.2f}}<{{rnm:.2f}}>{{rn1:.2f}})'
     return cmd
 
+  def _farg_FlashPrint(self, k, v):
+    # This formats always with the number of digits for the desired precision.
+    # Number of decimals for cmd arguments.
+    argfmt = dict(X='.2f',Y='.2f',Z='.3f',E='.4f',F='d').get(k,'')
+    return k + (v if isinstance(v, str) else f'{v:{argfmt}}')
+
+  def _farg_OrcaSlicer(self, k, v):
+    # This formats using the least digits necessary for the desired precision.
+    argres = dict(X=3,Y=3,Z=3,E=5,F=0).get(k,6)
+    return k + (v if isinstance(v, str) else fzp(v, argres))
+
+  def farg(self, k, v):
+    # This replaces itself with the right formatter after first use.
+    if self.Slicer == 'FlashPrint':
+      self.farg=self._farg_FlashPrint
+    else:
+      self.farg=self._farg_OrcaSlicer
+    return self.farg(k,v)
+
   def fcmd(self, cmd, **kwargs):
-    """ Format a gcode command. """
-    fmts = dict(X='.2f',Y='.2f',Z='.3f',E='.4f',F='d')
-    args = ' '.join(f'{k}{v:{fmts.get(k,"")}}' for k,v in kwargs.items() if v is not None)
+    """ Format a gcode command.
+
+    Args set to None like X=None are omitted. Args set to a string value like
+    X='100' use the string value without any re-formating like "X100". Args
+    set to an empty string like A='' will give the arg without a value like
+    "A". Numeric value arguments will generally be formatted with decimal
+    places appropriate for their required precision.
+    """
+    args = ' '.join(self.farg(k,v) for k,v in kwargs.items() if v is not None)
     return f'{cmd} {args}' if args else cmd
 
   def fstr(self, str):
     """ Format a string as an f-string with attributes of self."""
     try:
-      return fstr(str, locals=attrs(self))
+      return fstr(str, locals=self)
     except Exception as e:
       raise Exception(f'Error formatting {str!r}.') from e
 
@@ -1201,42 +2683,67 @@ M18
       if self.diff:
         return self.fcmt('{dt:.3f}: ' + txt)
       else:
-        return self.fcmt('{ftime(f_t)}: ' + txt)
+        return self.fcmt('{ftime(f_t)} {f_l:.1f}mm: ' + txt)
 
   def faddmove(self, m):
     """ Do a final format and add of a Move. """
-    if m.isretract and self.dynret:
+    if self.dynret and m.isretract:
       # Adjust retraction to Re and also relieve advance pressure.
-      #self.log(f'adjusting {m} for {pe=:.4f}')
       m = m.change(de=-self.Re - self.pe)
+      # self.log(f'adjusted {m0} -> {m}')
       # If de is zero, skip adding this.
       if not m.de:
         self.log('skipping empty retract.')
         return
-    elif m.isrestore and self.dynret:
+    elif self.dynret and m.isrestore:
       # Get the pe and eb for the next draws.
       pe, eb = self._getNextPeEb()
       # Adjust existing restore and add the starting bead.
-      # self.log(f'adjusting {c} for {pe=:.4f} {eb=:.4f}')
-      # Lets also try P control with Kp=0.8 for restores.
-      m = m.change(de=0.8*pe - self.pe + eb)
+      m = m.change(de=pe - self.pe + eb)
+      # self.log(f'adjusted {m0} -> {m}')
       # If de is zero, skip adding this.
       if not m.de:
         self.log('skipping empty restore.')
         return
-    elif m.isdraw and self.dynext:
-      # For calculating the pressure pe needed, use the ending ve1.
-      pe = self._calc_pe(m.ve1, m.db)
-      # Adjust de to include required change in pe over the move.
-      # self.log(f'adjusting {c} {c.ve=:.4f}({c.ve0:.4f}<{c.vem:.4f}>{c.ve1:.4f}) {c.isaccel=}')
-      # TODO: This tends to oscillate, change to a PID or PD controller.
-      # Lets try the P control first with Kp=0.8 to try and reduce the overshoot.
-      m = m.change(de=m.de + 0.8*(pe - self.pe))
+    elif self.dynext and self.layer.n and not m.isadjust and (m.r>0 or self.pe > 0.0):
+      # Skip adjusting pressures for preextrudes before layer 1.
+      # Adjust extrusion for any non-adjusts that draw or are non-retracted.
+      # Get the ve and db before and after this move.
+      ve0 = self.ve
+      ve1 = next((m1.ve0 for m1 in self.nextcmds if self.ismove(m1)), 0.0)
+      # Get the pe and eb for the next moves.
+      pe, eb = self._getNextPeEb(m)
+      # Get the pressure adjustment required, scaled by P=0.8.
+      # TODO: Maybe use a PID or PD controller instead.
+      dpe = 0.8*(pe + eb - (self.pe + self.eb))
+      # Only adjust the move if the change required is large enough.
+      if abs(dpe) > 0.01:
+        # Calculate the adjusted m.de from the average ve to accumulate the
+        # required pressure change over the next max(m.La/2, m.dl).
+        de = m.de + dpe*m.dl/max(m.La/2, m.dl)
+        Je = 0.8*m.Je
+        if m.v0 > 0.0:
+          # Constrain de within jerk limits of previous move's final ve.
+          mve0 = de/m.dl*m.v0
+          mve0 = clamp(mve0, ve0-Je, ve0+Je)
+          de = mve0*m.dl/m.v0
+        if m.v1 > 0.0:
+          # Constrain de within jerk limits to next move's initial ve.
+          mve1 = de/m.dl*m.v1
+          mve1 = clamp(mve1, ve1 - Je, ve1 + Je)
+          de = mve1*m.dl/m.v1
+        m0,m = m, m.change(de=de)
+        assert abs(m.ve0) <= m.Ve
+        assert abs(m.vem) <= m.Ve
+        assert abs(m.ve1) <= m.Ve
+        assert abs(m.ve0 - ve0) <= m.Je, f'{m.ve0=} {ve0=} {m.ve0-ve0=} {m}'
+        assert abs(m.ve1 - ve1) <= m.Je, f'{m.ve1=} {ve1=} {m.ve1-ve1=} {m}'
+        #self.log(f'adjusted for target {pe=:.4f} {m0} -> {m}')
     if self.e + m.de > 1000.0:
       # Reset the E offset before it goes over 1000.0
       self.cmd('G92', E=0)
     fmove = self.fmove(m)
-    self.inc(m)
+    self.incmove(m)
     self.add(fmove)
     self.log('{pe=:.4f} {eb=:.4f} {ve=:.4f} {vn=:.4f} {vl=:.3f} {db=:.2f}')
 
@@ -1252,7 +2759,7 @@ M18
       self.add(fcode)
 
   def add(self, code):
-    """ Add code Layer, Move, Wait, or format-string instances. """
+    """ Add any kind of command code. """
     if not code:
       # Skip empty commands.
       return
@@ -1271,7 +2778,14 @@ M18
     """ Add a gcode command as a tuple. """
     # Strip out None arguments.
     kwargs = {k:v for k,v in kwargs.items() if v is not None}
-    self.add((cmd, kwargs))
+    # convert G0 and G1 cmds into moves.
+    if cmd in ('G0', 'G1'):
+      # Use the previous f value and machine limits when inserting raw move cmds.
+      kwargs['v'] = min(kwargs.pop('F', self.f)/60, self.GMove.Vp)
+      kwargs = {k.lower():v for k,v in kwargs.items()}
+      self.move(**kwargs)
+    else:
+      self.add((cmd, kwargs))
 
   def cmt(self, cmt):
     """ Add a comment. """
@@ -1282,23 +2796,11 @@ M18
     #print(self.fstr(txt))
     self.add(self.flog(txt))
 
-  def startFile(self):
-    self.add(self.fstr(self.startcode))
-    # Note Flashprint always generates and assumes pre-extrude has h=0.2mm.
-    self.startLayer(0, h=0.2)
-
-  def endFile(self):
-    # Retract to -2.5mm for the next print.
-    self.hopup(pe=-2.5)
-    self.endLayer()
-    self.filestats()
-    self.add(self.fstr(self.endcode))
-
   def startLayer(self, n=None, z=None,
       Vp=None, Vt=None, Vz=None, Ve=None, Vb=None,
       h=None, w=None, r=1.0):
     if n is None: n = self.layer.n + 1
-    if z is None: z = self.layer.z + self.layer.h if n > 1 else 0.0
+    if z is None: z = getnear(self.layer.z + self.layer.h) if n > 1 else 0.0
     l = Layer(
         n, z,
         Vp or self.Vp,
@@ -1309,17 +2811,18 @@ M18
         h or self.Lh,
         w or self.Lw,
         r*self.Lr)
+    hz = l.z + l.h
+    if self.z < hz:
+      self.hopup(z=hz, de=0)
     self.add(l)
-    self.log('layer={layer.n} h={layer.h:.2f} w={layer.w:.2f} r={layer.r:.2f}')
-    if not isneareq(l.r, self.Lr, 2):
-      self.cmt(f'extrude_ratio:{round(layer.r, 2):.3g}')
+    self.log('layer={layer.n} z={layer.z:.2f} h={layer.h:.2f} w={layer.w:.2f} r={layer.r:.2f}')
 
   def endLayer(self):
     self.layerstats()
 
-  def nextLayer(self, **largs):
+  def nextLayer(self, *args, **kwargs):
     self.endLayer()
-    self.startLayer(**largs)
+    self.startLayer(*args, **kwargs)
 
   def move(self,
       x=None, y=None, z=None, e=None,
@@ -1346,11 +2849,11 @@ M18
     dz = z - self.z if z is not None else dz if dz is not None else 0.0
     dl = sqrt(dx**2 + dy**2)
     # Note: setting h and z or dz means explicit h overrides z height for de calcs.
-    if h is None: h = self.z + dz - self.layer.z
-    if w is None: w = self.w
+    if h is None: h = getnear(self.h + dz, 3)
+    if w is None: w = self.wl
+    # r is scaled by layer.r so changing layer.r scales all draws.
     r = self.layer.r * r
-    el = dl * w * h / self.Fa  # line filament volume not including extrusion ratio.
-    de = e - self.e if e is not None else de if de is not None else r * el
+    de = e - self.e if e is not None else de if de is not None else self.GMove._el(dl,h,w*r)
     if v is None:
       if de:
         v = s * (self.layer.Vp if dl else self.layer.Ve if de < 0 else self.layer.Vb)
@@ -1362,23 +2865,28 @@ M18
     m = self.GMove(dx,dy,dz,de,v,h=h,w=w)
     # Only add it if it does anything.
     if any(m[:4]):
-      #if m.isdraw and not isneareq(m.r, self.r, 2):
-      #  self.cmt(f'extrude_ratio:{round(m.r, 2):.3g} {m.r=} {self.r=}')
+      if self.Slicer == self.FlashPrint and m.r > 0 and not isneareq(m.r, self.rd, 2):
+        self.cmt(f'extrude_ratio:{f2(m.r)}')
+      if self.Slicer != self.FlashPrint and m.r > 0 and not isneareq(m.w, self.wd):
+        self.cmt(f'WIDTH:{getnear(m.w+self.layer.h*(1-pi/4))}')
       self.add(m)
     else:
-      self.log(f'skipping empty move {m}')
+      self.log(f'skipping empty move {m!r}')
 
-  def draw(self, x=None, y=None, z=None, r=None, **kwargs):
+  def draw(self, x=None, y=None, z=None, h=None, w=None, r=None, **kwargs):
     """ Draw a line.
 
     This is the same as move() but with the default previous draw or layer r
     value so it draws instead of travels by default.
     """
-    # We need r before scaling by layer.r
-    if r is None: r = self.r / self.layer.r
-    self.move(x, y, z, r=r, **kwargs)
+    # For defaults use last move's h,w,r if it was a draw, else use layer's.
+    if h is None: h = self.hl if self.rl>0 else self.layer.h
+    if w is None: w = self.wl if self.rl>0 else self.layer.w
+    # Note we need r defaults before scaling by layer.r.
+    if r is None: r = (self.rl if self.rl>0 else 1.0)/self.layer.r
+    self.move(x, y, z, h=h, w=w, r=r, **kwargs)
 
-  def retract(self, e=None, de=None, ve=None, s=1.0, pe=None):
+  def retract(self, e=None, de=None, ve=None, s=1.0):
     """Do a retract.
 
     This is a retraction that by default relieves any pressure and retracts to
@@ -1386,83 +2894,98 @@ M18
     ignoring the current pressure. Note compensation for advance pressure is
     adjusted in post processing if enabled.
     """
-    if pe is None: pe = -self.Re
-    if de is None: de = -self.pe + pe
-    # If dynamic retraction is enabled and de is zero, set de to a tiny
-    # retraction so that it doesn't get optimized away and can be dynamically
-    # adjusted later.
-    if self.dynret and not de: de = -0.00001
+    if de is None: de = -self.Re
     self.move(e=e, de=de, v=ve, s=s)
 
-  def restore(self, e=None, de=None, vb=None, s=1.0, pe=None):
+  def restore(self, e=None, de=None, vb=None, s=1.0, h=None, w=None, r=None):
     """ Do a restore.
 
-    This is a restore that by default reverts any retraction and restores
-    pressure to pe which defaults to 0.0. Setting e or de will do a fixed
-    restore ignoring current retraction. Note adding starting dots and
-    compensating for advance pressure is added in post-processing if enabled.
+    This is a restore that by default restores by Re plus a starting dot.
+    Setting e or de will do a fixed restore without adding a starting dot.
+    Note compensating for advance pressure is added in post-processing if
+    enabled.
     """
-    if pe is None: pe = 0.0
-    if de is None: de = -self.pe + pe
-    # If dynamic retraction is enabled and de is zero, set de to a tiny
-    # restore so that it doesn't get optimized away and can be dynamically
-    # adjusted later.
-    if self.dynret and not de: de = 0.00001
-    self.move(e=e, de=de, v=vb, s=s)
+    if h is None: h = self.layer.h
+    if w is None: w = self.layer.w
+    if r is None: r = 1.0
+    if de is None: de = self.Re + self.GMove._eb(h,w*r*self.layer.r)
+    self.draw(dz=0, e=e, de=de, v=vb, s=s, h=h, w=w, r=r)
 
   def hopup(self,
       x=None, y=None, z=None, e=None,
       dx=None, dy=None, dz=None, de=None,
       vt=None, vz=None, ve=None, vb=None,
-      s=1.0, h=None, pe=None):
+      s=1.0, h=None):
     """ Do a retract and raise. """
     # default hopup is to Zh above layer height.
     if h is None: h = self.layer.h + self.Zh
-    self.retract(e=e, de=de, ve=ve, s=s, pe=pe)
+    self.retract(e=e, de=de, ve=ve, s=s)
     self.move(z=z, dz=dz, v=vz, s=s, h=h)
 
   def hopdn(self,
       x=None, y=None, z=None, e=None,
       dx=None, dy=None, dz=None, de=None,
       vt=None, vz=None, ve=None, vb=None,
-      s=1.0, h=None, pe=None):
+      v=None, s=1.0, h=None, w=None, r=None):
     """ Do a move, drop, and restore. """
     # default hop down is to layer height.
     if h is None: h = self.layer.h
     if (x, y, dx, dy) != (None, None, None, None):
       self.move(x=x, y=y, dx=dx, dy=dy, v=vt, s=s)
     self.move(z=z, dz=dz, v=vz, h=h, s=s)
-    self.restore(e=e, de=de, vb=vb, s=s, pe=pe)
+    self.restore(e=e, de=de, vb=vb, s=s, h=h, w=w, r=r)
 
   def wait(self, t):
     """ Do a pause. """
     self.cmd('G4', P=round(t*1000))
 
-  def _calc_pe(self, ve, db):
-    """ Get steady-state pressure advance pe needed for target ve and db. """
-    pn = max(0, self.Kf*ve)
-    pb = max(0, self.Kb*db)
-    return pn+pb
+  def _getNextPeEb(self,m=None):
+    "Get pe and eb for the next draws including m."
+    # Get the exponentially decaying average pe and eb for the future moves up
+    # to the next retract/restore. This needs to calculate the increasing
+    # decay as we go further into the future. Decay can be over time,
+    # distance, or both, however, we just use decay over distance because
+    # that's what matters for the print output quality.
+    Tl = self.GMove.La  # the decay time-constant acceleration distance.
+    pe = eb = 0.0     # the averaged pe and eb.
+    K = 1.0           # the accumulated decay multiplier.
 
-  def _getNextPeEb(self):
-    "Get pe and eb for the next draws."
-    dt = dl = vedl = dbdl = eb = 0.0
-    # Get the line-average ve and db for the next 10mm and 1s of moves.
-    for m1 in (m for m in self.nextcmds if self.ismove(m)):
-      if not m1.isdraw or (dl > 10 and dt > 1.0): break
-      dt+=m1.dt
-      dl+=m1.dl
-      vedl+=m1.ve*m1.dl
-      dbdl+=m1.db*m1.dl
-      # Get eb from the first move.
-      if not eb:
-        eb = m1.eb
-        # For dynext, only use the first move.
-        if self.dynext: break
-    if dl:
-      # Calculate pe using the line-average ve and db.
-      return self._calc_pe(vedl/dl, dbdl/dl), eb
-    return 0.0, 0.0
+    def iterdl(ve, db, meb, dl):
+      nonlocal K, pe, eb
+      # accumulate decayed averages and update decay multiplier.
+      a = K * dl/(Tl + dl)
+      pe += a*self.Pe(ve, db)
+      eb += a*meb
+      K -= a
+
+    c,l,t,m1 = 0, 0, 0, m
+    def iterm(m):
+      nonlocal c,l,t,m1
+      # accumulate acceleration/deceleration phases using average ve.
+      if m.dt0: iterdl((m.ve0 + m.vem)/2, m.db, m.eb, m.dl0)
+      if m.dtm: iterdl(m.vem, m.db, m.eb, m.dlm)
+      if m.dt1: iterdl((m.vem + m.ve1)/2, m.db, m.eb, m.dl1)
+      # Note we use the last draw's middle phase for the last values because
+      # Orca sometimes puts wipe-moves before retracts, and we want the
+      # pressure of the last move, not the zero it tries and fails to
+      # decelerate to before the retract.
+      if m.isdraw:
+        m1 = m
+      c+=1
+      l+=m.dl
+      t+=m.dt
+
+    if m:
+      iterm(m)
+    for m in (mi for mi in self.nextcmds if self.ismove(mi)):
+      if m.isadjust or K < 0.05: break
+      iterm(m)
+    if m1:
+      # treat last draw's middle pe and eb as lasting forever.
+      pe += K*self.Pe(m1.vem, m1.db)
+      eb += K*m1.eb
+    #self.log(f'target {pe=:.4f} {eb=:.4f} for next {Tl:.1f}mm from {l:.1f}mm and {t:.3f}s of {c} moves to {m1}')
+    return pe, eb
 
   def modjoin(self):
     """Postprocess gcode to join moves."""
@@ -1508,8 +3031,8 @@ M18
 
     prevs = []
     v0, m = 0.0, None
-    # Only go through non-comment commands using None for non-moves.
-    cmds = (m for m in self.prevcmds if not isinstance(m, str))
+    # Only go through movement related commands using None for waits.
+    cmds = (m for m in self.prevcmds if self.ismove(m) or self.iswait(m))
     for m1 in (m if self.ismove(m) else None for m in cmds):
       if m:
         # fixv m and possibly previous moves for next move m1.
@@ -1536,7 +3059,7 @@ M18
 
     def _fixvel(m):
       """Fix v depending on fixvel level of velocity fix required."""
-      if self.ismove(m) and m.isgo and (m.vm < m.v) and (
+      if self.ismove(m) and m.ishoriz and (m.vm < m.v) and (
           # Any slow move.
           (self.fixvel == 3) or
           # Accelerating move.
@@ -1589,198 +3112,8 @@ M18
     self.log('  t={ftime(l_t)} l={l_l:.1f} e={l_e:.1f}')
 
   def filestats(self):
-    h='{(layer.z+layer.h)/layer.n:.2f}'
-    w='{Lw:.2f}'
-    r='{(Fa * f_e) / ((layer.z+layer.h)/(layer.n or 1) * Lw * f_l) if f_l else Lr:.2f}'
-    v='{f_l/f_t if f_t else 0.0:.1f}'
-    ve='{f_e/f_t if f_t else 0.0:.3f}'
-    lt='{ftime(f_t/(layer.n or 1))}'
     self.log('file finished with {layer.n} layers.')
-    self.log(f'  avg:{h}x{w}x{r}@{v} ve={ve} lt={lt}')
-    self.log('  t={ftime(f_t)} l={f_l:.1f} e={f_e:.1f}')
-
-  def preExt(self,x0,y0,x1,y1,le=120.0, lw=60.0, m=10.0, ve=20.0, vw=20, h=0.2, r=4):
-    """Preextrude around a box with margin m.
-
-    This extrudes for `le` mm at speed `ve` mm/s, then wipes for another `lw`
-    mm at speed `vw` mm/s without extruding, and finally if we did a wipe
-    another 10mm at 1mm/s to stick the last bit of wipe drool to the plate.
-    This should leave the nozzle primed with no residual advance pressure, and
-    prevent the wipe from becoming a big piece of stringing that messes with
-    the print.
-
-    Set `lw=0` to turn off the wipe and stick phases. Note this includes a
-    hopdn before and hopup at the end.
-    """
-    self.cmt('structure:pre-extrude')
-    x0,x1 = sorted([x0,x1])
-    y0,y1 = sorted([y0,y1])
-    x0-=m
-    x1+=m
-    y0-=m
-    y1+=m
-    x, y = x0, y0
-    l, v = le, ve
-    self.hopdn(x=x,y=y,h=h)
-    while l:
-      if self.x == x0 and self.y<y1:
-        dy = min(y1 - self.y, l)
-        self.draw(dy=dy,v=v,r=r)
-        l-=dy
-      elif self.y == y1 and self.x < x1:
-        dx = min(x1 - self.x, l)
-        self.draw(dx=dx,v=v,r=r)
-        l-=dx
-      elif self.x == x1 and self.y > y0:
-        dy = min(self.y - y0, l)
-        self.draw(dy=-dy, v=v, r=r)
-        l-=dy
-      else:
-        dx = min(self.x - x0, l)
-        self.draw(dx=-dx, v=v, r=r)
-        l-=dx
-      if (self.x, self.y) == (x1,y1):
-        # Reached top-right, widen y0,y1
-        y0-=2
-        y1+=2
-      elif (self.x, self.y) == (x1,y0):
-        # reached bottom-right, widen x0,x1
-        x0-=2
-        x1+=2
-      if l == 0 and r > 0:
-        # We have finished extruding, go another lw distance without extruding
-        # to relieve pressure and wipe ooze.
-        l, v, r = lw, vw, 0
-      elif l == 0 and r == 0 and v>1 and lw:
-        # We have finished the wipe, go another 10mm at 1mm/s to stick the
-        # final drool to the plate.
-        l, v, r = 10,1,0
-    self.hopup()
-
-  def fbox(self,x0,y0,x1,y1,shells=None,**kwargs):
-    """ Fill a box with frame lines. """
-    if shells is None: shells = inf
-    w = kwargs.get('w', self.w)
-    # make sure x0<x1 and y0<y1
-    x0,x1 = sorted((x0,x1))
-    y0,y1 = sorted((y0,y1))
-    x0+=w/2
-    x1-=w/2
-    y0+=w/2
-    y1-=w/2
-    s=0
-    self.hopdn(x0,y0)
-    while x1-x0>2*w and y1-y0>2*w and s<shells:
-      if shells==0:
-        self.cmt('structure:shell-outer')
-      elif s==1:
-        self.cmt('structure:shell-inner')
-      self.draw(x0,y1,**kwargs)
-      self.draw(x1,y1,**kwargs)
-      self.draw(x1,y0,**kwargs)
-      self.draw(x0+w,y0,**kwargs)
-      x0+=w
-      x1-=w
-      y0+=w
-      y1-=w
-      s+=1
-    if y1-y0 > 2*w and s<shells:
-      fw=x1-x0
-      self.move(x=(x0+x1)/2,y=y0+(fw-w)/2)
-      self.draw(y=y1-(fw-w)/2, w=fw)
-    elif s<shells:
-      fw=y1-y0
-      self.move(x=x0+(fw-w)/2,y=(y1+y0)/2)
-      self.draw(x=x1-(fw-w)/2, w=fw)
-    self.hopup()
-
-  def dbox(self,x0,y0,x1,y1,shells=3,**kwargs):
-    """ fill a box with diagonal lines. """
-    w = kwargs.get('w', self.w)
-    x0,x1 = sorted((x0,x1))
-    y0,y1 = sorted((y0,y1))
-    if shells:
-      self.fbox(x0,y0,x1,y1,shells,**kwargs)
-    b=(shells+0.5)*w
-    x0,y0,x1,y1 = getnear(x0+b), getnear(y0+b), getnear(x1-b), getnear(y1-b)
-    self.cmt('structure:infill-solid')
-    dx=w*2**0.5
-    # Diagonal direction depends on odd vs even layers.
-    if self.layer.n % 2:
-      # initialize left and right diagonal ends at top left corner.
-      lx,ly=rx,ry=x0,y1
-      dy = -dx
-    else:
-      # initialize left and right diagonal ends at bottom left corner.
-      lx,ly=rx,ry=x0,y0
-      dy = dx
-    self.hopdn(rx,ry)
-    while lx<x1:
-      if rx<x1:
-        # right diagonal end is following top or bottom edge right.
-        rx+=dx
-        if rx>x1:
-          # hit the right corner, start going along right side.
-          if ry == y0:
-            ry+=(rx-x1)
-          else:
-            ry-=(rx-x1)
-          rx=x1
-      else:
-        # right diagonal end is following right side.
-        ry+=dy
-        ry=min(y1,max(y0,ry))
-      if lx==x0:
-        # left diagonal end is following left side.
-        ly+=dy
-        if ly<y0:
-          # hit the bottom corner, start following bottom.
-          lx+=y0-ly
-          ly=y0
-        elif y1<ly:
-          # hit the top corner, start following top.
-          lx+=ly-y1
-          ly=y1
-      else:
-        # left diagonal end is following the top.
-        lx+=dx
-        if lx>x1: lx=x1
-      #self.log(f'pos={{(x,y)}} l={(lx,ly)} r={(rx,ry)}')
-      if self.y == ry or self.x == rx or (rx - self.x) < (self.x - lx):
-        # starting diagonal from right point.
-        self.draw(x=rx,y=ry,**kwargs)
-        self.draw(x=lx,y=ly,**kwargs)
-      else:
-        # starting diagonal from left point.
-        self.draw(x=lx,y=ly,**kwargs)
-        self.draw(x=rx,y=ry,**kwargs)
-    self.hopup()
-
-  def dot(self, x, y, r=1.0, **kwargs):
-    # Note this doesn't seem to render anything in FlashPrint.
-    self.hopdn(x,y)
-    # Draw a tiny line so FlashPrint renders something.
-    self.draw(dy=-0.2,r=r, **kwargs)
-    self.hopup()
-
-  def line(self, l, r=1.0, **kwargs):
-    """Draw a line from a sequence of points."""
-    x0,y0 = l[0]
-    # If there is only one point, draw a dot instead.
-    if len(l) == 1 or (len(l) == 2 and l[0] == l[1]):
-      return self.dot(x0, y0, r, **kwargs)
-    self.hopdn(x0,y0)
-    for x,y in l[1:]:
-      self.draw(x,y,**kwargs)
-    self.hopup()
-
-  def text(self, t, x0, y0, x1=None, y1=None, fsize=5, angle=0, **kwargs):
-    self.cmt('structure:shell-outer')
-    self.log(f'text {[(x0,y0),(x1,y1)]} {fsize=} {angle=} {t!r}')
-    w = kwargs.get('w', self.w)
-    v = vtext.ptext(t,x0,y0,x1,y1,fsize,angle,w)
-    for l in v:
-      self.line(l,**kwargs)
+    self.log('{str(stats).replace(nl,nl+";")}')
 
 
 def RangeType(min=-inf, max=inf):
@@ -1794,13 +3127,15 @@ def RangeType(min=-inf, max=inf):
 
 def GCodeGenArgs(cmdline):
   """Add argparse cmdline arguments for GCodeGen params."""
-  cmdline.add_argument('-Te', type=RangeType(0, 265), default=245,
+  cmdline.add_argument('-Slicer', choices=GCodeGen.SlicerTypes, default=GCodeGen.OrcaSlicer,
+      help='Slicer GCode format for comments and hints.')
+  cmdline.add_argument('-Te', type=RangeType(0, 265), default=210,
       help='Extruder temperature.')
-  cmdline.add_argument('-Tp', type=RangeType(0, 100), default=100,
+  cmdline.add_argument('-Tp', type=RangeType(0, 100), default=50,
       help='Platform temperature.')
   cmdline.add_argument('-Fe', type=RangeType(0.0,1.0), default=1.0,
       help='Extruder fan speed between 0.0 to 1.0.')
-  cmdline.add_argument('-Fc', type=RangeType(0.0,1.0), default=0.0,
+  cmdline.add_argument('-Fc', type=RangeType(0.0,1.0), default=1.0,
       help='Case fan speed between 0.0 to 1.0.')
   cmdline.add_argument('-fKf', type=RangeType(0.0,4.0), default=0.0,
       help='Firmware Linear Advance factor between 0.0 to 4.0 in mm/mm/s.')
@@ -1808,7 +3143,7 @@ def GCodeGenArgs(cmdline):
       help='Linear Advance factor between 0.0 to 4.0 in mm/mm/s.')
   cmdline.add_argument('-Kb', type=RangeType(0.0,10.0), default=0.0,
       help='Bead backpressure factor between 0.0 to 10.0 in mm/mm.')
-  cmdline.add_argument('-Re', type=RangeType(0.0,10.0), default=1.0,
+  cmdline.add_argument('-Re', type=RangeType(0.0,10.0), default=5.0,
       help='Retraction distance between 0.0 to 10.0 in mm.')
   cmdline.add_argument('-Vp', type=RangeType(5,100), default=60,
       help='Base printing speed in mm/s.')
@@ -1820,7 +3155,7 @@ def GCodeGenArgs(cmdline):
       help='Base retract speed in mm/s.')
   cmdline.add_argument('-Vb', type=RangeType(1,50), default=30,
       help='Base restore speed in mm/s.')
-  cmdline.add_argument('-Lh', type=RangeType(0.1,0.4), default=0.3,
+  cmdline.add_argument('-Lh', type=RangeType(0.1,0.4), default=0.2,
       help='Layer height in mm.')
   cmdline.add_argument('-Lw', type=RangeType(0.2,0.8), default=0.5,
       help='Line width in mm.')
@@ -1847,6 +3182,7 @@ def GCodeGenArgs(cmdline):
 def GCodeGetArgs(args):
   """ Get the dict of standard GCode arguments. """
   return dict (
+      Slicer=args.Slicer,
       Te=args.Te, Tp=args.Tp, Fe=args.Fe, Fc=args.Fc, fKf=args.fKf,
       Kf=args.Kf, Kb=args.Kb, Re=args.Re,
       Vp=args.Vp, Vt=args.Vt, Vz=args.Vz, Ve=args.Ve, Vb=args.Vb,
