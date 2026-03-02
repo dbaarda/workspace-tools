@@ -20,7 +20,7 @@ it's 20mm. So line print velocity `vl` is between 20x to 60x, or typically
 OrcaSlicer uses a line-model that assumes "bulges" on the edge of the lines,
 as described at;
 
-https://manual.slic3r.org/advanced/flow-math 
+https://manual.slic3r.org/advanced/flow-math
 
 But this ends up almost exactly the same as simpler "rectangular" lines
 because they always use overlap_factor=1. See;
@@ -462,15 +462,39 @@ resolution setting (onshape calls it "Chordal tolerance") which is the max
 distance between the model surface and the closest polygon surface. This means
 that for concave surfaces (eg holes), the mesh "fills over curves" compared to
 the model, and for convex surfaces (eg cylinders) it "cuts off curves", by as
-much as the tolerance setting. For fitting parts, you care about the maximum
+much as the tolerance setting. For clearance fits, you care about the maximum
 dimensions for convex surfaces and the minimum dimensions for concave
 surfaces. With convex surfaces the maximum dimensions are the points, which
-are correct and don't need adjustment, but for concave surfaces the minimum
+exactly match the model, but for concave surfaces the minimum
 dimension is the middle of the polygons which is too small by the tolerance
-distance and needs to be adjusted outwards by that much. So the diameter of
-cylinders should not need adjusting, but the diameter of holes will need to be
-increased by 2*tolerance. For OnShape "fine" settings tolerance=0.06mm, so the
-diameter of holes need to be increased by 0.12mm.
+distance. So for clearance fits the diameter of
+cylinders should not need adjusting, but the radius of holes will need to be
+increased by the tolerance. For OnShape "fine" settings tolerance=0.06mm, so
+the radius of holes need to be increased by 0.06mm.
+
+Another way to put this; when you export an model curve with radius `r` asking
+for `+-t` tolerance, the output you get is not actually `r +-t`, but `(r-t/2)
++- t/2`. So the average radius is actually less than the original model by
+`t/2`, but the error from that is also less at `+-t/2`, so you can argue it is
+still within the requested `r +-t`.
+
+In theory tesselation could do a better job by not just picking points on the
+curve, but shifting them outwards normal to the surface by `t`, and chosing
+them such that the max deviation from the surface inwards was also `t`. This
+would then give a true result of `r +-t` with a more efficient coarser
+tesselation. However, it's hard and I've not seen anything that does that.
+
+Another thing to note is exports often include some kind of angular deviation
+setting. This is the max angle difference it will tolerate between the surface
+and the tesselation. In practice this is half the max angular distance between
+tesselation points on a curve, so it will tesseleate small radiuses more
+agressively than the distance tollerance would. This makes the resulting error
+proportional to the radius instead of absolute. Set this to some fraction of
+360 to ensure tesselation is evenly distributed around small diameter curves.
+
+Compensating for this redius reduction effect could be done in the model, or
+in the slicer. I generally favour doing it in the slicer so that the model
+represents the real objective.
 
 ## Slicer approximation affects
 
@@ -488,14 +512,14 @@ mesh point, but they are closer to the real model surface than the middle of
 the polygon slice lines. So the larger out of precision and tolerance has the
 most effect, but the smaller can also contribute a bit.
 
-A rough guess of the combined reduction in hole diameter would be
-`2*sqrt(precision^2 + tolerance^2)`. Note that setting precision super small
+A rough guess of the combined reduction in hole radius would be
+`sqrt(precision^2 + tolerance^2)`. Note that setting precision super small
 will make the slicing approximation closer and closer to the mesh
 approximation, and cannot go finer. So in practice setting precision to
 something really small like 0.01mm means your quality and gcode size is bound
 by the tolerance used to export the model. For precision=0.01mm and
-tolerance=0.06mm the precision effect is negligable and the diameter increase
-needed for holes is still about 0.12mm.
+tolerance=0.06mm the precision effect is negligable and the radius increase
+needed for clearance holes is still about 0.06mm.
 
 ### Line shape compensation
 
