@@ -2812,7 +2812,8 @@ class GCodeGen(GCodeDrawMixin, GCodeCmtMixin, GCodeGenBase):
         w or self.Lw,
         r*self.Lr)
     hz = l.z + l.h
-    if self.z < hz:
+    # Don't hopup for the n=0 very first layer.
+    if n and self.z < hz:
       self.hopup(z=hz, de=0)
     self.add(l)
     self.log('layer={layer.n} z={layer.z:.2f} h={layer.h:.2f} w={layer.w:.2f} r={layer.r:.2f}')
