@@ -66,17 +66,10 @@ separate mixins for parsing input vs generating output?
 
 Improve OrcaSlicer https://github.com/SoftFever/OrcaSlicer with;
 
-* Get https://github.com/SoftFever/OrcaSlicer/pull/10747 MarchingSquares
-  optimizations approved.
-
-* Get https://github.com/SoftFever/OrcaSlicer/pull/10876 FillTpmsFk
-optimizations approved.
+* Get eigen update approved.
 
 * Add FillAdaptiveTpms fill methods.
 
-* Fix multiline_fill() to use offset() for pollylines. See 
-  https://github.com/SoftFever/OrcaSlicer/pull/10876#issuecomment-3393839823
-  
 * Improve distance, length, and coordinate code everywhere.
 
 ## Other
