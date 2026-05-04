@@ -1,5 +1,50 @@
 # Printer calibration and Control
 
+## TLDR OrcaSicer settings
+
+* nozzle_diameter: The printers nozzle diameter in mm (default: 0.4mm, range:
+0.2->0.6mm).
+* layer_height: The print layer height in mm (default: 0.2mm, range:
+0.1mm->nozzle_diameter).
+* line_spacing: The distance between adjacent lines in mm (default:
+nozzle_diameter, range: (0.5->1.5) * nozzle_diameter).
+* perimeter_factor: The perimeter edge-bulge overlap factor (default: 1.0,
+range: 0.0->1.0). Setting 0 means the perimeter is the outer-most edge of the
+line bulge. Setting 1 means the perimeter is the average edge of the line-bulge.
+* overlap_factor: The adjacent line edge-bulge overlap factor (default: 1.0, range:
+0.0->2.0). Setting 0.0 means the edge-bulges just touch, 1.0 means edges squish
+together for 100% fill, and >1.0 means over-extrude.
+
+* Quality
+   * Line width
+      * Default: line_spacing + (1-pi/4)*layer_height
+         * line_spacing + 0.0215mm for layer_height=0.1
+         * line_spacing + 0.0429mm for layer_height=0.2
+         * line_spacing + 0.0644mm for layer_height=0.3
+         * ~= line_spacing + layer_height/5
+   * Seam
+      * Seam gap: line_spacing*pi/4
+         ~= 3/4*line_spacing (but note this is large and needs testing)
+      * staggered inner seams: on
+      * Scarf joint seam: Contour and hole
+      * Conditional scarf joint: on
+      * Conditional overhang threshold: 0 (seems to be required for scarf
+      joints with any degree of overhang).
+   * Precision;
+      * X-Y hole compensation: -perimeter_factor**layer_height*(1-pi/4)/2
+         * ~= -perimeter_factor**layer_height/10
+      * X-Y contour compensation: +perimeter_factor*layer_height*(1-pi/4)/2
+         * ~= perimeter_factor**layer_height/10
+      * Precise wall: off
+      * Convert holes to polyholes: off
+   * Bridging
+      * Bridge flow ratio: layer_height / internal_solid_infill_line_spacing
+         * 0.4 for internal_solid_infill_line_spacing=0.5
+      * Internal Bridge flow ratio: 1.0
+      * Bridge Density: 100%
+      * Thick external bridges: off
+      * Thick internal bridges: off
+
 ## Printer characteristics.
 
 Low end printers like my Flashforge Adventurer 3 have X and Y speeds up to
@@ -61,11 +106,14 @@ If we assume the start and end of the lines include the circular "bead" bulge
 beyond the start and stop points, we can calculate the gap needed for the
 bulge overlap to exactly match the volume of no seam.
 
+gap*line_spacing = line-spacing^2*pi/4
 gap = line_spacing * pi/4 ~= 0.7854 * line_spacing
+    = (line_width-layer_height*(1-pi/4))*pi/4
+    ~= 0.7854*line_width - 0.1685*layer_height
 
 The setting can be set as a % of nozzle diameter or length, with the default
 being 10%. For a 0.4mm nozzle this is 0.04mm, which is much less than our
-calculated 0.3142mm for a 0.4mm width line.
+calculated 0.3142mm for a 0.4mm line_spacing (line_width=.
 
 ## Linear Advance
 
